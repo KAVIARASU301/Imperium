@@ -22,7 +22,7 @@ g
 
 1.  **Clone the repository:**
     ```bash
-    git clone [https://github.com/KAVIARASU301/options_scalper.git]
+    git clone [https://github.com/KAVIARASU301/Options_Trading.git]
     cd options_scalper
     ```
 2.  **Install the necessary libraries:**
