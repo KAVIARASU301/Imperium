@@ -1,4 +1,4 @@
-# core/gui_components/dialogs/market_monitor_dialog.py
+# dialogs/market_monitor_dialog.py
 import logging
 from datetime import datetime, timedelta
 from typing import Dict, List
@@ -11,20 +11,24 @@ from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, Q
 from kiteconnect import KiteConnect
 
 from widgets.market_monitor_widget import MarketChartWidget
-from core.market_data_worker import MarketDataWorker
 from utils.config_manager import ConfigManager
 from utils.cpr_calculator import CPRCalculator
+from core.market_data_worker import MarketDataWorker
 
 logger = logging.getLogger(__name__)
 
 
 class MarketMonitorDialog(QDialog):
-    def __init__(self, real_kite_client: KiteConnect, market_data_worker: MarketDataWorker,
+    def __init__(self, real_kite_client: KiteConnect, api_key: str, access_token: str,
                  config_manager: ConfigManager, parent=None):
+
         super().__init__(parent)
         self.kite = real_kite_client
-        self.market_data_worker = market_data_worker
         self.config_manager = config_manager
+
+        self.market_data_worker = MarketDataWorker(api_key, access_token)
+        self.market_data_worker.data_received.connect(self._on_ticks_received)
+        self.market_data_worker.start()
 
         self.charts: List[MarketChartWidget] = []
         self.token_to_chart_map: Dict[int, MarketChartWidget] = {}
@@ -39,7 +43,7 @@ class MarketMonitorDialog(QDialog):
         self._fetch_and_build_symbol_map()
         self._setup_window()
         self._setup_ui()
-        self._apply_styles()  # <-- Apply the new custom styles
+        self._apply_styles()
         self._connect_signals()
         self._load_and_populate_sets()
         self._restore_state()
@@ -115,7 +119,7 @@ class MarketMonitorDialog(QDialog):
         grid_layout.setSpacing(8)
         for i in range(2):
             for j in range(2):
-                chart_widget = MarketChartWidget(self)
+                chart_widget = MarketChartWidget(self, timeframe_combo=self.timeframe_combo)
                 grid_layout.addWidget(chart_widget, i, j)
                 self.charts.append(chart_widget)
         return grid_layout
@@ -128,6 +132,7 @@ class MarketMonitorDialog(QDialog):
             hist_data = self.kite.historical_data(token, from_date, to_date, api_interval)
             if not hist_data: raise ValueError("No historical data from API.")
             df = pd.DataFrame(hist_data)
+            df.dropna(inplace=True)
             df['date'] = pd.to_datetime(df['date'])
             df.set_index('date', inplace=True)
             if df.index.tz is not None: df.index = df.index.tz_localize(None)
@@ -244,8 +249,6 @@ class MarketMonitorDialog(QDialog):
         """
         self.setStyleSheet(STYLE_SHEET)
 
-    # --- Unchanged methods below ---
-
     def _get_instrument_token(self, symbol: str) -> int | None:
         upper_symbol = symbol.strip().upper()
         alias_map = {'NIFTY': 'NIFTY 50', 'BANKNIFTY': 'NIFTY BANK', 'FINNIFTY': 'NIFTY FIN SERVICE'}
@@ -281,12 +284,15 @@ class MarketMonitorDialog(QDialog):
 
     def _on_ticks_received(self, ticks: List[Dict]):
         for tick in ticks:
+            logger.debug(f"MarketMonitor Tick: {tick}")
             if chart := self.token_to_chart_map.get(tick.get('instrument_token')):
                 chart.add_tick(tick)
 
     def _subscribe_to(self, tokens: set):
-        if self.market_data_worker: self.market_data_worker.set_instruments(
-            self.market_data_worker.subscribed_tokens.union(tokens))
+        if self.market_data_worker:
+            # Force-set instruments instead of union (fix for frozen charts)
+            self.market_data_worker.set_instruments(tokens)
+            logger.info(f"Subscribed to tokens: {tokens}")
 
     def _unsubscribe_all(self):
         if self.market_data_worker and self.token_to_chart_map: self.market_data_worker.set_instruments(

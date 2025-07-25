@@ -6,7 +6,7 @@ import pandas as pd
 import numpy as np
 import pyqtgraph as pg
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton
-from PySide6.QtCore import Qt, QRectF
+from PySide6.QtCore import Qt, QRectF, QTimer
 from PySide6.QtGui import QFont, QPicture, QPainter
 
 logger = logging.getLogger(__name__)
@@ -80,6 +80,11 @@ class MarketChartWidget(QWidget):
         self.cpr_levels = None
         self._candlestick_item = None
         self._line_plot = None
+        # --- FIX: Add a dirty flag and an update timer ---
+        self._data_is_dirty = False
+        self.update_timer = QTimer(self)
+        self.update_timer.timeout.connect(self._throttled_update)
+        self.update_timer.start(500)  # Update chart at most every 500ms
 
         self._setup_ui()
         self._setup_chart()
@@ -124,6 +129,12 @@ class MarketChartWidget(QWidget):
             axis.setTickFont(font)
         self.plot_widget.getAxis('bottom').setStyle(showValues=False)
 
+    # --- FIX: Create a new method to handle timed updates ---
+    def _throttled_update(self):
+        """Only redraws the chart if new data has arrived."""
+        if self._data_is_dirty:
+            self._plot_chart_data(full_redraw=False)
+            self._data_is_dirty = False
     def set_data(self, symbol: str, data: pd.DataFrame, day_separator_pos: int | None = None,
                  cpr_levels: Dict | None = None):
         if data.empty:
@@ -204,8 +215,9 @@ class MarketChartWidget(QWidget):
                                    index=[rounded])
             self.chart_data = pd.concat([self.chart_data, new_row])
             self.chart_data.sort_index(inplace=True)
-        self._plot_chart_data(full_redraw=False)
 
+        # --- FIX: Instead of plotting directly, set the dirty flag ---
+        self._data_is_dirty = True
     def set_visible_range(self, count_str: str):
         if self.chart_data.empty:
             return

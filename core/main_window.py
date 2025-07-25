@@ -5,7 +5,7 @@ from typing import Dict, List, Optional, Union
 from datetime import datetime, timedelta, time, date
 from PySide6.QtWidgets import (QMainWindow, QPushButton, QApplication, QWidget, QVBoxLayout,
                                QMessageBox, QDialog, QSplitter, QHBoxLayout, QBoxLayout)
-from PySide6.QtCore import Qt, QTimer, QUrl, QByteArray,QPoint
+from PySide6.QtCore import Qt, QTimer, QUrl, QByteArray, QPoint
 from PySide6.QtMultimedia import QSoundEffect
 from kiteconnect import KiteConnect
 from PySide6.QtGui import QPalette, QColor
@@ -39,7 +39,6 @@ from dialogs.order_confirmation_dialog import OrderConfirmationDialog
 from utils.pnl_logger import PnlLogger
 from dialogs.market_monitor_dialog import MarketMonitorDialog
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -64,120 +63,68 @@ class CustomTitleBar(QWidget):
         layout.setContentsMargins(8, 0, 0, 0)
         layout.setSpacing(0)
 
-        # Menu bar (will be set from main window)
         self.menu_bar = None
-
-        # Spacer to push window controls to the right
         layout.addStretch()
-
-        # Window control buttons
         self.create_window_controls(layout)
 
     def set_menu_bar(self, menu_bar):
-        """Set the menu bar in the custom title bar"""
         self.menu_bar = menu_bar
-
         layout = self.layout()
-        if isinstance(layout, QBoxLayout):  # runtime check to be safe
+        if isinstance(layout, QBoxLayout):
             layout.insertWidget(0, menu_bar)
         menu_bar.setStyleSheet("""
             QMenuBar {
-                background-color: transparent;
-                color: #E0E0E0;
-                border: none;
-                font-size: 13px;
-                padding: 4px 0px;
+                background-color: transparent; color: #E0E0E0; border: none;
+                font-size: 13px; padding: 4px 0px;
             }
             QMenuBar::item {
-                background-color: transparent;
-                padding: 6px 12px;
-                border-radius: 4px;
-                margin: 0px 2px;
+                background-color: transparent; padding: 6px 12px;
+                border-radius: 4px; margin: 0px 2px;
             }
-            QMenuBar::item:selected {
-                background-color: #29C7C9;
-                color: #161A25;
-            }
-            QMenuBar::item:pressed {
-                background-color: #1f8a8c;
-                color: #161A25;
-            }
+            QMenuBar::item:selected { background-color: #29C7C9; color: #161A25; }
+            QMenuBar::item:pressed { background-color: #1f8a8c; color: #161A25; }
         """)
 
     def create_window_controls(self, layout):
-        """Create minimize, maximize, and close buttons"""
         button_style = """
             QPushButton {
-                background-color: transparent;
-                border: none;
-                color: #E0E0E0;
-                font-size: 16px;
-                font-weight: bold;
-                padding: 0px;
-                margin: 0px;
-                width: 45px;
-                height: 32px;
+                background-color: transparent; border: none; color: #E0E0E0;
+                font-size: 16px; font-weight: bold; padding: 0px; margin: 0px;
+                width: 45px; height: 32px;
             }
-            QPushButton:hover {
-                background-color: rgba(255, 255, 255, 0.1);
-            }
-            QPushButton:pressed {
-                background-color: rgba(255, 255, 255, 0.2);
-            }
+            QPushButton:hover { background-color: rgba(255, 255, 255, 0.1); }
+            QPushButton:pressed { background-color: rgba(255, 255, 255, 0.2); }
         """
-
-        # Special style for maximize button to make it visually consistent
         maximize_button_style = """
             QPushButton {
-                background-color: transparent;
-                border: none;
-                color: #E0E0E0;
-                font-size: 14px;
-                font-weight: bold;
-                padding: 0px;
-                margin: 0px;
-                width: 45px;
-                height: 32px;
+                background-color: transparent; border: none; color: #E0E0E0;
+                font-size: 14px; font-weight: bold; padding: 0px; margin: 0px;
+                width: 45px; height: 32px;
             }
-            QPushButton:hover {
-                background-color: rgba(255, 255, 255, 0.1);
-            }
-            QPushButton:pressed {
-                background-color: rgba(255, 255, 255, 0.2);
-            }
+            QPushButton:hover { background-color: rgba(255, 255, 255, 0.1); }
+            QPushButton:pressed { background-color: rgba(255, 255, 255, 0.2); }
         """
-
         close_button_style = button_style + """
-            QPushButton:hover {
-                background-color: #e74c3c;
-                color: white;
-            }
-            QPushButton:pressed {
-                background-color: #c0392b;
-                color: white;
-            }
+            QPushButton:hover { background-color: #e74c3c; color: white; }
+            QPushButton:pressed { background-color: #c0392b; color: white; }
         """
 
-        # Minimize button
         minimize_btn = QPushButton("−")
         minimize_btn.setStyleSheet(button_style)
         minimize_btn.clicked.connect(self.parent_window.showMinimized)
         layout.addWidget(minimize_btn)
 
-        # Maximize/Restore button with smaller font size
         self.maximize_btn = QPushButton("□")
-        self.maximize_btn.setStyleSheet(maximize_button_style)  # Use the special style
+        self.maximize_btn.setStyleSheet(maximize_button_style)
         self.maximize_btn.clicked.connect(self.toggle_maximize)
         layout.addWidget(self.maximize_btn)
 
-        # Close button
         close_btn = QPushButton("×")
         close_btn.setStyleSheet(close_button_style)
         close_btn.clicked.connect(self.parent_window.close)
         layout.addWidget(close_btn)
 
     def toggle_maximize(self):
-        """Toggle between maximized and normal window state"""
         if self.parent_window.isMaximized():
             self.parent_window.showNormal()
             self.maximize_btn.setText("□")
@@ -186,34 +133,28 @@ class CustomTitleBar(QWidget):
             self.maximize_btn.setText("❐")
 
     def mousePressEvent(self, event):
-        """Handle mouse press for window dragging"""
         if event.button() == Qt.LeftButton:
             self.dragging = True
             self.drag_position = event.globalPosition().toPoint() - self.parent_window.frameGeometry().topLeft()
             event.accept()
 
     def mouseMoveEvent(self, event):
-        """Handle mouse move for window dragging"""
         if event.buttons() == Qt.LeftButton and self.dragging:
             if not self.parent_window.isMaximized():
                 self.parent_window.move(event.globalPosition().toPoint() - self.drag_position)
             event.accept()
 
     def mouseReleaseEvent(self, event):
-        """Handle mouse release to stop dragging"""
         self.dragging = False
         event.accept()
 
     def mouseDoubleClickEvent(self, event):
-        """Handle double-click to maximize/restore"""
         if event.button() == Qt.LeftButton:
             self.toggle_maximize()
             event.accept()
-class APICircuitBreaker:
-    """
-    Circuit breaker for API calls to prevent overwhelming failed endpoints
-    """
 
+
+class APICircuitBreaker:
     def __init__(self, failure_threshold: int = 5, timeout_seconds: int = 60):
         self.failure_threshold = failure_threshold
         self.timeout_seconds = timeout_seconds
@@ -222,16 +163,13 @@ class APICircuitBreaker:
         self.state = "CLOSED"
 
     def can_execute(self) -> bool:
-        if self.state == "CLOSED":
-            return True
-        elif self.state == "OPEN":
+        if self.state == "CLOSED": return True
+        if self.state == "OPEN":
             if self._should_attempt_reset():
                 self.state = "HALF_OPEN"
                 return True
             return False
-        elif self.state == "HALF_OPEN":
-            return True
-        return False
+        return True
 
     def record_success(self):
         self.failure_count = 0
@@ -245,8 +183,7 @@ class APICircuitBreaker:
             logger.warning(f"Circuit breaker OPEN after {self.failure_count} failures")
 
     def _should_attempt_reset(self) -> bool:
-        if not self.last_failure_time:
-            return True
+        if not self.last_failure_time: return True
         return datetime.now() - self.last_failure_time >= timedelta(seconds=self.timeout_seconds)
 
 
@@ -266,31 +203,23 @@ class ScalperMainWindow(QMainWindow):
         self.access_token = access_token
         self.trader = trader
         self.real_kite_client = real_kite_client
-
-        # --- FIX: Added market_data_client attribute ---
         self.market_data_client = MarketDataWorker(api_key, access_token)
-
         self.trading_mode = 'paper' if isinstance(trader, PaperTradingManager) else 'live'
         self.trade_logger = TradeLogger(mode=self.trading_mode)
         self.pnl_logger = PnlLogger(mode=self.trading_mode)
-
         self.position_manager = PositionManager(self.trader, self.trade_logger)
         self.config_manager = ConfigManager()
         self.instrument_data = {}
         self.settings = self.config_manager.load_settings()
         self._settings_changing = False
-
         self.margin_circuit_breaker = APICircuitBreaker(failure_threshold=3, timeout_seconds=30)
         self.profile_circuit_breaker = APICircuitBreaker(failure_threshold=3, timeout_seconds=30)
         self.last_successful_balance = 0.0
         self.last_successful_user_id = "Unknown"
         self.last_successful_margins = {}
-        self.api_health_check_timer = QTimer()
+        self.api_health_check_timer = QTimer(self)
         self.api_health_check_timer.timeout.connect(self._periodic_api_health_check)
         self.api_health_check_timer.start(30000)
-        self.rms_failures = 0
-        self.max_rms_retries = 5
-
         self.active_quick_order_dialog: Optional[QuickOrderDialog] = None
         self.active_order_confirmation_dialog: Optional[OrderConfirmationDialog] = None
         self.positions_dialog = None
@@ -302,9 +231,9 @@ class ScalperMainWindow(QMainWindow):
         self.pending_order_widgets = {}
         self.market_monitor_dialogs = []
         self.current_symbol = ""
-        self.chartink_manager = None
         self.network_status = "Initializing..."
-
+        self._latest_market_data = {}
+        self._ui_update_needed = False
 
         self.setWindowFlags(Qt.FramelessWindowHint)
         self.custom_title_bar = CustomTitleBar(self)
@@ -321,13 +250,104 @@ class ScalperMainWindow(QMainWindow):
             self.trader.order_update.connect(self._on_paper_trade_update)
             self.market_data_worker.data_received.connect(self.trader.update_market_data)
 
-        # timer for refreshing positions when orders are pending
         self.pending_order_refresh_timer = QTimer(self)
-        self.pending_order_refresh_timer.setInterval(1000)  # 1000ms = 1 second
+        self.pending_order_refresh_timer.setInterval(1000)
         self.pending_order_refresh_timer.timeout.connect(self._refresh_positions)
+
+        self.ui_update_timer = QTimer(self)
+        self.ui_update_timer.timeout.connect(self._update_throttled_ui)
+        self.ui_update_timer.start(500)
 
         self.restore_window_state()
         self.statusBar().showMessage("Loading instruments...")
+
+    def _on_market_data(self, data: list):
+        for tick in data:
+            if 'instrument_token' in tick:
+                self._latest_market_data[tick['instrument_token']] = tick
+        self._ui_update_needed = True
+
+    def _update_throttled_ui(self):
+        if not self._ui_update_needed:
+            return
+
+        self.strike_ladder.update_prices(list(self._latest_market_data.values()))
+        self.position_manager.update_pnl_from_market_data(list(self._latest_market_data.values()))
+
+        self._update_account_summary_widget()
+        if self.positions_dialog and self.positions_dialog.isVisible():
+            if hasattr(self.positions_dialog, 'update_market_data'):
+                self.positions_dialog.update_market_data(list(self._latest_market_data.values()))
+
+        ladder_data = self.strike_ladder.get_ladder_data()
+        if ladder_data:
+            atm_strike = self.strike_ladder.atm_strike
+            interval = self.strike_ladder.get_strike_interval()
+            self.buy_exit_panel.update_strike_ladder(atm_strike, interval, ladder_data)
+
+        if self.performance_dialog and self.performance_dialog.isVisible():
+            self._update_performance()
+
+        self._ui_update_needed = False
+        self._latest_market_data.clear()
+
+    def _apply_dark_theme(self):
+        try:
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                int(self.winId()), 20, ctypes.byref(ctypes.c_int(1)), ctypes.sizeof(ctypes.c_int)
+            )
+        except:
+            pass
+
+        app = QApplication.instance()
+        palette = QPalette()
+        dark_bg = QColor(22, 26, 37)
+        light_text = QColor(224, 224, 224)
+
+        palette.setColor(QPalette.Window, dark_bg)
+        palette.setColor(QPalette.Base, dark_bg)
+        palette.setColor(QPalette.AlternateBase, dark_bg)
+        palette.setColor(QPalette.Button, dark_bg)
+        palette.setColor(QPalette.WindowText, light_text)
+        palette.setColor(QPalette.Text, light_text)
+        palette.setColor(QPalette.ButtonText, light_text)
+        palette.setColor(QPalette.BrightText, light_text)
+        palette.setColor(QPalette.Dark, dark_bg)
+        palette.setColor(QPalette.Shadow, dark_bg)
+
+        app.setPalette(palette)
+        app.setStyle('Fusion')
+
+        self.setStyleSheet("""
+            QMainWindow { background-color: #0f0f0f !important; color: #ffffff; border: 1px solid #333; }
+            QWidget { margin: 0px; padding: 0px; }
+            QMessageBox { background-color: #161A25 !important; color: #E0E0E0 !important; border: 1px solid #3A4458; border-radius: 8px; }
+            QMessageBox { border: none; margin: 0px; }
+            QMessageBox::title, QMessageBox QWidget, QMessageBox * { background-color: #161A25 !important; color: #E0E0E0 !important; }
+            QMessageBox QLabel { color: #E0E0E0 !important; background-color: #161A25 !important; font-size: 13px; }
+            QMessageBox QPushButton { background-color: #212635 !important; color: #E0E0E0 !important; border: 1px solid #3A4458; border-radius: 5px; padding: 8px 16px; font-weight: 500; min-width: 70px; }
+            QMessageBox QPushButton:hover { background-color: #29C7C9 !important; color: #161A25 !important; border-color: #29C7C9; }
+            QMessageBox QPushButton:pressed { background-color: #1f8a8c !important; }
+            QDialog { background-color: #161A25; color: #E0E0E0; }
+            QStatusBar { background-color: #161A25; color: #A0A0A0; border-top: 1px solid #3A4458; padding: 4px 8px; font-size: 12px; }
+            QDockWidget { background-color: #1a1a1a; color: #fff; border: 1px solid #333; }
+            QDockWidget::title { background-color: #2a2a2a; padding: 5px; border-bottom: 1px solid #333; }
+        """)
+
+    def _init_background_workers(self):
+        self.instrument_loader = InstrumentLoader(self.real_kite_client)
+        self.instrument_loader.instruments_loaded.connect(self._on_instruments_loaded)
+        self.instrument_loader.error_occurred.connect(self._on_api_error)
+        self.instrument_loader.start()
+
+        self.market_data_worker = MarketDataWorker(self.api_key, self.access_token)
+        self.market_data_worker.data_received.connect(self._on_market_data)
+        self.market_data_worker.connection_status_changed.connect(self._on_network_status_changed)
+        self.market_data_worker.start()
+
+        self.update_timer = QTimer(self)
+        self.update_timer.timeout.connect(self._update_ui)
+        self.update_timer.start(REFRESH_INTERVAL_MS)
 
     def _place_order(self, order_details_from_panel: dict):
         """Handles the buy signal from the panel by showing a confirmation dialog."""
@@ -364,11 +384,9 @@ class ScalperMainWindow(QMainWindow):
     def _on_paper_trade_update(self, order_data: dict):
         """Logs completed paper trades and triggers an immediate UI refresh."""
         if order_data and order_data.get('status') == 'COMPLETE':
-            # FIX: Calculate PNL for exit trades before logging
             transaction_type = order_data.get('transaction_type')
             tradingsymbol = order_data.get('tradingsymbol')
 
-            # Check if it's an exit of a long position
             if transaction_type == self.trader.TRANSACTION_TYPE_SELL:
                 original_position = self.position_manager.get_position(tradingsymbol)
                 if original_position and original_position.quantity > 0:
@@ -378,171 +396,35 @@ class ScalperMainWindow(QMainWindow):
 
                     realized_pnl = (exit_price - entry_price) * quantity
                     order_data['pnl'] = realized_pnl
-                    #self.pnl_logger.log_pnl(datetime.now(), realized_pnl)
-
-            # (Future improvement: add logic for exiting short positions if implemented)
 
             self.trade_logger.log_trade(order_data)
 
             logger.debug("Paper trade complete, triggering immediate account info refresh.")
             self._update_account_info()
             self._update_account_summary_widget()
-            self._refresh_positions()  # Refresh positions after a trade
+            self._refresh_positions()
 
-    def _apply_dark_theme(self):
-        # Force Windows palette to match app colors
-
-
-        # Windows-specific: Force dark mode at OS level
-        try:
-            # Tell Windows to use dark mode for this app
-            ctypes.windll.dwmapi.DwmSetWindowAttribute(
-                int(self.winId()), 20, ctypes.byref(ctypes.c_int(1)), ctypes.sizeof(ctypes.c_int)
-            )
-        except:
-            pass  # Ignore if it fails
-
-        app = QApplication.instance()
-        palette = QPalette()
-
-        # Force ALL palette colors to match dialog background
-        dark_bg = QColor(22, 26, 37)  # #161A25
-        light_text = QColor(224, 224, 224)  # #E0E0E0
-
-        palette.setColor(QPalette.Window, dark_bg)
-        palette.setColor(QPalette.Base, dark_bg)
-        palette.setColor(QPalette.AlternateBase, dark_bg)
-        palette.setColor(QPalette.Button, dark_bg)
-        palette.setColor(QPalette.WindowText, light_text)
-        palette.setColor(QPalette.Text, light_text)
-        palette.setColor(QPalette.ButtonText, light_text)
-        palette.setColor(QPalette.BrightText, light_text)
-
-        # Force title bar colors specifically
-        palette.setColor(QPalette.Dark, dark_bg)
-        palette.setColor(QPalette.Shadow, dark_bg)
-
-        app.setPalette(palette)
-        app.setStyle('Fusion')  # Better dark theme support
-
-        # Your existing stylesheet with title bar fix
-        self.setStyleSheet("""
-            QMainWindow { 
-                background-color: #0f0f0f !important; 
-                color: #ffffff;
-                border: 1px solid #333;
-            }
-            /* Remove widget spacing */
-            QWidget {
-                margin: 0px;
-                padding: 0px;
-            }
-
-            /* Aggressive QMessageBox title bar fix */
-            QMessageBox {
-                background-color: #161A25 !important;
-                color: #E0E0E0 !important;
-                border: 1px solid #3A4458;
-                border-radius: 8px;
-            }
-            QMessageBox { border: none; margin: 0px; }
-
-            /* Multiple selectors to force title bar color */
-            QMessageBox::title,
-            QMessageBox QWidget,
-            QMessageBox * {
-                background-color: #161A25 !important;
-                color: #E0E0E0 !important;
-            }
-
-            QMessageBox QLabel {
-                color: #E0E0E0 !important;
-                background-color: #161A25 !important;
-                font-size: 13px;
-            }
-            QMessageBox QPushButton {
-                background-color: #212635 !important;
-                color: #E0E0E0 !important;
-                border: 1px solid #3A4458;
-                border-radius: 5px;
-                padding: 8px 16px;
-                font-weight: 500;
-                min-width: 70px;
-            }
-            QMessageBox QPushButton:hover {
-                background-color: #29C7C9 !important;
-                color: #161A25 !important;
-                border-color: #29C7C9;
-            }
-            QMessageBox QPushButton:pressed {
-                background-color: #1f8a8c !important;
-            }
-
-            /* Dialog backgrounds */
-            QDialog {
-                background-color: #161A25;
-                color: #E0E0E0;
-            }
-
-            QStatusBar {
-                background-color: #161A25;
-                color: #A0A0A0;
-                border-top: 1px solid #3A4458;
-                padding: 4px 8px;
-                font-size: 12px;
-            }
-            QDockWidget { 
-                background-color: #1a1a1a; 
-                color: #fff; 
-                border: 1px solid #333; 
-            }
-            QDockWidget::title { 
-                background-color: #2a2a2a; 
-                padding: 5px; 
-                border-bottom: 1px solid #333; 
-            }
-        """)
-    def _init_background_workers(self):
-        self.instrument_loader = InstrumentLoader(self.real_kite_client)
-        self.instrument_loader.instruments_loaded.connect(self._on_instruments_loaded)
-        self.instrument_loader.error_occurred.connect(self._on_api_error)
-        self.instrument_loader.start()
-
-        self.market_data_worker = MarketDataWorker(self.api_key, self.access_token)
-        self.market_data_worker.data_received.connect(self._on_market_data)
-        self.market_data_worker.connection_status_changed.connect(self._on_network_status_changed)
-        self.market_data_worker.start()
-
-        self.update_timer = QTimer(self)
-        self.update_timer.timeout.connect(self._update_ui)
-        self.update_timer.start(REFRESH_INTERVAL_MS)
 
 
     def _setup_ui(self):
-        # Create main container with custom title bar
         main_container = QWidget()
         self.setCentralWidget(main_container)
 
-        # Main layout with custom title bar at top
         container_layout = QVBoxLayout(main_container)
         container_layout.setContentsMargins(0, 0, 0, 0)
         container_layout.setSpacing(0)
 
-        # Add custom title bar
         container_layout.addWidget(self.custom_title_bar)
 
-        # Content area
         content_widget = QWidget()
         container_layout.addWidget(content_widget)
         content_layout = QVBoxLayout(content_widget)
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setSpacing(0)
 
-        # Add header toolbar
         self.header = HeaderToolbar()
         content_layout.addWidget(self.header)
 
-        # Main content area
         main_content_widget = QWidget()
         content_layout.addWidget(main_content_widget)
         main_content_layout = QVBoxLayout(main_content_widget)
@@ -578,7 +460,6 @@ class ScalperMainWindow(QMainWindow):
         self.main_splitter.setSizes([250, 600, 350])
         main_content_layout.addWidget(self.main_splitter)
 
-        # Setup menu bar in custom title bar
         self._setup_menu_bar()
 
         QTimer.singleShot(3000, self._update_account_info)
@@ -599,7 +480,7 @@ class ScalperMainWindow(QMainWindow):
 
     def _create_left_column(self) -> QSplitter:
         splitter = QSplitter(Qt.Vertical)
-        splitter.setHandleWidth(1)  # ← Change from 0 to 1
+        splitter.setHandleWidth(1)
         splitter.setStyleSheet("""
             QSplitter::handle { 
                 background-color: #2A3140; 
@@ -627,13 +508,8 @@ class ScalperMainWindow(QMainWindow):
         return layout
 
     def _setup_menu_bar(self):
-        """Setup menu bar in custom title bar instead of main window"""
         menubar, menu_actions = create_enhanced_menu_bar(self)
-
-        # Add menu bar to custom title bar instead of main window
         self.custom_title_bar.set_menu_bar(menubar)
-
-        # Connect menu actions (keep all your existing connections)
         menu_actions['refresh'].triggered.connect(self._refresh_data)
         menu_actions['exit'].triggered.connect(self.close)
         menu_actions['positions'].triggered.connect(self._show_positions_dialog)
@@ -662,13 +538,13 @@ class ScalperMainWindow(QMainWindow):
         try:
             dialog = MarketMonitorDialog(
                 real_kite_client=self.real_kite_client,
-                market_data_worker=self.market_data_worker,
+                api_key=self.api_key,
+                access_token=self.access_token,
                 config_manager=self.config_manager,
                 parent=self
             )
-            # Add to list to keep a reference and manage multiple windows
+
             self.market_monitor_dialogs.append(dialog)
-            # Connect the finished signal to a cleanup slot
             dialog.finished.connect(lambda: self._on_market_monitor_closed(dialog))
             dialog.show()
         except Exception as e:
@@ -688,11 +564,10 @@ class ScalperMainWindow(QMainWindow):
             return
 
         if self.option_chain_dialog is None:
-            # --- FIX: Instantiate the dialog with parent=None to make it a separate window ---
             self.option_chain_dialog = OptionChainDialog(
                 self.real_kite_client,
                 self.instrument_data,
-                parent=None  # This makes it a top-level, independent window
+                parent=None
             )
             self.option_chain_dialog.finished.connect(lambda: setattr(self, 'option_chain_dialog', None))
 
@@ -721,10 +596,6 @@ class ScalperMainWindow(QMainWindow):
         self.position_manager.api_error_occurred.connect(self._on_api_error)
 
     def _on_instruments_loaded(self, data: dict):
-        """
-        Handles loaded instruments, populates the header, and correctly applies
-        saved settings to prevent startup errors.
-        """
         self.instrument_data = data
         if isinstance(self.trader, PaperTradingManager):
             self.trader.set_instrument_data(data)
@@ -735,22 +606,17 @@ class ScalperMainWindow(QMainWindow):
         symbols = sorted(data.keys())
         self.header.set_symbols(symbols)
 
-        # Apply saved settings *before* triggering any updates.
         default_symbol = self.settings.get('default_symbol', 'NIFTY')
         default_lots = self.settings.get('default_lots', 1)
 
-        # Ensure the selected symbol is valid before setting it
         if default_symbol not in symbols:
             logger.warning(f"Saved symbol '{default_symbol}' not found in instruments. Falling back to NIFTY.")
             default_symbol = 'NIFTY' if 'NIFTY' in symbols else (symbols[0] if symbols else "")
 
-        # Explicitly set the UI state only if a valid symbol is found
         if default_symbol:
             self.header.set_active_symbol(default_symbol)
             self.header.set_lot_size(default_lots)
             logger.info(f"Applied startup settings. Symbol: {default_symbol}, Lots: {default_lots}")
-
-            # Now, with the correct state set, trigger the ladder update
             self._on_settings_changed(self.header.get_current_settings())
         else:
             logger.error("No valid symbols found in instrument data. Cannot initialize UI.")
@@ -776,14 +642,6 @@ class ScalperMainWindow(QMainWindow):
             self.buy_exit_panel.update_strike_ladder(atm_strike, interval, ladder_data)
         if self.performance_dialog and self.performance_dialog.isVisible():
             self._update_performance()
-        # --- FIX: Explicitly forward data to Market Monitor ---
-        for dialog in self.market_monitor_dialogs[:]:
-            if dialog.isVisible():
-                # The dialog's internal _connect_signals method already connects
-                # market_data_worker.data_received to its _on_ticks_received slot.
-                # Therefore, we just need to ensure the worker's signal is emitted.
-                # The logic below is implicitly handled by the worker's signal.
-                pass
 
     def _get_current_price(self, symbol: str) -> Optional[float]:
         if not self.real_kite_client: return None
@@ -810,14 +668,12 @@ class ScalperMainWindow(QMainWindow):
     def _update_market_subscriptions(self):
         tokens_to_subscribe = set()
 
-        # Get tokens for the strike ladder (current behavior)
         if self.strike_ladder and self.strike_ladder.contracts:
             for strike_val_dict in self.strike_ladder.contracts.values():
                 for contract_obj in strike_val_dict.values():
                     if contract_obj and contract_obj.instrument_token:
                         tokens_to_subscribe.add(contract_obj.instrument_token)
 
-        # Get tokens for the index (current behavior)
         current_settings = self.header.get_current_settings()
         underlying_symbol = current_settings.get('symbol')
         if underlying_symbol and underlying_symbol in self.instrument_data:
@@ -825,7 +681,6 @@ class ScalperMainWindow(QMainWindow):
             if index_token:
                 tokens_to_subscribe.add(index_token)
 
-        # Get tokens for open positions (current behavior)
         for pos in self.position_manager.get_all_positions():
             if pos.contract and pos.contract.instrument_token:
                 tokens_to_subscribe.add(pos.contract.instrument_token)
@@ -912,13 +767,10 @@ class ScalperMainWindow(QMainWindow):
     def _on_positions_updated(self, positions: List[Position]):
         logger.debug(f"Received {len(positions)} positions from PositionManager for UI update.")
 
-        # Update the pop-out positions dialog if it's open
         if self.positions_dialog and self.positions_dialog.isVisible():
             self.positions_dialog.update_positions(positions)
 
-        # Update the inline positions table
         if self.inline_positions_table:
-            # The inline table needs dicts, so we convert here
             positions_as_dicts = [
                 {'tradingsymbol': p.tradingsymbol, 'quantity': p.quantity, 'average_price': p.average_price,
                  'last_price': p.ltp, 'pnl': p.pnl, 'exchange': p.exchange, 'product': p.product} for p in positions]
@@ -962,13 +814,11 @@ class ScalperMainWindow(QMainWindow):
     def _show_positions_dialog(self):
         if self.positions_dialog is None:
             self.positions_dialog = OpenPositionsDialog(self)
-            # Connect the dialog to the PositionManager's signal
             self.position_manager.positions_updated.connect(self.positions_dialog.update_positions)
             self.positions_dialog.refresh_requested.connect(self._refresh_positions)
             self.positions_dialog.position_exit_requested.connect(self._exit_position_from_dialog)
             self.position_manager.refresh_completed.connect(self.positions_dialog.on_refresh_completed)
 
-        # Initial population of the dialog
         initial_positions = self.position_manager.get_all_positions()
         self.positions_dialog.update_positions(initial_positions)
         self.positions_dialog.show()
@@ -1010,11 +860,9 @@ class ScalperMainWindow(QMainWindow):
 
     def _show_performance_dialog(self):
         if self.performance_dialog is None:
-            # FIX: Pass the trading mode to the dialog's constructor
             self.performance_dialog = PerformanceDialog(mode=self.trading_mode, parent=self)
 
         all_trades = self.trade_logger.get_all_trades()
-        # Consider only trades with non-zero PNL for performance metrics
         completed_trades = [trade for trade in all_trades if trade.get('pnl', 0.0) != 0.0]
         total_pnl = sum(trade.get('pnl', 0.0) for trade in completed_trades)
         winning_trades = [trade for trade in completed_trades if trade.get('pnl', 0.0) > 0]
@@ -1129,21 +977,17 @@ class ScalperMainWindow(QMainWindow):
         Handles applying and saving all settings after the dialog is accepted.
         This is now the single point of truth for applying settings.
         """
-        # 1. Reload settings from the file that the dialog has just saved.
         self.settings = self.config_manager.load_settings()
         logger.info(f"Settings dialog accepted. Applying new settings from config: {self.settings}")
 
-        # 2. Update the header with the new defaults from the loaded settings.
         default_symbol = self.settings.get('default_symbol', 'NIFTY')
         default_lots = self.settings.get('default_lots', 1)
 
-        # This prevents the settings_changed signal from firing prematurely
         self._suppress_signals = True
         self.header.set_active_symbol(default_symbol)
         self.header.set_lot_size(default_lots)
         self._suppress_signals = False
 
-        # 3. Apply other general application settings
         auto_refresh_enabled = self.settings.get('auto_refresh', True)
         if hasattr(self, 'update_timer'):
             if auto_refresh_enabled:
@@ -1155,7 +999,6 @@ class ScalperMainWindow(QMainWindow):
             auto_adjust = self.settings.get('auto_adjust_ladder', True)
             self.strike_ladder.set_auto_adjust(auto_adjust)
 
-        # 4. Manually trigger a UI update now that all settings are applied.
         self._on_settings_changed(self.header.get_current_settings())
 
     def _on_settings_changed(self, settings: dict):
@@ -1209,6 +1052,7 @@ class ScalperMainWindow(QMainWindow):
 
         finally:
             self._settings_changing = False
+
     def _apply_settings(self, new_settings: dict):
         self.settings.update(new_settings)
         logger.info(f"Applying new settings: {new_settings}")
@@ -1243,7 +1087,6 @@ class ScalperMainWindow(QMainWindow):
     def closeEvent(self, event):
         logger.info("Close event triggered.")
 
-        # Stop all timers first
         if hasattr(self, 'api_health_check_timer'):
             self.api_health_check_timer.stop()
         if hasattr(self, 'update_timer'):
@@ -1251,11 +1094,9 @@ class ScalperMainWindow(QMainWindow):
         if hasattr(self, 'pending_order_refresh_timer'):
             self.pending_order_refresh_timer.stop()
 
-        # Stop market data worker
         if hasattr(self, 'market_data_worker') and self.market_data_worker.is_running:
             logger.info("Stopping market data worker...")
 
-        # Stop instrument loader
         if hasattr(self, 'instrument_loader') and self.instrument_loader.isRunning():
             logger.info("Stopping instrument loader...")
             self.instrument_loader.requestInterruption()
@@ -1265,7 +1106,6 @@ class ScalperMainWindow(QMainWindow):
             else:
                 logger.info("Instrument loader stopped.")
 
-        # Check for open positions
         if self.position_manager.has_positions():
             reply = QMessageBox.question(
                 self, "Confirm Exit",
@@ -1275,7 +1115,6 @@ class ScalperMainWindow(QMainWindow):
             )
             if reply == QMessageBox.StandardButton.No:
                 event.ignore()
-                # Restart timers if exit is canceled
                 if hasattr(self, 'api_health_check_timer'):
                     self.api_health_check_timer.start()
                 if hasattr(self, 'update_timer'):
@@ -1367,16 +1206,14 @@ class ScalperMainWindow(QMainWindow):
                 logger.info(
                     f"Bulk exit order placed for {pos_to_exit.tradingsymbol} (Qty: {exit_quantity}) -> Order ID: {order_id}")
 
-                # FIX: PNL Logging for non-paper trades
                 if not isinstance(self.trader, PaperTradingManager):
                     import time
-                    time.sleep(0.5)  # Give time for order to appear in a broker system
+                    time.sleep(0.5)
                     confirmed_order = self._confirm_order_success(order_id)
                     if confirmed_order:
                         exit_price = confirmed_order.get('average_price', pos_to_exit.ltp)
                         realized_pnl = (exit_price - pos_to_exit.average_price) * abs(pos_to_exit.quantity)
 
-                        # Add PNL to the confirmed order data before logging
                         confirmed_order['pnl'] = realized_pnl
                         self.trade_logger.log_trade(confirmed_order)
                         self.pnl_logger.log_pnl(datetime.now(), realized_pnl)
@@ -1452,7 +1289,6 @@ class ScalperMainWindow(QMainWindow):
             )
             logger.info(f"Exit order placed for {tradingsymbol} (Qty: {exit_quantity}) -> Order ID: {order_id}")
 
-            # FIX: PNL Logging for non-paper trades
             if not isinstance(self.trader, PaperTradingManager):
                 import time
                 time.sleep(0.5)
@@ -1474,7 +1310,7 @@ class ScalperMainWindow(QMainWindow):
                     logger.warning(f"Exit order {order_id} for {tradingsymbol} could not be confirmed immediately.")
                     self._play_sound(success=False)
             else:
-                self._play_sound(success=True)  # For paper, assume success, let the handler do the work
+                self._play_sound(success=True)
 
         except Exception as e:
             error_msg = str(e)
@@ -1601,12 +1437,11 @@ class ScalperMainWindow(QMainWindow):
                     time.sleep(0.5)
                     confirmed_order_api_data = self._confirm_order_success(order_id)
                     if confirmed_order_api_data:
-                        # FIX: Check for pending orders and refresh if necessary
                         order_status = confirmed_order_api_data.get('status')
                         if order_status in ['OPEN', 'TRIGGER PENDING', 'AMO REQ RECEIVED']:
                             logger.info(f"Order {order_id} is pending with status: {order_status}. Triggering refresh.")
                             self._refresh_positions()
-                            continue  # Continue to the next order in the loop
+                            continue
 
                         if order_status == 'COMPLETE':
                             avg_price_from_order = confirmed_order_api_data.get('average_price', contract_to_trade.ltp)
@@ -1646,23 +1481,15 @@ class ScalperMainWindow(QMainWindow):
         self.statusBar().clearMessage()
 
     def _show_order_results(self, successful_list: List[Dict], failed_list: List[Dict]):
-        """
-        Shows a summary of order placement results.
-        A prompt is only shown if one or more orders have failed.
-        """
-        # If there are no failed trades, simply return.
-        # The calling methods will handle sound and position refresh.
         if not failed_list:
             logger.info(f"Successfully placed {len(successful_list)} orders. No prompt shown.")
             return
 
-        # If there are failures, build a detailed message and show a warning.
         msg = f"Order Placement Summary:\n\n"
         msg += f"  - Successful: {len(successful_list)} orders\n"
         msg += f"  - Failed: {len(failed_list)} orders\n\n"
         msg += "Failure Details:\n"
 
-        # Display details for up to the first 5 failures
         for f_info in failed_list[:5]:
             symbol = f_info.get('symbol', 'N/A')
             error = f_info.get('error', 'Unknown error')
@@ -1718,8 +1545,6 @@ class ScalperMainWindow(QMainWindow):
             order_id = self.trader.place_order(**order_args)
             logger.info(f"Single strike order placed attempt: {order_id} for {contract_to_trade.tradingsymbol}")
 
-            # FIX: Add a short delay and then refresh to catch pending orders in all modes.
-            # This makes the pending order widget appear automatically.
             QTimer.singleShot(500, self._refresh_positions)
 
             if not isinstance(self.trader, PaperTradingManager):
@@ -1728,7 +1553,6 @@ class ScalperMainWindow(QMainWindow):
                 confirmed_order_api_data = self._confirm_order_success(order_id)
                 if confirmed_order_api_data:
                     order_status = confirmed_order_api_data.get('status')
-                    # If order is pending, the refresh triggered above will handle it.
                     if order_status in ['OPEN', 'TRIGGER PENDING', 'AMO REQ RECEIVED']:
                         self._play_sound(success=True)
                         return
@@ -1754,7 +1578,7 @@ class ScalperMainWindow(QMainWindow):
                             self.position_manager.add_position(new_position)
                             self.trade_logger.log_trade(confirmed_order_api_data)
                             action_msg = "bought"
-                        else:  # SELL transaction
+                        else:
                             original_position = self.position_manager.get_position(contract_to_trade.tradingsymbol)
                             if original_position:
                                 realized_pnl = (avg_price_from_order - original_position.average_price) * abs(
@@ -1976,7 +1800,6 @@ class ScalperMainWindow(QMainWindow):
 
     def _update_performance(self):
         all_trades = self.trade_logger.get_all_trades()
-        # Consider only trades with non-zero PNL for performance metrics
         completed_trades = [trade for trade in all_trades if trade.get('pnl', 0.0) != 0.0]
         total_pnl = sum(trade.get('pnl', 0.0) for trade in completed_trades)
         winning_trades = [trade for trade in completed_trades if trade.get('pnl', 0.0) > 0]
@@ -2007,7 +1830,6 @@ class ScalperMainWindow(QMainWindow):
 
         win_rate = (len(winning_trades) / total_trades * 100) if total_trades else 0.0
 
-        # You may already have access to these values from elsewhere
         unrealized_pnl = self.position_manager.get_total_pnl()
         realized_pnl = self.position_manager.get_realized_day_pnl()
 
@@ -2052,7 +1874,6 @@ class ScalperMainWindow(QMainWindow):
         elif self.margin_circuit_breaker.state == "HALF_OPEN" or self.profile_circuit_breaker.state == "HALF_OPEN":
             api_status = " | 🔄 API Recovering"
 
-        # New network status logic
         network_display_status = ""
         if "Connected" in self.network_status:
             network_display_status = " | 📶 Connected"
@@ -2148,7 +1969,6 @@ class ScalperMainWindow(QMainWindow):
             logger.warning(f"Could not find latest contract data for {tradingsymbol} to refresh dialog.")
 
     def _on_order_confirmation_refresh_request(self):
-        """Slot to handle refresh requests from the OrderConfirmationDialog."""
         if not self.active_order_confirmation_dialog:
             return
 
@@ -2158,14 +1978,12 @@ class ScalperMainWindow(QMainWindow):
         new_strikes_list = []
         new_total_premium = 0.0
 
-        # This value is constant for the order, get it from the top-level dict.
         total_quantity_per_strike = current_details.get('total_quantity_per_strike', 0)
 
         if total_quantity_per_strike == 0:
             logger.error("Cannot refresh order confirmation: total_quantity_per_strike is zero.")
             return
 
-        # Rebuild the strike list with fresh data
         for strike_info in current_details.get('strikes', []):
             contract = strike_info.get('contract')
             if not contract:
@@ -2175,7 +1993,6 @@ class ScalperMainWindow(QMainWindow):
 
             new_ltp = latest_contract.ltp if latest_contract else strike_info.get('ltp', 0.0)
 
-            # The new list only needs the data that changes or is essential for display
             new_strikes_list.append({
                 "strike": contract.strike,
                 "ltp": new_ltp,
