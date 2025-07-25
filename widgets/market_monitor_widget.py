@@ -1,3 +1,4 @@
+
 import logging
 from datetime import datetime, timedelta
 from typing import Dict
@@ -12,32 +13,17 @@ logger = logging.getLogger(__name__)
 
 
 class CandlestickItem(pg.GraphicsObject):
-    """
-    Custom graphics object for efficient and professional-looking candlestick drawing.
-    Features:
-    - Anti-aliasing for smooth rendering.
-    - Solid-filled bodies for both bullish and bearish candles.
-    - Increased spacing between candles for clarity.
-    """
-
     def __init__(self, data=None):
         super().__init__()
-        self.data = data or []  # list of (x, open, high, low, close)
+        self.data = data or []
         self.generatePicture()
 
-    def setData(self, data):
-        """Update data and redraw picture."""
+    def updateData(self, data):
         self.data = data
-        # --- FIX: Explicitly notify pyqtgraph that the item's geometry will change ---
-        # This is the most reliable way to ensure a repaint for custom graphics items.
-        self.prepareGeometryChange()
         self.generatePicture()
+        self.update()
 
     def generatePicture(self):
-        """
-        Render all candles into a QPicture buffer for high performance.
-        This version uses solid-filled candles and increased spacing.
-        """
         pic = QPicture()
         painter = QPainter(pic)
         painter.setRenderHint(QPainter.Antialiasing)
@@ -59,8 +45,8 @@ class CandlestickItem(pg.GraphicsObject):
             top = max(open_, close)
             bottom = min(open_, close)
             height = top - bottom
-            if height == 0:
-                height = 0.5
+            # if height == 0:
+            #     height = 0.5
 
             painter.drawRect(QRectF(x - w, bottom, w * 2, height))
 
@@ -84,14 +70,9 @@ class CandlestickItem(pg.GraphicsObject):
 
 
 class MarketChartWidget(QWidget):
-    """
-    A widget to display market data for a single instrument using pyqtgraph,
-    supporting candlesticks, a two-day view, zooming, and a CPR indicator.
-    Efficient updates use a single CandlestickItem.
-    """
-
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, timeframe_combo=None):
         super().__init__(parent)
+        self.timeframe_combo = timeframe_combo
         self.symbol = ""
         self.chart_data = pd.DataFrame()
         self.chart_mode = 'candlestick'
@@ -160,13 +141,24 @@ class MarketChartWidget(QWidget):
         if not self.cpr_levels:
             return
         if 'tc' in self.cpr_levels and 'bc' in self.cpr_levels:
-            cpr_region = pg.LinearRegionItem(values=[self.cpr_levels['bc'], self.cpr_levels['tc']],
-                                             orientation='horizontal', brush=pg.mkBrush(color=(0, 116, 217, 25)),
-                                             pen=pg.mkPen(color=(0, 116, 217, 0)), movable=False)
+            cpr_brush = pg.mkBrush(color=(0, 116, 217, 25))
+            cpr_pen = pg.mkPen(color=(0, 116, 217, 0))
+            cpr_region = pg.LinearRegionItem(
+                values=[self.cpr_levels['bc'], self.cpr_levels['tc']],
+                orientation='horizontal',
+                brush=cpr_brush,
+                pen=cpr_pen,
+                movable=False
+            )
             self.plot_widget.addItem(cpr_region)
         if 'pivot' in self.cpr_levels:
-            pivot_line = pg.InfiniteLine(pos=self.cpr_levels['pivot'], angle=0, movable=False,
-                                         pen=pg.mkPen(color='#F39C12', style=Qt.DotLine, width=1.5))
+            pivot_pen = pg.mkPen(color='#F39C12', style=Qt.DotLine, width=1.5)
+            pivot_line = pg.InfiniteLine(
+                pos=self.cpr_levels['pivot'],
+                angle=0,
+                movable=False,
+                pen=pivot_pen
+            )
             self.plot_widget.addItem(pivot_line)
 
     def _plot_chart_data(self, full_redraw=False):
@@ -178,84 +170,64 @@ class MarketChartWidget(QWidget):
                                       pen=pg.mkPen(color='#3A4458', style=Qt.DashLine, width=1.5))
                 self.plot_widget.addItem(sep)
 
-        if self.chart_data.empty:
-            return
-
-        x_coords = np.arange(len(self.chart_data))
+        x = np.arange(len(self.chart_data))
 
         if self.chart_mode == 'line':
-            if self._line_plot and not full_redraw:
-                self._line_plot.setData(x_coords, self.chart_data['close'].values)
-            else:
-                if self._candlestick_item: self.plot_widget.removeItem(
-                    self._candlestick_item); self._candlestick_item = None
-                if self._line_plot: self.plot_widget.removeItem(self._line_plot)
-                self._line_plot = self.plot_widget.plot(x_coords, self.chart_data['close'].values,
-                                                        pen=pg.mkPen(width=1.5))
+            if self._line_plot is None or full_redraw:
+                self._line_plot = self.plot_widget.plot([], [], pen=pg.mkPen(width=1.5))
+            self._line_plot.setData(x, self.chart_data['close'].values)
         else:
-            cs_data = list(zip(x_coords, self.chart_data['open'], self.chart_data['high'],
-                               self.chart_data['low'], self.chart_data['close']))
+            cs_data = [(i, *self.chart_data.iloc[i][['open', 'high', 'low', 'close']].values)
+                       for i in range(len(self.chart_data))]
             if self._candlestick_item is None or full_redraw:
-                if self._line_plot: self.plot_widget.removeItem(self._line_plot); self._line_plot = None
-                if self._candlestick_item: self.plot_widget.removeItem(self._candlestick_item)
                 self._candlestick_item = CandlestickItem(cs_data)
                 self.plot_widget.addItem(self._candlestick_item)
             else:
-                self._candlestick_item.setData(cs_data)
+                self._candlestick_item.updateData(cs_data)
 
     def add_tick(self, tick: dict):
         ltp = tick.get('last_price')
         if self.chart_data.empty or ltp is None:
             return
-
-        parent_widget = self.parent()
-        tf_str = "1min"
-        if parent_widget and hasattr(parent_widget, 'timeframe_combo'):
-            tf_str = parent_widget.timeframe_combo.currentText()
-
         now = datetime.now().replace(second=0, microsecond=0)
+        tf_str = self.timeframe_combo.currentText() if self.timeframe_combo else "1min"
         tf_minutes = int(tf_str.replace("min", ""))
         rounded = now - timedelta(minutes=now.minute % tf_minutes)
-
         if rounded in self.chart_data.index:
-            # --- PATH 1: Update current candle (high frequency) ---
+            row = self.chart_data.loc[rounded]
             self.chart_data.at[rounded, 'close'] = ltp
-            self.chart_data.at[rounded, 'high'] = max(self.chart_data.at[rounded, 'high'], ltp)
-            self.chart_data.at[rounded, 'low'] = min(self.chart_data.at[rounded, 'low'], ltp)
-            # Trigger a partial, inexpensive redraw.
-            self._plot_chart_data(full_redraw=False)
+            self.chart_data.at[rounded, 'high'] = max(row['high'], ltp)
+            self.chart_data.at[rounded, 'low'] = min(row['low'], ltp)
         else:
-            # --- PATH 2: Create a new candle (low frequency) ---
             last_close = self.chart_data.iloc[-1]['close']
             new_row = pd.DataFrame([{'open': last_close, 'high': ltp, 'low': ltp, 'close': ltp}],
                                    index=[rounded])
             self.chart_data = pd.concat([self.chart_data, new_row])
             self.chart_data.sort_index(inplace=True)
-            # Trigger a full, robust redraw.
-            self._plot_chart_data(full_redraw=True)
-            if parent_widget and hasattr(parent_widget, 'candle_count_combo'):
-                self.set_visible_range(parent_widget.candle_count_combo.currentText())
+        self._plot_chart_data(full_redraw=False)
 
     def set_visible_range(self, count_str: str):
-        if self.chart_data.empty: return
+        if self.chart_data.empty:
+            return
         vb = self.plot_widget.getViewBox()
         if count_str.lower() == 'auto':
             vb.enableAutoRange(axis=pg.ViewBox.XAxis)
+            vb.enableAutoRange(axis=pg.ViewBox.YAxis)
         else:
             try:
                 count = int(count_str)
                 total = len(self.chart_data)
                 start = max(0, total - count)
                 vb.setXRange(start, total, padding=0.02)
+                vb.enableAutoRange(axis=pg.ViewBox.YAxis)
             except Exception:
                 vb.enableAutoRange(axis=pg.ViewBox.XAxis)
+                vb.enableAutoRange(axis=pg.ViewBox.YAxis)
 
     def toggle_chart_mode(self):
         self.chart_mode = 'line' if self.chart_mode == 'candlestick' else 'candlestick'
         self.mode_btn.setText("Candle" if self.chart_mode == 'line' else "Line")
         self._plot_chart_data(full_redraw=True)
-        if self.parent() and hasattr(self.parent(), 'candle_count_combo'):
-            self.set_visible_range(self.parent().candle_count_combo.currentText())
 
     def show_message(self, title: str, message: str = ""):
         self.plot_widget.clear()

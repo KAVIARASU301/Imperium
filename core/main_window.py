@@ -303,6 +303,7 @@ class ScalperMainWindow(QMainWindow):
         self.market_monitor_dialogs = []
         self.current_symbol = ""
         self.chartink_manager = None
+        self.network_status = "Initializing..."
 
 
         self.setWindowFlags(Qt.FramelessWindowHint)
@@ -509,6 +510,7 @@ class ScalperMainWindow(QMainWindow):
 
         self.market_data_worker = MarketDataWorker(self.api_key, self.access_token)
         self.market_data_worker.data_received.connect(self._on_market_data)
+        self.market_data_worker.connection_status_changed.connect(self._on_network_status_changed)
         self.market_data_worker.start()
 
         self.update_timer = QTimer(self)
@@ -830,9 +832,7 @@ class ScalperMainWindow(QMainWindow):
 
 
         if self.market_data_worker:
-            # Using set_instruments (which should replace subscriptions) is cleaner than appending.
-            # Make sure your MarketDataWorker's set_instruments replaces the list.
-            self.market_data_worker.set_instruments(list(tokens_to_subscribe))
+            self.market_data_worker.set_instruments(tokens_to_subscribe)
 
     def _periodic_api_health_check(self):
         logger.debug("Performing periodic API health check.")
@@ -2052,7 +2052,19 @@ class ScalperMainWindow(QMainWindow):
         elif self.margin_circuit_breaker.state == "HALF_OPEN" or self.profile_circuit_breaker.state == "HALF_OPEN":
             api_status = " | 🔄 API Recovering"
 
-        self.statusBar().showMessage(f"{status} | {now.strftime('%H:%M:%S')}{api_status}")
+        # New network status logic
+        network_display_status = ""
+        if "Connected" in self.network_status:
+            network_display_status = " | 📶 Connected"
+        elif "Disconnected" in self.network_status:
+            network_display_status = " | ❌ Disconnected"
+        elif "Connecting" in self.network_status or "Reconnecting" in self.network_status:
+            network_display_status = f" | 🔄 {self.network_status}"
+        else:
+             network_display_status = f" | ⚠️ {self.network_status}"
+
+
+        self.statusBar().showMessage(f"{status} | {now.strftime('%H:%M:%S')}{api_status}{network_display_status}")
 
     def _get_cached_positions(self) -> List[Position]:
         return self.position_manager.get_all_positions()
@@ -2185,3 +2197,6 @@ class ScalperMainWindow(QMainWindow):
         return None
 
 
+    def _on_network_status_changed(self, status: str):
+        self.network_status = status
+        self._update_ui()
