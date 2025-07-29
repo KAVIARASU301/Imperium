@@ -4,7 +4,6 @@ from datetime import datetime, timedelta
 from typing import Dict, List
 import pandas as pd
 from PySide6.QtCore import Qt, QByteArray, QTimer
-from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QWidget,
                                QLabel, QLineEdit, QPushButton, QMessageBox, QComboBox,
                                QSizePolicy, QFrame, QSpacerItem)

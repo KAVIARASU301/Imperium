@@ -256,7 +256,7 @@ class ScalperMainWindow(QMainWindow):
 
         self.ui_update_timer = QTimer(self)
         self.ui_update_timer.timeout.connect(self._update_throttled_ui)
-        self.ui_update_timer.start(500)
+        self.ui_update_timer.start(100)
 
         self.restore_window_state()
         self.statusBar().showMessage("Loading instruments...")
@@ -1184,7 +1184,7 @@ class ScalperMainWindow(QMainWindow):
         if not positions_list:
             return
 
-        self.statusBar().showMessage(f"Exiting {len(positions_list)} positions...", 0)
+        self.statusBar().showMessage(f"Exiting {len(positions_list)} positions...", 1000)
         for pos_to_exit in positions_list:
             try:
                 exit_quantity = abs(pos_to_exit.quantity)
@@ -1275,7 +1275,7 @@ class ScalperMainWindow(QMainWindow):
         if reply != QMessageBox.StandardButton.Yes:
             return
 
-        self.statusBar().showMessage(f"Exiting position {tradingsymbol}...", 0)
+        self.statusBar().showMessage(f"Exiting position {tradingsymbol}...", 1000)
         try:
             transaction_type = self.trader.TRANSACTION_TYPE_SELL if current_quantity > 0 else self.trader.TRANSACTION_TYPE_BUY
             order_id = self.trader.place_order(
@@ -1411,7 +1411,7 @@ class ScalperMainWindow(QMainWindow):
             QMessageBox.critical(self, "Order Error", "Order quantity is zero. Cannot place order.")
             return
 
-        self.statusBar().showMessage("Placing orders...", 0)
+        self.statusBar().showMessage("Placing orders...", 1000)
         for strike_detail in confirmed_order_details.get('strikes', []):
             contract_to_trade: Optional[Contract] = strike_detail.get('contract')
             if not contract_to_trade or not contract_to_trade.tradingsymbol:
@@ -1876,7 +1876,7 @@ class ScalperMainWindow(QMainWindow):
 
         network_display_status = ""
         if "Connected" in self.network_status:
-            network_display_status = " | 📶 Connected"
+            network_display_status = " | 📡  Connected"
         elif "Disconnected" in self.network_status:
             network_display_status = " | ❌ Disconnected"
         elif "Connecting" in self.network_status or "Reconnecting" in self.network_status:
@@ -1884,8 +1884,7 @@ class ScalperMainWindow(QMainWindow):
         else:
              network_display_status = f" | ⚠️ {self.network_status}"
 
-
-        self.statusBar().showMessage(f"{status} | {now.strftime('%H:%M:%S')}{api_status}{network_display_status}")
+        self.statusBar().showMessage(f"{network_display_status} | {status} | {now.strftime('%H:%M:%S')}{api_status}")
 
     def _get_cached_positions(self) -> List[Position]:
         return self.position_manager.get_all_positions()
