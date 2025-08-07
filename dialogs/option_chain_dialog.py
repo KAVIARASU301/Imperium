@@ -87,14 +87,28 @@ def calculate_greeks(spot_price, strike_price, expiry_date, option_price, is_cal
         return {'iv': 0, 'delta': 0, 'theta': 0, 'gamma': 0, 'vega': 0}
 
     iv = implied_volatility(S, K, T, r, option_price, is_call)
+
+    # --- FIX: Added a check to prevent division by zero ---
+    if iv * math.sqrt(T) == 0:
+        return {'iv': iv * 100, 'delta': 0, 'theta': 0, 'gamma': 0, 'vega': 0}
+
     d1 = (math.log(S / K) + (r + 0.5 * iv ** 2) * T) / (iv * math.sqrt(T))
     d2 = d1 - iv * math.sqrt(T)
 
-    delta = norm.cdf(d1) if is_call else -norm.cdf(-d1)
-    theta = (
-                    -S * norm.pdf(d1) * iv / (2 * math.sqrt(T))
-                    - r * K * math.exp(-r * T) * (norm.cdf(d2) if is_call else -norm.cdf(-d2))
-            ) / 365
+    delta = norm.cdf(d1) if is_call else norm.cdf(d1) - 1
+
+    # --- FIX: Corrected the Theta calculation for Puts ---
+    if is_call:
+        theta = (
+                        -S * norm.pdf(d1) * iv / (2 * math.sqrt(T))
+                        - r * K * math.exp(-r * T) * norm.cdf(d2)
+                ) / 365
+    else:  # Put option
+        theta = (
+                        -S * norm.pdf(d1) * iv / (2 * math.sqrt(T))
+                        + r * K * math.exp(-r * T) * norm.cdf(-d2)
+                ) / 365
+
     gamma = norm.pdf(d1) / (S * iv * math.sqrt(T))
     vega = S * norm.pdf(d1) * math.sqrt(T) / 100
 
@@ -105,7 +119,6 @@ def calculate_greeks(spot_price, strike_price, expiry_date, option_price, is_cal
         'gamma': gamma,
         'vega': vega
     }
-
 
 # ---------------------------------------------------------------------------------
 
@@ -420,11 +433,6 @@ class OptionChainDelegate(QStyledItemDelegate):
                     fg_color = QColor(ATM_STRIKE_FG_BRIGHT)
             elif cell_type == 'greek':
                 fg_color = QColor("#8A9BA8")
-            elif cell_type == 'oi_change' and value is not None:
-                if value > 0:
-                    fg_color = QColor(ACCENT_POSITIVE_COLOR)
-                elif value < 0:
-                    fg_color = QColor(ACCENT_NEGATIVE_COLOR)
 
             painter.save()
             painter.fillRect(option.rect, bg_brush)
@@ -433,7 +441,6 @@ class OptionChainDelegate(QStyledItemDelegate):
             painter.restore()
         else:
             super().paint(painter, option, index)
-
 
 class OptionChainWidget(QWidget):
     """The core table widget with programmatic row highlighting and OI heat map."""
@@ -454,10 +461,11 @@ class OptionChainWidget(QWidget):
         self._apply_styles()
 
     def _setup_table(self):
-        self.table.setColumnCount(19)
+        self.table.setColumnCount(15)
         headers = [
-            "OI", "OI Chg", "OI Chg%", "LTP", "IV", "Delta", "Theta", "Vega", "Gamma",
-            "Strike", "Gamma", "Vega", "Theta", "Delta", "IV", "LTP", "OI Chg%", "OI Chg", "OI"
+            "OI", "LTP", "IV", "Delta", "Theta", "Vega", "Gamma",
+            "Strike",
+            "Gamma", "Vega", "Theta", "Delta", "IV", "LTP", "OI"
         ]
         self.table.setHorizontalHeaderLabels(headers)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
@@ -465,8 +473,8 @@ class OptionChainWidget(QWidget):
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(9, QHeaderView.ResizeMode.Interactive)
-        self.table.setColumnWidth(9, 110)
+        header.setSectionResizeMode(7, QHeaderView.ResizeMode.Interactive)
+        self.table.setColumnWidth(7, 110)
         self.table.verticalHeader().setVisible(False)
         self.table.setShowGrid(True)
 
@@ -522,7 +530,7 @@ class OptionChainWidget(QWidget):
             is_atm_strike = (strike == self.atm_strike)
 
             strike_item = self._create_item(f"{strike:,.0f}", 'strike', is_atm=is_atm_strike)
-            self.table.setItem(row_pos, 9, strike_item)
+            self.table.setItem(row_pos, 7, strike_item)
 
             if call_contract := contracts_data.get(strike, {}).get('CE'):
                 self._populate_side(row_pos, 'call', call_contract, market_data, strike < underlying_ltp, is_atm_strike,
@@ -532,20 +540,15 @@ class OptionChainWidget(QWidget):
                                     max_put_oi)
 
         self.table.setUpdatesEnabled(True)
-
     def _populate_side(self, row, side, contract, market_data, is_itm, is_atm, max_oi):
         quote_key = f"NFO:{contract.get('tradingsymbol')}"
         data = market_data.get(quote_key, {})
         ltp = data.get('last_price', 0)
 
-        # Pass real data to the greeks calculation
         greeks = calculate_greeks(self.underlying_ltp, contract['strike'], self.expiry_date, ltp, side == 'call')
 
         iv, delta, theta, gamma, vega = [greeks.get(k, 0.0) for k in ['iv', 'delta', 'theta', 'gamma', 'vega']]
         oi = data.get('oi', 0)
-        prev_day_oi = data.get('oi_day_open', oi)
-        oi_change = oi - prev_day_oi
-        oi_change_pct = (oi_change / prev_day_oi * 100) if prev_day_oi > 0 else 0
 
         display_ltp = ltp * self.lot_size if self.show_per_lot else ltp
         display_theta = theta * self.lot_size if self.show_per_lot else theta
@@ -557,12 +560,12 @@ class OptionChainWidget(QWidget):
             (f"{delta:.2f}", 'greek', {}),
             (f"{iv:.1f}%", 'greek', {}),
             (f"{display_ltp:,.2f}", 'ltp', {}),
-            (f"{oi_change_pct:+.1f}%", 'oi_change', {'value': oi_change}),
-            (_format_large_number(oi_change), 'oi_change', {'value': oi_change}),
             (_format_large_number(oi).replace('+', ''), 'oi', {'value': oi, 'max_value': max_oi})
         ]
-        if side == 'call': cols.reverse()
-        start_col = 0 if side == 'call' else 10
+        if side == 'call':
+            cols.reverse()
+
+        start_col = 0 if side == 'call' else 8
 
         for i, (text, c_type, c_data) in enumerate(cols):
             item = self._create_item(text, c_type, is_itm, is_atm, side, **c_data)
@@ -592,14 +595,13 @@ class OptionChainWidget(QWidget):
 
     def center_on_atm(self):
         for row in range(self.table.rowCount()):
-            strike_item = self.table.item(row, 9)
+            strike_item = self.table.item(row, 7)
             try:
                 if strike_item and float(strike_item.text().replace(",", "")) == self.atm_strike:
                     self.table.scrollToItem(strike_item, QAbstractItemView.ScrollHint.PositionAtCenter)
                     return
             except (ValueError, AttributeError):
                 continue
-
     def _apply_styles(self):
         self.setStyleSheet(f"""
             QTableWidget {{

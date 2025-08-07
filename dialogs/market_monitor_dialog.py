@@ -99,11 +99,13 @@ class MarketChartWidget(QWidget):
         self.timeframe_combo = timeframe_combo
         self.symbol = ""
         self.chart_data = pd.DataFrame()
-        self.chart_mode = 'candlestick'
+        self.chart_mode = 'line'
         self.day_separator_pos = None
         self.cpr_levels = None
         self._candlestick_item = None
-        self._line_plot = None
+        self._line_plot_today = None
+        self._line_plot_prev = None
+        self._live_indicator = None
         # FIX: Add a dirty flag and an update timer for throttling
         self._data_is_dirty = False
         self.update_timer = QTimer(self)
@@ -127,9 +129,9 @@ class MarketChartWidget(QWidget):
         button_style = ("QPushButton { font-size: 11px; background-color: #424242;"
                         " border-radius: 4px; color: white; padding: 4px 8px; }"
                         " QPushButton:hover { background-color: #555555; }")
-        self.mode_btn = QPushButton("Line")
+        self.mode_btn = QPushButton("Candle")
         self.mode_btn.setFixedWidth(60)
-        self.mode_btn.setToolTip("Toggle Candlestick / Line View")
+        self.mode_btn.setToolTip("Toggle Line / Candlestick View")
         self.mode_btn.setStyleSheet(button_style)
         self.mode_btn.clicked.connect(self.toggle_chart_mode)
         header_layout.addWidget(self.mode_btn)
@@ -175,7 +177,7 @@ class MarketChartWidget(QWidget):
     def _draw_cpr(self):
         if not self.cpr_levels: return
         if 'tc' in self.cpr_levels and 'bc' in self.cpr_levels:
-            cpr_brush = pg.mkBrush(color=(0, 116, 217, 25))
+            cpr_brush = pg.mkBrush(color=(0, 116, 217, 15))
             cpr_pen = pg.mkPen(color=(0, 116, 217, 0))
             cpr_region = pg.LinearRegionItem(
                 values=[self.cpr_levels['bc'], self.cpr_levels['tc']],
@@ -190,8 +192,10 @@ class MarketChartWidget(QWidget):
     def _plot_chart_data(self, full_redraw=False):
         if full_redraw:
             self.plot_widget.clear()
-            self._candlestick_item = None # Ensures items are recreated on full redraw
-            self._line_plot = None
+            self._candlestick_item = None
+            self._line_plot_today = None
+            self._line_plot_prev = None
+            self._live_indicator = None
             self._draw_cpr()
             if self.day_separator_pos is not None:
                 sep = pg.InfiniteLine(pos=self.day_separator_pos - 0.5, angle=90,
@@ -204,13 +208,45 @@ class MarketChartWidget(QWidget):
             if self._candlestick_item:
                 self.plot_widget.removeItem(self._candlestick_item)
                 self._candlestick_item = None
-            if self._line_plot is None:
-                self._line_plot = self.plot_widget.plot([], [], pen=pg.mkPen(width=1.5))
-            self._line_plot.setData(x, self.chart_data['close'].values)
+
+            if self._line_plot_today is None:
+                fill_brush = pg.mkBrush(color=(41, 199, 201, 20))
+                self._line_plot_today = self.plot_widget.plot(
+                    [], [],
+                    pen=pg.mkPen(color='#29C7C9', width=2),
+                    fillLevel=0,
+                    fillBrush=fill_brush
+                )
+                self._line_plot_prev = self.plot_widget.plot(
+                    [], [],
+                    pen=pg.mkPen(color='#E0E0E0', width=1.5, style=Qt.SolidLine)
+                )
+                self._live_indicator = pg.ScatterPlotItem(
+                    [], [], size=8, pen=pg.mkPen(color='white', width=1),
+                    brush=pg.mkBrush(color='#29C7C9')
+                )
+                self.plot_widget.addItem(self._live_indicator)
+
+            if self.day_separator_pos is not None:
+                prev_x = x[:self.day_separator_pos]
+                prev_y = self.chart_data['close'].values[:self.day_separator_pos]
+                today_x = x[self.day_separator_pos:]
+                today_y = self.chart_data['close'].values[self.day_separator_pos:]
+                self._line_plot_prev.setData(prev_x, prev_y)
+                self._line_plot_today.setData(today_x, today_y)
+                self._live_indicator.setData([today_x[-1]], [today_y[-1]])
+            else:
+                self._line_plot_today.setData(x, self.chart_data['close'].values)
+                self._live_indicator.setData([x[-1]], [self.chart_data['close'].values[-1]])
         else:
-            if self._line_plot:
-                self.plot_widget.removeItem(self._line_plot)
-                self._line_plot = None
+            if self._line_plot_today:
+                self.plot_widget.removeItem(self._line_plot_today)
+                self.plot_widget.removeItem(self._line_plot_prev)
+                self.plot_widget.removeItem(self._live_indicator)
+                self._line_plot_today = None
+                self._line_plot_prev = None
+                self._live_indicator = None
+
             cs_data = [(i, *self.chart_data.iloc[i][['open', 'high', 'low', 'close']].values)
                        for i in range(len(self.chart_data))]
             if self._candlestick_item is None:
@@ -241,19 +277,36 @@ class MarketChartWidget(QWidget):
     def set_visible_range(self, count_str: str):
         if self.chart_data.empty: return
         vb = self.plot_widget.getViewBox()
-        if count_str.lower() == 'auto':
-            vb.enableAutoRange(axis=pg.ViewBox.XAxis)
-            vb.enableAutoRange(axis=pg.ViewBox.YAxis)
-        else:
+
+        data_view = self.chart_data
+
+        if count_str.lower() != 'auto':
             try:
                 count = int(count_str)
                 total = len(self.chart_data)
                 start = max(0, total - count)
                 vb.setXRange(start, total, padding=0.02)
-                vb.enableAutoRange(axis=pg.ViewBox.YAxis)
-            except Exception:
-                vb.enableAutoRange(axis=pg.ViewBox.XAxis)
-                vb.enableAutoRange(axis=pg.ViewBox.YAxis)
+                data_view = self.chart_data.iloc[start:]
+            except (ValueError, TypeError):
+                vb.enableAutoRange()
+                return
+        else:
+            vb.enableAutoRange(axis=pg.ViewBox.XAxis)
+
+        if not data_view.empty:
+            y_min = data_view['low'].min()
+            y_max = data_view['high'].max()
+            y_range = y_max - y_min
+
+            margin = y_range * 0.1  # 10% margin
+            if margin == 0:  # If price is flat
+                margin = y_max * 0.01  # 1% of the price as margin
+            if margin == 0:  # If price is also 0
+                margin = 1  # a small default margin
+
+            vb.setYRange(y_min - margin, y_max + margin, padding=0)
+        else:
+            vb.enableAutoRange(axis=pg.ViewBox.YAxis)
 
     def toggle_chart_mode(self):
         self.chart_mode = 'line' if self.chart_mode == 'candlestick' else 'candlestick'
@@ -481,7 +534,7 @@ class MarketMonitorDialog(QDialog):
             if token in self.token_to_chart_map:
                 chart = self.token_to_chart_map[token]
                 chart.add_tick(tick)
-                print(f"Tick routed to {chart.symbol}: LTP = {tick.get('last_price')}")
+                # print(f"Tick routed to {chart.symbol}: LTP = {tick.get('last_price')}")
 
     def _subscribe_to(self, tokens: Set[int]):
         if not tokens:

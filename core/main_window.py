@@ -1874,7 +1874,7 @@ class ScalperMainWindow(QMainWindow):
 
         network_display_status = ""
         if "Connected" in self.network_status:
-            network_display_status = " | 📡  Connected"
+            network_display_status = "  📡  Connected"
         elif "Disconnected" in self.network_status:
             network_display_status = " | ❌ Disconnected"
         elif "Connecting" in self.network_status or "Reconnecting" in self.network_status:
