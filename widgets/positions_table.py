@@ -16,26 +16,25 @@ logger = logging.getLogger(__name__)
 
 class PositionsTable(QWidget):
     """
-    A compound widget containing a compact, data-dense positions table with fixed symbol visibility
+    A compound widget containing a compact, data-dense positions table with two-row display
     """
     exit_requested = Signal(dict)
     refresh_requested = Signal()
     modify_sl_tp_requested = Signal(str)
 
-    # Column indices
+    # Column indices (removed SLTP_INFO_COL)
     SYMBOL_COL = 0
     QUANTITY_COL = 1
     AVG_PRICE_COL = 2
     LTP_COL = 3
     PNL_COL = 4
-    SLTP_INFO_COL = 5
 
     def __init__(self, config_manager: ConfigManager, parent=None):
         super().__init__(parent)
         self.config_manager = config_manager
         self.table_name = "positions_table"
         self.positions = {}
-        self.position_row_map = {}  # Maps symbol to row number
+        self.position_row_map = {}  # Maps symbol to main row number
 
         self._init_ui()
         self._apply_styles()
@@ -51,7 +50,7 @@ class PositionsTable(QWidget):
         main_layout.setSpacing(0)
 
         self.table = QTableWidget()
-        self.table.headers = ["Symbol", "Qty", "Avg Price", "LTP", "P&L", "SL/TP/TSL"]
+        self.table.headers = ["Symbol", "Qty", "Avg Price", "LTP", "P&L"]
         self.table.setColumnCount(len(self.table.headers))
         self.table.setHorizontalHeaderLabels(self.table.headers)
         self.table.setMouseTracking(True)
@@ -84,7 +83,6 @@ class PositionsTable(QWidget):
 
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(self.SYMBOL_COL, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(self.SLTP_INFO_COL, QHeaderView.ResizeMode.Stretch)
         for i in [self.QUANTITY_COL, self.AVG_PRICE_COL, self.LTP_COL, self.PNL_COL]:
             header.setSectionResizeMode(i, QHeaderView.ResizeMode.ResizeToContents)
 
@@ -111,7 +109,7 @@ class PositionsTable(QWidget):
                 background-color: #3A4458;
             }
             QTableWidget::item {
-                padding: 8px;
+                padding: 6px 8px;
                 border-bottom: 1px solid #1C212B;
             }
             QTableWidget::item:selected {
@@ -163,6 +161,15 @@ class PositionsTable(QWidget):
 
         # Extract symbol from the item text (remove indicators)
         symbol_text = symbol_item.text()
+        # Handle both main rows and SL/TP/TSL rows
+        if symbol_text.startswith("SL:") or symbol_text.startswith("   "):
+            # This is a SL/TP/TSL row, find the corresponding main row
+            for i in range(row, -1, -1):
+                check_item = self.table.item(i, self.SYMBOL_COL)
+                if check_item and not (check_item.text().startswith("SL:") or check_item.text().startswith("   ")):
+                    symbol_text = check_item.text()
+                    break
+
         symbol = symbol_text.split()[0]  # Get first word (symbol)
 
         if symbol not in self.positions:
@@ -222,30 +229,33 @@ class PositionsTable(QWidget):
         symbol = pos_data['tradingsymbol']
         self.positions[symbol] = pos_data
 
-        row_position = self.table.rowCount()
-        self.table.insertRow(row_position)
-        self.position_row_map[symbol] = row_position
+        # Add main position row
+        main_row = self.table.rowCount()
+        self.table.insertRow(main_row)
+        self.position_row_map[symbol] = main_row
 
-        self.table.setRowHeight(row_position, 40)
+        self.table.setRowHeight(main_row, 32)  # Slightly reduced height
 
-        # Symbol with indicators
-        self._set_symbol_item(row_position, pos_data)
+        # Main row data
+        self._set_symbol_item(main_row, pos_data)
+        self._set_item(main_row, self.QUANTITY_COL, pos_data.get('quantity', 0))
+        self._set_item(main_row, self.AVG_PRICE_COL, pos_data.get('average_price', 0.0), is_price=True)
+        self._set_item(main_row, self.LTP_COL, pos_data.get('last_price', 0.0), is_price=True)
 
-        # Quantity
-        self._set_item(row_position, self.QUANTITY_COL, pos_data.get('quantity', 0))
-
-        # Average Price
-        self._set_item(row_position, self.AVG_PRICE_COL, pos_data.get('average_price', 0.0), is_price=True)
-
-        # LTP
-        self._set_item(row_position, self.LTP_COL, pos_data.get('last_price', 0.0), is_price=True)
-
-        # P&L
         pnl_value = pos_data.get('pnl', 0.0)
-        self._set_pnl_item(row_position, pnl_value)
+        self._set_pnl_item(main_row, pnl_value)
 
-        # SL/TP Info
-        self._set_sltp_info_item(row_position, pos_data)
+        # Add SL/TP/TSL row if any are set
+        sl_price = pos_data.get('stop_loss_price')
+        tp_price = pos_data.get('target_price')
+        tsl = pos_data.get('trailing_stop_loss')
+
+        if (sl_price and sl_price > 0) or (tp_price and tp_price > 0) or (tsl and tsl > 0):
+            sltp_row = self.table.rowCount()
+            self.table.insertRow(sltp_row)
+            self.table.setRowHeight(sltp_row, 24)  # Smaller height for info row
+
+            self._set_sltp_row(sltp_row, pos_data)
 
     def _update_footer(self):
         total_pnl = sum(pos.get('pnl', 0.0) for pos in self.positions.values())
@@ -319,37 +329,42 @@ class PositionsTable(QWidget):
 
         self.table.setItem(row, self.PNL_COL, item)
 
-    def _set_sltp_info_item(self, row, pos_data):
+    def _set_sltp_row(self, row, pos_data):
+        """Set up the SL/TP/TSL information row"""
         sl_price = pos_data.get('stop_loss_price')
         tp_price = pos_data.get('target_price')
         tsl = pos_data.get('trailing_stop_loss')
 
-        # Format: SL/TP/TSL - compact display
-        sl_text = f"{sl_price:.0f}" if sl_price and sl_price > 0 else "-"
-        tp_text = f"{tp_price:.0f}" if tp_price and tp_price > 0 else "-"
-        tsl_text = f"{tsl:.0f}" if tsl and tsl > 0 else "-"
+        # Create formatted info text
+        info_parts = []
+        if sl_price and sl_price > 0:
+            info_parts.append(f"SL: ₹{sl_price:.0f}")
+        if tp_price and tp_price > 0:
+            info_parts.append(f"TP: ₹{tp_price:.0f}")
+        if tsl and tsl > 0:
+            info_parts.append(f"TSL: ₹{tsl:.0f}")
 
-        # Compact format: SL/TP/TSL
-        info_text = f"{sl_text}/{tp_text}/{tsl_text}"
+        info_text = "   " + " • ".join(info_parts)  # Indent with spaces
 
+        # Set the info text in the symbol column, spanning across
         item = QTableWidgetItem(info_text)
-        item.setTextAlignment(Qt.AlignCenter | Qt.AlignVCenter)
+        item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         item.setFlags(item.flags() & ~Qt.ItemIsEditable)
 
-        # Style based on what's set
-        if (sl_price and sl_price > 0) or (tp_price and tp_price > 0) or (tsl and tsl > 0):
-            item.setForeground(QColor("#A9B1C3"))
-            # Set monospace font for better alignment
-            font = QFont("Consolas", 11)  # Monospace font
-            if not font.exactMatch():
-                font.setFamily("Monaco")  # Mac fallback
-            if not font.exactMatch():
-                font.setFamily("monospace")  # Generic fallback
-            item.setFont(font)
-        else:
-            item.setForeground(QColor("#6B7280"))
+        # Style the info row
+        info_font = QFont()
+        info_font.setPointSize(10)  # Smaller font
+        item.setFont(info_font)
+        item.setForeground(QColor("#A9B1C3"))  # Muted color
 
-        self.table.setItem(row, self.SLTP_INFO_COL, item)
+        self.table.setItem(row, self.SYMBOL_COL, item)
+
+        # Set empty items for other columns to maintain structure
+        for col in [self.QUANTITY_COL, self.AVG_PRICE_COL, self.LTP_COL, self.PNL_COL]:
+            empty_item = QTableWidgetItem("")
+            empty_item.setFlags(empty_item.flags() & ~Qt.ItemIsEditable)
+            empty_item.setBackground(QColor("#1A1F2B"))  # Slightly different background
+            self.table.setItem(row, col, empty_item)
 
     def _load_column_widths(self):
         """Load saved column widths from JSON file"""
@@ -379,20 +394,19 @@ class PositionsTable(QWidget):
             return False
 
     def _set_default_column_widths(self):
-        """Set sensible default column widths"""
+        """Set sensible default column widths for 5-column layout"""
         default_widths = {
-            self.SYMBOL_COL: 120,  # Symbol
+            self.SYMBOL_COL: 140,  # Symbol (wider since it contains SL/TP info too)
             self.QUANTITY_COL: 80,  # Qty
             self.AVG_PRICE_COL: 100,  # Avg Price
             self.LTP_COL: 100,  # LTP
-            self.PNL_COL: 100,  # P&L
-            self.SLTP_INFO_COL: 120  # SL/TP/TSL
+            self.PNL_COL: 120  # P&L (slightly wider)
         }
 
         for col_index, width in default_widths.items():
             self.table.setColumnWidth(col_index, width)
 
-        logger.info("Applied default column widths")
+        logger.info("Applied default column widths for compact layout")
 
     def _on_column_resized(self, logical_index, old_size, new_size):
         """Called when user resizes a column - save the new widths"""

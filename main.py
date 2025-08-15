@@ -11,7 +11,11 @@ from core.paper_trading_manager import PaperTradingManager
 from core.config import setup_logging
 import locale
 
-locale.setlocale(locale.LC_ALL, 'en_IN')
+try:
+    locale.setlocale(locale.LC_ALL, 'en_IN.UTF-8')
+except locale.Error:
+    locale.setlocale(locale.LC_ALL, '')
+
 setup_logging()
 logger = logging.getLogger(__name__)
 

@@ -176,6 +176,12 @@ class PositionManager(QObject):
                     pos.update_pnl(ltp)
                     updated = True
 
+            if pos.stop_loss_price is not None and pos.pnl <= -pos.stop_loss_price:
+                self.exit_position(pos)
+
+            if pos.target_price is not None and pos.pnl >= pos.target_price:
+                self.exit_position(pos)
+
             if pos.trailing_stop_loss and pos.stop_loss_order_id and pos.stop_loss_price:
                 pnl_points = (pos.ltp - pos.average_price)
                 if pnl_points > 0:
@@ -183,7 +189,7 @@ class PositionManager(QObject):
                     new_trail_level = pnl_points // pos.trailing_stop_loss
                     if new_trail_level > current_trail_level:
                         new_sl_price = pos.stop_loss_price + (
-                                    new_trail_level - current_trail_level) * pos.trailing_stop_loss
+                                new_trail_level - current_trail_level) * pos.trailing_stop_loss
                         self.modify_stop_loss(pos.tradingsymbol, new_sl_price)
 
         if updated:
@@ -195,6 +201,23 @@ class PositionManager(QObject):
             self.place_bracket_order(position)
         self.position_added.emit(position)
         self._emit_all()
+
+    def exit_position(self, position: Position):
+        """Exit a single position."""
+        try:
+            order_id = self.trader.place_order(
+                variety=self.trader.VARIETY_REGULAR,
+                exchange=position.exchange,
+                tradingsymbol=position.tradingsymbol,
+                transaction_type=self.trader.TRANSACTION_TYPE_SELL,
+                quantity=abs(position.quantity),
+                product=position.product,
+                order_type=self.trader.ORDER_TYPE_MARKET,
+            )
+            logger.info(f"Exit order placed for {position.tradingsymbol} -> Order ID: {order_id}")
+            self.remove_position(position.tradingsymbol)
+        except Exception as e:
+            logger.error(f"Failed to exit position for {position.tradingsymbol}: {e}")
 
     def remove_position(self, tradingsymbol: str):
         if tradingsymbol in self._positions:

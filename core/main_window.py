@@ -837,15 +837,13 @@ class ScalperMainWindow(QMainWindow):
         if not position:
             return
 
-        sl = order_params.get('stop_loss')
-        tp = order_params.get('take_profit')
+        sl = order_params.get('stop_loss_price')
+        tp = order_params.get('target_price')
 
-        if sl > 0:
-            position.stop_loss_price = position.average_price - sl
-        if tp > 0:
-            position.target_price = position.average_price + tp
-
-        self.position_manager.place_bracket_order(position)
+        if sl is not None and sl > 0:
+            position.stop_loss_price = sl
+        if tp is not None and tp > 0:
+            position.target_price = tp
 
     def _show_pending_orders_dialog(self):
         if self.pending_orders_dialog is None:
@@ -1545,8 +1543,8 @@ class ScalperMainWindow(QMainWindow):
         order_type = order_params.get('order_type', self.trader.ORDER_TYPE_MARKET)
         product = order_params.get('product', self.settings.get('default_product', self.trader.PRODUCT_MIS))
         transaction_type = order_params.get('transaction_type', self.trader.TRANSACTION_TYPE_BUY)
-        stop_loss = order_params.get('stop_loss')
-        take_profit = order_params.get('take_profit')
+        stop_loss_price = order_params.get('stop_loss_price')
+        target_price = order_params.get('target_price')
         trailing_stop_loss = order_params.get('trailing_stop_loss')
 
         if not contract_to_trade or not quantity:
@@ -1598,8 +1596,8 @@ class ScalperMainWindow(QMainWindow):
                                 order_id=order_id,
                                 exchange=self.trader.EXCHANGE_NFO,
                                 product=product,
-                                stop_loss_price=avg_price_from_order - stop_loss if stop_loss > 0 else None,
-                                target_price=avg_price_from_order + take_profit if take_profit > 0 else None,
+                                stop_loss_price=stop_loss_price,
+                                target_price=target_price,
                                 trailing_stop_loss=trailing_stop_loss if trailing_stop_loss > 0 else None
                             )
                             self.position_manager.add_position(new_position)

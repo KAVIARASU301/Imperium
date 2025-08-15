@@ -1,3 +1,4 @@
+# dialogs/quick_order_dialog.py
 import logging
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGridLayout,
@@ -11,7 +12,10 @@ from utils.pricing_utils import calculate_smart_limit_price
 from utils.data_models import Contract, Position
 import locale
 
-locale.setlocale(locale.LC_ALL, 'en_IN')
+try:
+    locale.setlocale(locale.LC_ALL, 'en_IN.UTF-8')
+except locale.Error:
+    locale.setlocale(locale.LC_ALL, '')
 
 logger = logging.getLogger(__name__)
 
@@ -234,14 +238,24 @@ class QuickOrderDialog(QDialog):
         emits the signal for the main window to process the order.
         """
         from kiteconnect import KiteConnect
+
+        avg_price = self.price_spinbox.value()
+        quantity = int(self.lots_spinbox.value()) * self.contract.lot_size
+
+        stop_loss_value = self.sl_spinbox.value() if self.sl_checkbox.isChecked() else 0
+        take_profit_value = self.tp_spinbox.value() if self.tp_checkbox.isChecked() else 0
+
+        stop_loss_price = avg_price - (stop_loss_value / quantity) if stop_loss_value > 0 else None
+        take_profit_price = avg_price + (take_profit_value / quantity) if take_profit_value > 0 else None
+
         order_parameters = {
             'contract': self.contract,
-            'quantity': int(self.lots_spinbox.value()) * self.contract.lot_size,
-            'price': self.price_spinbox.value(),
+            'quantity': quantity,
+            'price': avg_price,
             'order_type': 'LIMIT',
             'transaction_type': KiteConnect.TRANSACTION_TYPE_BUY if self.buy_radio.isChecked() else KiteConnect.TRANSACTION_TYPE_SELL,
-            'stop_loss': self.sl_spinbox.value() if self.sl_checkbox.isChecked() else 0,
-            'take_profit': self.tp_spinbox.value() if self.tp_checkbox.isChecked() else 0,
+            'stop_loss_price': stop_loss_price,
+            'target_price': take_profit_price,
             'trailing_stop_loss': self.tsl_spinbox.value() if self.tsl_checkbox.isChecked() else 0,
         }
         # FIX: Close the dialog *before* emitting the signal
@@ -377,13 +391,13 @@ class QuickOrderDialog(QDialog):
             # Populate SL
             if position.stop_loss_price is not None:
                 self.sl_checkbox.setChecked(True)
-                sl_amount = abs(position.average_price - position.stop_loss_price)
+                sl_amount = abs(position.average_price - position.stop_loss_price) * abs(position.quantity)
                 self.sl_spinbox.setValue(sl_amount)
 
             # Populate TP
             if position.target_price is not None:
                 self.tp_checkbox.setChecked(True)
-                tp_amount = abs(position.target_price - position.average_price)
+                tp_amount = abs(position.target_price - position.average_price) * abs(position.quantity)
                 self.tp_spinbox.setValue(tp_amount)
 
             # Populate TSL
