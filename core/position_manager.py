@@ -77,7 +77,6 @@ class PositionManager(QObject):
         finally:
             self._refresh_in_progress = False
 
-
     def _process_orders_and_positions(self, api_positions: List[Dict], api_orders: List[Dict]):
         current_positions = {}
         pending_orders = [o for o in api_orders if
@@ -91,7 +90,6 @@ class PositionManager(QObject):
                         pos.order_id = existing_pos.order_id
                         pos.stop_loss_order_id = existing_pos.stop_loss_order_id
                         pos.target_order_id = existing_pos.target_order_id
-
                         pos.pnl = existing_pos.pnl
 
                     current_positions[pos.tradingsymbol] = pos
@@ -153,18 +151,17 @@ class PositionManager(QObject):
         new_symbols = set(new_positions.keys())
 
         for symbol in old_symbols - new_symbols:
-            exited = self._positions.pop(symbol)
-            if exited.pnl is not None:
-                self.realized_day_pnl += exited.pnl
-                self.pnl_logger.log_pnl(datetime.today(), exited.pnl)
+            exited_pos = self._positions.pop(symbol)
+            self._cancel_pending_legs(exited_pos, "Position closed")
+            if exited_pos.pnl is not None:
+                self.realized_day_pnl += exited_pos.pnl
+                self.pnl_logger.log_pnl(datetime.today(), exited_pos.pnl)
             self.position_removed.emit(symbol)
 
         self._positions = new_positions
-
-        # Clean up expired positions AFTER synchronization
         expired_count = self.remove_expired_positions()
         if expired_count > 0:
-            self._emit_all()  # Only emit once after cleanup
+            self._emit_all()
 
     def update_pnl_from_market_data(self, data: Union[dict, list]):
         updated = False
@@ -176,56 +173,35 @@ class PositionManager(QObject):
                 tick = ticks_by_token[pos.contract.instrument_token]
                 ltp = tick.get('last_price', pos.ltp)
                 if abs(pos.ltp - ltp) > 1e-9:
-                    # FIX: Use the Position's update_pnl method instead of calculating here
-                    pos.update_pnl(ltp)  # This handles both LTP and PnL update
+                    pos.update_pnl(ltp)
                     updated = True
+
+            if pos.trailing_stop_loss and pos.stop_loss_order_id and pos.stop_loss_price:
+                pnl_points = (pos.ltp - pos.average_price)
+                if pnl_points > 0:
+                    current_trail_level = (pos.average_price - pos.stop_loss_price) // pos.trailing_stop_loss
+                    new_trail_level = pnl_points // pos.trailing_stop_loss
+                    if new_trail_level > current_trail_level:
+                        new_sl_price = pos.stop_loss_price + (
+                                    new_trail_level - current_trail_level) * pos.trailing_stop_loss
+                        self.modify_stop_loss(pos.tradingsymbol, new_sl_price)
 
         if updated:
             self.positions_updated.emit(self.get_all_positions())
 
     def add_position(self, position: Position):
         self._positions[position.tradingsymbol] = position
+        if position.stop_loss_price or position.target_price:
+            self.place_bracket_order(position)
         self.position_added.emit(position)
         self._emit_all()
 
     def remove_position(self, tradingsymbol: str):
         if tradingsymbol in self._positions:
-            self._remove_position_internal(tradingsymbol)
-            self._emit_all()
-
-    def _remove_position_internal(self, tradingsymbol: str):
-        pos = self._positions.get(tradingsymbol)
-        if pos:
-            if pos.quantity == 0 and pos.pnl is not None:
-
-                order_id = pos.order_id if pos.order_id else f"closed_{pos.tradingsymbol}_{int(datetime.now().timestamp())}"
-
-                trade_details = {
-                    "order_id": order_id,
-                    "timestamp": datetime.now().isoformat(),
-                    "tradingsymbol": pos.tradingsymbol,
-                    "transaction_type": "SELL" if pos.quantity > 0 else "BUY",
-                    "quantity": abs(pos.quantity),
-                    "average_price": pos.average_price,
-                    "status": "COMPLETE",
-                    "product": pos.product,
-                    "pnl": pos.pnl
-                }
-                self.trade_logger.log_trade(trade_details)
-
-            del self._positions[tradingsymbol]
+            exited_pos = self._positions.pop(tradingsymbol)
+            self._cancel_pending_legs(exited_pos, f"Manual exit for {tradingsymbol}")
             self.position_removed.emit(tradingsymbol)
-
-    def get_winning_trade_count(self):
-        """Returns the number of trades with a positive P&L for the current session."""
-        return sum(1 for pnl in self.trade_log if pnl > 0)
-
-    def get_total_trade_count(self):
-        """Returns the total number of closed trades for the current session."""
-        return len(self.trade_log)
-
-    def _emit_all(self):
-        self.positions_updated.emit(self.get_all_positions())
+            self._emit_all()
 
     def get_all_positions(self) -> List[Position]:
         return list(self._positions.values())
@@ -236,76 +212,103 @@ class PositionManager(QObject):
     def get_total_pnl(self) -> float:
         return sum(p.pnl for p in self._positions.values() if p.pnl is not None)
 
-    def get_positions_dict(self) -> Dict[str, Position]:
-        return self._positions.copy()
-
     def get_position(self, tradingsymbol: str) -> Optional[Position]:
         return self._positions.get(tradingsymbol)
-
-    def get_position_count(self) -> int:
-        return len(self._positions)
 
     def get_realized_day_pnl(self) -> float:
         return self.realized_day_pnl
 
     def has_positions(self) -> bool:
+        """Checks if there are any open positions with non-zero quantity."""
         return any(pos.quantity != 0 for pos in self._positions.values())
 
-    def clear_positions(self):
-        self._positions.clear()
-        self._emit_all()
-
     def _check_and_cancel_oco_orders(self, api_orders: List[Dict]):
-        executed_exit_order_ids = {
-            order['order_id'] for order in api_orders
-            if order.get('status') == 'COMPLETE'
-        }
+        executed_exit_order_ids = {o['order_id'] for o in api_orders if o.get('status') == 'COMPLETE'}
         for pos in list(self._positions.values()):
-            sl_id = pos.stop_loss_order_id
-            tp_id = pos.target_order_id
-            if not (sl_id or tp_id):
-                continue
+            sl_id, tp_id = pos.stop_loss_order_id, pos.target_order_id
+            if not (sl_id or tp_id): continue
+
             sl_executed = sl_id and sl_id in executed_exit_order_ids
             tp_executed = tp_id and tp_id in executed_exit_order_ids
+
             if sl_executed and tp_id:
-                self._cancel_stale_order(tp_id, api_orders)
+                self._cancel_order(tp_id, f"SL hit for {pos.tradingsymbol}")
                 pos.target_order_id = None
             elif tp_executed and sl_id:
-                self._cancel_stale_order(sl_id, api_orders)
+                self._cancel_order(sl_id, f"TP hit for {pos.tradingsymbol}")
                 pos.stop_loss_order_id = None
 
-    def _cancel_stale_order(self, order_id: str, api_orders: List[Dict]):
-        try:
-            for order in api_orders:
-                if order['order_id'] == order_id and order['status'] in ['OPEN', 'TRIGGER PENDING']:
-                    self.trader.cancel_order(self.trader.VARIETY_REGULAR, order_id)
-                    logger.info(f"Successfully cancelled stale OCO order: {order_id}")
-                    return
-            logger.info(f"Order {order_id} was not open, no cancellation needed.")
-        except Exception as e:
-            logger.error(f"Failed to cancel stale OCO order {order_id}: {e}")
+    def _cancel_pending_legs(self, position: Position, reason: str):
+        """Cancels any open SL or TP orders associated with a position."""
+        if position.stop_loss_order_id:
+            self._cancel_order(position.stop_loss_order_id, reason)
+            position.stop_loss_order_id = None
+        if position.target_order_id:
+            self._cancel_order(position.target_order_id, reason)
+            position.target_order_id = None
 
-    def get_refresh_status(self) -> dict:
-        return {
-            'last_refresh': self.last_refresh_time,
-            'in_progress': self._refresh_in_progress,
-            'has_api_client': self.trader is not None,
-            'position_count': self.get_position_count()
-        }
+    def _cancel_order(self, order_id: str, reason: str):
+        if not order_id: return
+        try:
+            self.trader.cancel_order(self.trader.VARIETY_REGULAR, order_id)
+            logger.info(f"Cancelled order {order_id} due to {reason}.")
+        except Exception as e:
+            logger.warning(
+                f"Could not cancel order {order_id} (reason: {reason}). It may have already executed/cancelled. Error: {e}")
+
+    def place_bracket_order(self, position: Position):
+        if position.stop_loss_price: self.place_stop_loss_order(position)
+        if position.target_price: self.place_target_order(position)
+        self._emit_all()  # Refresh UI after setting SL/TP
+
+    def place_stop_loss_order(self, position: Position):
+        try:
+            order_id = self.trader.place_order(
+                variety=self.trader.VARIETY_REGULAR, exchange=position.exchange,
+                tradingsymbol=position.tradingsymbol, transaction_type=self.trader.TRANSACTION_TYPE_SELL,
+                quantity=abs(position.quantity), product=position.product, order_type=self.trader.ORDER_TYPE_SL,
+                price=position.stop_loss_price, trigger_price=position.stop_loss_price
+            )
+            position.stop_loss_order_id = order_id
+            logger.info(f"Placed SL order {order_id} for {position.tradingsymbol} at {position.stop_loss_price}")
+        except Exception as e:
+            logger.error(f"Failed to place SL order for {position.tradingsymbol}: {e}")
+
+    def place_target_order(self, position: Position):
+        try:
+            order_id = self.trader.place_order(
+                variety=self.trader.VARIETY_REGULAR, exchange=position.exchange,
+                tradingsymbol=position.tradingsymbol, transaction_type=self.trader.TRANSACTION_TYPE_SELL,
+                quantity=abs(position.quantity), product=position.product, order_type=self.trader.ORDER_TYPE_LIMIT,
+                price=position.target_price
+            )
+            position.target_order_id = order_id
+            logger.info(f"Placed TP order {order_id} for {position.tradingsymbol} at {position.target_price}")
+        except Exception as e:
+            logger.error(f"Failed to place TP order for {position.tradingsymbol}: {e}")
+
+    def modify_stop_loss(self, tradingsymbol: str, new_sl_price: float):
+        position = self.get_position(tradingsymbol)
+        if not position or not position.stop_loss_order_id: return
+        try:
+            self.trader.cancel_order(self.trader.VARIETY_REGULAR, position.stop_loss_order_id)
+            logger.info(f"Cancelled old SL order {position.stop_loss_order_id} for TSL.")
+            position.stop_loss_price = new_sl_price
+            self.place_stop_loss_order(position)
+        except Exception as e:
+            logger.error(f"Failed to modify SL for TSL on {tradingsymbol}: {e}")
+
+    def _emit_all(self):
+        self.positions_updated.emit(self.get_all_positions())
 
     def remove_expired_positions(self):
-        """Remove all expired positions from the manager."""
         import re
         from datetime import date, timedelta
-
         current_date = date.today()
         expired_symbols = []
-
         for symbol, position in list(self._positions.items()):
             try:
                 expiry_date = None
-
-                # Pattern 1: Monthly format YYMM (like 25JUL)
                 month_match = re.search(r'(\d{2})(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)', symbol)
                 if month_match:
                     year_str, month_str = month_match.groups()
@@ -313,39 +316,26 @@ class PositionManager(QObject):
                                  'JUL': 7, 'AUG': 8, 'SEP': 9, 'OCT': 10, 'NOV': 11, 'DEC': 12}
                     month = month_map[month_str]
                     year = 2000 + int(year_str)
-                    # For monthly, use last day of the month as expiry
                     if month == 12:
                         expiry_date = date(year + 1, 1, 1) - timedelta(days=1)
                     else:
                         expiry_date = date(year, month + 1, 1) - timedelta(days=1)
-
-                # Pattern 2: Weekly format YMMDD (like 25710 = 2025, 7, 10)
                 else:
                     weekly_match = re.search(r'(\d{5})', symbol)
                     if weekly_match:
                         date_str = weekly_match.group(1)
-                        year = 2000 + int(date_str[0:2])
-                        month = int(date_str[2:3])
-                        day = int(date_str[3:5])
+                        year, month, day = 2000 + int(date_str[0:2]), int(date_str[2:3]), int(date_str[3:5])
                         expiry_date = date(year, month, day)
-
-                # Check if expired
                 if expiry_date and expiry_date < current_date:
                     expired_symbols.append(symbol)
-
             except (ValueError, IndexError):
                 continue
-
-        # Remove expired positions and emit signal ONLY ONCE
         if expired_symbols:
             for symbol in expired_symbols:
                 logger.info(f"Removing expired position: {symbol}")
-                if symbol in self._positions:  # Double check it exists
+                if symbol in self._positions:
                     del self._positions[symbol]
                     self.position_removed.emit(symbol)
-
-            # Emit all positions update only once at the end
             logger.info(f"Auto-removed {len(expired_symbols)} expired positions")
             return len(expired_symbols)
-
         return 0

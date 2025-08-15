@@ -1,4 +1,4 @@
-# core/utils/data_models.py
+# utils/data_models.py
 
 """Data models for Options Scalper application"""
 
@@ -54,6 +54,7 @@ class Position:
     # --- New fields for Stop-Loss and Target ---
     stop_loss_price: Optional[float] = field(default=None)
     target_price: Optional[float] = field(default=None)
+    trailing_stop_loss: Optional[float] = field(default=None)
     stop_loss_order_id: Optional[str] = field(default=None)
     target_order_id: Optional[str] = field(default=None)
 

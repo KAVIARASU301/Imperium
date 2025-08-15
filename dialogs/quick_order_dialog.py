@@ -2,14 +2,15 @@ import logging
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QDoubleSpinBox, QPushButton, QWidget, QFrame,
-    QRadioButton, QAbstractSpinBox
+    QRadioButton, QAbstractSpinBox, QCheckBox
 )
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QMouseEvent
 
 from utils.pricing_utils import calculate_smart_limit_price
-from utils.data_models import Contract
+from utils.data_models import Contract, Position
 import locale
+
 locale.setlocale(locale.LC_ALL, 'en_IN')
 
 logger = logging.getLogger(__name__)
@@ -38,7 +39,7 @@ class QuickOrderDialog(QDialog):
         """Fixed Windows-compatible positioning"""
         self.setWindowTitle("Quick Order")
         self.setModal(False)
-        self.setMinimumSize(340, 400)
+        self.setMinimumSize(340, 550)  # Increased height for SL/TP fields
         self.setMaximumWidth(680)
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
@@ -165,10 +166,47 @@ class QuickOrderDialog(QDialog):
         self.price_spinbox.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         form_layout.addWidget(self.price_spinbox, 2, 1)
 
+        # --- UPDATED SL/TP/TSL FIELDS ---
+        # Stop Loss
+        self.sl_checkbox = QCheckBox("Stop Loss (₹)")
+        self.sl_spinbox = QDoubleSpinBox()
+        self.sl_spinbox.setRange(0, 10000)
+        self.sl_spinbox.setDecimals(2)
+        self.sl_spinbox.setSingleStep(10)
+        self.sl_spinbox.setValue(1000)
+        self.sl_spinbox.setEnabled(False)
+        self.sl_checkbox.toggled.connect(self.sl_spinbox.setEnabled)
+        form_layout.addWidget(self.sl_checkbox, 3, 0)
+        form_layout.addWidget(self.sl_spinbox, 3, 1)
+
+        # Take Profit
+        self.tp_checkbox = QCheckBox("Take Profit (₹)")
+        self.tp_spinbox = QDoubleSpinBox()
+        self.tp_spinbox.setRange(0, 10000)
+        self.tp_spinbox.setDecimals(2)
+        self.tp_spinbox.setSingleStep(10)
+        self.tp_spinbox.setValue(1500)
+        self.tp_spinbox.setEnabled(False)
+        self.tp_checkbox.toggled.connect(self.tp_spinbox.setEnabled)
+        form_layout.addWidget(self.tp_checkbox, 4, 0)
+        form_layout.addWidget(self.tp_spinbox, 4, 1)
+
+        # Trailing SL
+        self.tsl_checkbox = QCheckBox("Trailing SL (₹)")
+        self.tsl_spinbox = QDoubleSpinBox()
+        self.tsl_spinbox.setRange(0, 10000)
+        self.tsl_spinbox.setDecimals(2)
+        self.tsl_spinbox.setSingleStep(10)
+        self.tsl_spinbox.setValue(1000)
+        self.tsl_spinbox.setEnabled(False)
+        self.tsl_checkbox.toggled.connect(self.tsl_spinbox.setEnabled)
+        form_layout.addWidget(self.tsl_checkbox, 5, 0)
+        form_layout.addWidget(self.tsl_spinbox, 5, 1)
+
         self.total_value_label = QLabel()
         self.total_value_label.setObjectName("totalValueLabel")
         self.total_value_label.setAlignment(Qt.AlignCenter)
-        form_layout.addWidget(self.total_value_label, 3, 0, 1, 2)
+        form_layout.addWidget(self.total_value_label, 6, 0, 1, 2)
         parent_layout.addLayout(form_layout)
         parent_layout.addStretch()
 
@@ -202,6 +240,9 @@ class QuickOrderDialog(QDialog):
             'price': self.price_spinbox.value(),
             'order_type': 'LIMIT',
             'transaction_type': KiteConnect.TRANSACTION_TYPE_BUY if self.buy_radio.isChecked() else KiteConnect.TRANSACTION_TYPE_SELL,
+            'stop_loss': self.sl_spinbox.value() if self.sl_checkbox.isChecked() else 0,
+            'take_profit': self.tp_spinbox.value() if self.tp_checkbox.isChecked() else 0,
+            'trailing_stop_loss': self.tsl_spinbox.value() if self.tsl_checkbox.isChecked() else 0,
         }
         # FIX: Close the dialog *before* emitting the signal
         self.accept()
@@ -236,6 +277,13 @@ class QuickOrderDialog(QDialog):
             #buyRadio::indicator:checked { background-color: #29C7C9; border-color: #29C7C9; }
             #sellRadio::indicator:checked { background-color: #F85149; border-color: #F85149; }
 
+            QCheckBox { color: #A9B1C3; spacing: 8px; font-weight: bold; }
+            QCheckBox::indicator {
+                width: 18px; height: 18px; border-radius: 4px;
+                background-color: #2A3140; border: 1px solid #3A4458;
+            }
+            QCheckBox::indicator:checked { background-color: #29C7C9; }
+
             QDoubleSpinBox {
                 background-color: #212635; border: 1px solid #3A4458;
                 color: #E0E0E0; font-size: 14px; padding: 10px; border-radius: 6px;
@@ -259,7 +307,7 @@ class QuickOrderDialog(QDialog):
             #primaryButton[transaction_type="BUY"]:hover { background-color: #32E0E3; }
             #primaryButton[transaction_type="SELL"] { background-color: #F85149; color: #161A25; }
             #primaryButton[transaction_type="SELL"]:hover { background-color: #FA6B64; }
-            
+
             /* Refresh button styling */
         #refreshButton {
             background-color: #3A4458; 
@@ -273,7 +321,7 @@ class QuickOrderDialog(QDialog):
         #refreshButton:pressed {
             background-color: #2A3140;
         }
-        
+
         /* Confirm/Place Order button styling */
         #confirmButton {
             background-color: #29C7C9; 
@@ -303,20 +351,64 @@ class QuickOrderDialog(QDialog):
         self._update_summary()
         logger.info(f"Quick Order Dialog refreshed for {self.contract.tradingsymbol}")
 
-    def populate_from_order(self, order_data: dict):
-        if order_data.get('transaction_type') == 'SELL':
-            self.sell_radio.setChecked(True)
+    def populate_from_order(self, data):
+        is_position = isinstance(data, Position)
+
+        if is_position:
+            # It's a Position object from an open position
+            position = data
+            if position.quantity > 0:
+                self.buy_radio.setChecked(True)
+            else:
+                self.sell_radio.setChecked(True)
+
+            lot_size = self.contract.lot_size if self.contract and self.contract.lot_size > 0 else 1
+            lots = int(abs(position.quantity) / lot_size)
+            self.lots_spinbox.setValue(lots)
+
+            self.price_spinbox.setValue(position.average_price)
+
+            # Disable editing of transaction type and quantity when modifying
+            self.buy_radio.setEnabled(False)
+            self.sell_radio.setEnabled(False)
+            self.lots_spinbox.setEnabled(False)
+            self.price_spinbox.setEnabled(False)  # Also disable price, as we are only modifying SL/TP
+
+            # Populate SL
+            if position.stop_loss_price is not None:
+                self.sl_checkbox.setChecked(True)
+                sl_amount = abs(position.average_price - position.stop_loss_price)
+                self.sl_spinbox.setValue(sl_amount)
+
+            # Populate TP
+            if position.target_price is not None:
+                self.tp_checkbox.setChecked(True)
+                tp_amount = abs(position.target_price - position.average_price)
+                self.tp_spinbox.setValue(tp_amount)
+
+            # Populate TSL
+            if position.trailing_stop_loss is not None and position.trailing_stop_loss > 0:
+                self.tsl_checkbox.setChecked(True)
+                self.tsl_spinbox.setValue(position.trailing_stop_loss)
+
+            logger.info(f"Dialog populated for modifying SL/TP for order {position.order_id}")
+
         else:
-            self.buy_radio.setChecked(True)
+            # It's an order_data dict from a pending order
+            order_data = data
+            if order_data.get('transaction_type') == 'SELL':
+                self.sell_radio.setChecked(True)
+            else:
+                self.buy_radio.setChecked(True)
 
-        quantity = order_data.get('quantity', 0)
-        lot_size = self.contract.lot_size if self.contract and self.contract.lot_size > 0 else 1
-        lots = int(quantity / lot_size)
-        self.lots_spinbox.setValue(lots)
+            quantity = order_data.get('quantity', 0)
+            lot_size = self.contract.lot_size if self.contract and self.contract.lot_size > 0 else 1
+            lots = int(quantity / lot_size)
+            self.lots_spinbox.setValue(lots)
 
-        price = order_data.get('price', self.contract.ltp)
-        self.price_spinbox.setValue(price)
-        logger.info(f"Dialog populated for modifying order {order_data.get('order_id')}")
+            price = order_data.get('price', self.contract.ltp)
+            self.price_spinbox.setValue(price)
+            logger.info(f"Dialog populated for modifying order {order_data.get('order_id')}")
 
     def mousePressEvent(self, event: QMouseEvent):
         if event.button() == Qt.LeftButton:

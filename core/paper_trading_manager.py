@@ -17,6 +17,8 @@ class PaperTradingManager(QObject):
     PRODUCT_NRML = "NRML"
     ORDER_TYPE_MARKET = "MARKET"
     ORDER_TYPE_LIMIT = "LIMIT"
+    ORDER_TYPE_SL = "SL"
+    ORDER_TYPE_SLM = "SL-M"
     TRANSACTION_TYPE_BUY = "BUY"
     TRANSACTION_TYPE_SELL = "SELL"
     EXCHANGE_NFO = "NFO"
@@ -112,6 +114,12 @@ class PaperTradingManager(QObject):
             if ltp > 0 and ((is_buy and limit_price >= ltp) or (not is_buy and limit_price <= ltp)):
                 self._execute_trade(order, ltp)
 
+        elif order_type == self.ORDER_TYPE_SL:
+            trigger_price = kwargs.get('trigger_price')
+            is_sell = transaction_type == self.TRANSACTION_TYPE_SELL
+            if ltp > 0 and is_sell and ltp <= trigger_price:
+                self._execute_trade(order, price or trigger_price)
+
         self._orders.append(order)
         self.order_update.emit(order)
         return order_id
@@ -146,6 +154,7 @@ class PaperTradingManager(QObject):
         return {"user_id": "PAPER"}
 
     def positions(self):
+        self._remove_expired_positions()
         for symbol, pos in self._positions.items():
             instrument_token = self.tradingsymbol_to_token.get(symbol)
             if instrument_token and instrument_token in self.market_data:
@@ -200,3 +209,39 @@ class PaperTradingManager(QObject):
         logger.info(f"Paper trade executed: {order['transaction_type']} {quantity} {symbol} @ {price:.2f}")
         self._save_state()
         self.order_update.emit(order)
+
+    def _remove_expired_positions(self):
+        import re
+        from datetime import date, timedelta
+        current_date = date.today()
+        expired_symbols = []
+        for symbol in list(self._positions.keys()):
+            try:
+                expiry_date = None
+                month_match = re.search(r'(\d{2})(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)', symbol)
+                if month_match:
+                    year_str, month_str = month_match.groups()
+                    month_map = {'JAN': 1, 'FEB': 2, 'MAR': 3, 'APR': 4, 'MAY': 5, 'JUN': 6,
+                                 'JUL': 7, 'AUG': 8, 'SEP': 9, 'OCT': 10, 'NOV': 11, 'DEC': 12}
+                    month = month_map[month_str]
+                    year = 2000 + int(year_str)
+                    if month == 12:
+                        expiry_date = date(year + 1, 1, 1) - timedelta(days=1)
+                    else:
+                        expiry_date = date(year, month + 1, 1) - timedelta(days=1)
+                else:
+                    weekly_match = re.search(r'(\d{5})', symbol)
+                    if weekly_match:
+                        date_str = weekly_match.group(1)
+                        year, month, day = 2000 + int(date_str[0:2]), int(date_str[2:3]), int(date_str[3:5])
+                        expiry_date = date(year, month, day)
+                if expiry_date and expiry_date < current_date:
+                    expired_symbols.append(symbol)
+            except (ValueError, IndexError):
+                continue
+        if expired_symbols:
+            for symbol in expired_symbols:
+                if symbol in self._positions:
+                    del self._positions[symbol]
+                    logger.info(f"PaperTradingManager: Removed expired position {symbol} from state.")
+            self._save_state()

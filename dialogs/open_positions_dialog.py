@@ -19,6 +19,7 @@ class OpenPositionsDialog(QDialog):
     """
     position_exit_requested = Signal(str)
     refresh_requested = Signal()
+    modify_sl_tp_requested = Signal(str) # Added missing signal
 
     def __init__(self, parent=None, config_manager: ConfigManager = None):
         super().__init__(parent)
@@ -124,6 +125,7 @@ class OpenPositionsDialog(QDialog):
     def _connect_signals(self):
         self.refresh_button.clicked.connect(self._on_refresh_clicked)
         self.positions_table.position_exit_requested.connect(self.position_exit_requested.emit)
+        # self.positions_table.modify_sl_tp_requested.connect(self.modify_sl_tp_requested.emit) # Connect the signal
 
     def _restore_geometry(self):
         # FIX: Use the ConfigManager

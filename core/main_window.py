@@ -237,7 +237,7 @@ class ScalperMainWindow(QMainWindow):
         self._ui_update_needed = False
         self.ui_update_timer = QTimer(self)
         self.ui_update_timer.timeout.connect(self._update_throttled_ui)
-        self.ui_update_timer.start(100) # Update UI at most every 100ms
+        self.ui_update_timer.start(100)  # Update UI at most every 100ms
 
         self.setWindowFlags(Qt.FramelessWindowHint)
         self.custom_title_bar = CustomTitleBar(self)
@@ -404,8 +404,6 @@ class ScalperMainWindow(QMainWindow):
             self._update_account_info()
             self._update_account_summary_widget()
             self._refresh_positions()
-
-
 
     def _setup_ui(self):
         main_container = QWidget()
@@ -587,6 +585,7 @@ class ScalperMainWindow(QMainWindow):
         self.buy_exit_panel.exit_clicked.connect(self._exit_option_positions)
         self.strike_ladder.strike_selected.connect(self._on_single_strike_selected)
         self.inline_positions_table.exit_requested.connect(self._exit_position)
+        self.inline_positions_table.modify_sl_tp_requested.connect(self._show_modify_sl_tp_dialog)
         self.account_summary.pnl_history_requested.connect(self._show_pnl_history_dialog)
         self.position_manager.pending_orders_updated.connect(self._update_pending_order_widgets)
         self.inline_positions_table.refresh_requested.connect(self._refresh_positions)
@@ -651,7 +650,6 @@ class ScalperMainWindow(QMainWindow):
         except Exception as e:
             logger.error(f"Failed to get current price for {symbol}: {e}")
             return None
-
 
     def _update_market_subscriptions(self):
         tokens_to_subscribe = set()
@@ -769,9 +767,7 @@ class ScalperMainWindow(QMainWindow):
             self.positions_dialog.update_positions(positions)
 
         if self.inline_positions_table:
-            positions_as_dicts = [
-                {'tradingsymbol': p.tradingsymbol, 'quantity': p.quantity, 'average_price': p.average_price,
-                 'last_price': p.ltp, 'pnl': p.pnl, 'exchange': p.exchange, 'product': p.product} for p in positions]
+            positions_as_dicts = [self._position_to_dict(p) for p in positions]
             self.inline_positions_table.update_positions(positions_as_dicts)
 
         self._update_performance()
@@ -815,6 +811,7 @@ class ScalperMainWindow(QMainWindow):
             self.position_manager.positions_updated.connect(self.positions_dialog.update_positions)
             self.positions_dialog.refresh_requested.connect(self._refresh_positions)
             self.positions_dialog.position_exit_requested.connect(self._exit_position_from_dialog)
+            self.positions_dialog.modify_sl_tp_requested.connect(self._show_modify_sl_tp_dialog)
             self.position_manager.refresh_completed.connect(self.positions_dialog.on_refresh_completed)
 
         initial_positions = self.position_manager.get_all_positions()
@@ -822,6 +819,33 @@ class ScalperMainWindow(QMainWindow):
         self.positions_dialog.show()
         self.positions_dialog.raise_()
         self.positions_dialog.activateWindow()
+
+    def _show_modify_sl_tp_dialog(self, symbol: str):
+        position = self.position_manager.get_position(symbol)
+        if not position:
+            QMessageBox.warning(self, "Error", "Position not found.")
+            return
+
+        lots = abs(position.quantity) / position.contract.lot_size if position.contract.lot_size > 0 else 1
+        dialog = QuickOrderDialog(self, position.contract, lots)
+        dialog.populate_from_order(position)
+        dialog.order_placed.connect(self._modify_sl_tp_for_position)
+
+    def _modify_sl_tp_for_position(self, order_params: dict):
+        contract = order_params.get('contract')
+        position = self.position_manager.get_position(contract.tradingsymbol)
+        if not position:
+            return
+
+        sl = order_params.get('stop_loss')
+        tp = order_params.get('take_profit')
+
+        if sl > 0:
+            position.stop_loss_price = position.average_price - sl
+        if tp > 0:
+            position.target_price = position.average_price + tp
+
+        self.position_manager.place_bracket_order(position)
 
     def _show_pending_orders_dialog(self):
         if self.pending_orders_dialog is None:
@@ -854,7 +878,6 @@ class ScalperMainWindow(QMainWindow):
         self.pnl_history_dialog.show()
         self.pnl_history_dialog.activateWindow()
         self.pnl_history_dialog.raise_()
-
 
     def _show_performance_dialog(self):
         if self.performance_dialog is None:
@@ -1522,6 +1545,9 @@ class ScalperMainWindow(QMainWindow):
         order_type = order_params.get('order_type', self.trader.ORDER_TYPE_MARKET)
         product = order_params.get('product', self.settings.get('default_product', self.trader.PRODUCT_MIS))
         transaction_type = order_params.get('transaction_type', self.trader.TRANSACTION_TYPE_BUY)
+        stop_loss = order_params.get('stop_loss')
+        take_profit = order_params.get('take_profit')
+        trailing_stop_loss = order_params.get('trailing_stop_loss')
 
         if not contract_to_trade or not quantity:
             logger.error("Invalid parameters for single strike order.")
@@ -1571,7 +1597,10 @@ class ScalperMainWindow(QMainWindow):
                                 contract=contract_to_trade,
                                 order_id=order_id,
                                 exchange=self.trader.EXCHANGE_NFO,
-                                product=product
+                                product=product,
+                                stop_loss_price=avg_price_from_order - stop_loss if stop_loss > 0 else None,
+                                target_price=avg_price_from_order + take_profit if take_profit > 0 else None,
+                                trailing_stop_loss=trailing_stop_loss if trailing_stop_loss > 0 else None
                             )
                             self.position_manager.add_position(new_position)
                             self.trade_logger.log_trade(confirmed_order_api_data)
@@ -1762,7 +1791,6 @@ class ScalperMainWindow(QMainWindow):
         self.buy_exit_panel.update_parameters(symbol, num_lots, lot_quantity, expiry_str)
         logger.debug(f"Lot size updated to {num_lots} without refreshing ladder.")
 
-
     def _refresh_data(self):
         self.statusBar().showMessage("Refreshing data...", 0)
         self._refresh_positions()
@@ -1780,10 +1808,21 @@ class ScalperMainWindow(QMainWindow):
 
     @staticmethod
     def _position_to_dict(position: Position) -> dict:
-        return {'tradingsymbol': position.tradingsymbol, 'symbol': position.symbol, 'quantity': position.quantity,
-                'average_price': position.average_price, 'last_price': position.ltp, 'pnl': position.pnl,
-                'exchange': position.exchange, 'product': position.product, 'strike': position.contract.strike,
-                'option_type': position.contract.option_type}
+        return {
+            'tradingsymbol': position.tradingsymbol,
+            'symbol': position.symbol,
+            'quantity': position.quantity,
+            'average_price': position.average_price,
+            'last_price': position.ltp,
+            'pnl': position.pnl,
+            'exchange': position.exchange,
+            'product': position.product,
+            'strike': position.contract.strike,
+            'option_type': position.contract.option_type,
+            'stop_loss_price': position.stop_loss_price,
+            'target_price': position.target_price,
+            'trailing_stop_loss': position.trailing_stop_loss
+        }
 
     def _refresh_orders(self):
         if not self.trader:
@@ -1880,7 +1919,7 @@ class ScalperMainWindow(QMainWindow):
         elif "Connecting" in self.network_status or "Reconnecting" in self.network_status:
             network_display_status = f" | 🔄 {self.network_status}"
         else:
-             network_display_status = f" | ⚠️ {self.network_status}"
+            network_display_status = f" | ⚠️ {self.network_status}"
 
         self.statusBar().showMessage(f"{network_display_status} | {status} | {now.strftime('%H:%M:%S')}{api_status}")
 
@@ -1934,10 +1973,12 @@ class ScalperMainWindow(QMainWindow):
             self.statusBar().showMessage(f"Order {order_id} cancelled. Please enter new order details.", 4000)
         except Exception as e:
             logger.warning(f"Failed to cancel order {order_id} for modification, it might have been executed: {e}")
-            QMessageBox.information(self, "Order Not Found", "The order could not be modified as it may have been executed. Please refresh the positions table to confirm.")
+            QMessageBox.information(self, "Order Not Found",
+                                    "The order could not be modified as it may have been executed. Please refresh the positions table to confirm.")
             return
 
         QTimer.singleShot(100, lambda: self._open_prefilled_order_dialog(contract, order_data))
+
     def _open_prefilled_order_dialog(self, contract: Contract, order_data: dict):
         if self.active_quick_order_dialog:
             self.active_quick_order_dialog.reject()
@@ -2009,7 +2050,6 @@ class ScalperMainWindow(QMainWindow):
                 if contract.tradingsymbol == tradingsymbol:
                     return contract
         return None
-
 
     def _on_network_status_changed(self, status: str):
         self.network_status = status
