@@ -833,17 +833,19 @@ class ScalperMainWindow(QMainWindow):
 
     def _modify_sl_tp_for_position(self, order_params: dict):
         contract = order_params.get('contract')
-        position = self.position_manager.get_position(contract.tradingsymbol)
-        if not position:
+        if not contract:
+            logger.error("Modify SL/TP failed: Contract object missing from order params.")
             return
 
-        sl = order_params.get('stop_loss_price')
-        tp = order_params.get('target_price')
+        tradingsymbol = contract.tradingsymbol
+        sl_price = order_params.get('stop_loss_price')
+        tp_price = order_params.get('target_price')
+        tsl_value = order_params.get('trailing_stop_loss')
 
-        if sl is not None and sl > 0:
-            position.stop_loss_price = sl
-        if tp is not None and tp > 0:
-            position.target_price = tp
+        # Delegate the entire logic to the PositionManager
+        self.position_manager.update_sl_tp_for_position(
+            tradingsymbol, sl_price, tp_price, tsl_value
+        )
 
     def _show_pending_orders_dialog(self):
         if self.pending_orders_dialog is None:

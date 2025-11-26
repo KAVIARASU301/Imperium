@@ -91,6 +91,10 @@ class PositionManager(QObject):
                         pos.stop_loss_order_id = existing_pos.stop_loss_order_id
                         pos.target_order_id = existing_pos.target_order_id
                         pos.pnl = existing_pos.pnl
+                        # --- ADD THESE THREE LINES ---
+                        pos.stop_loss_price = existing_pos.stop_loss_price
+                        pos.target_price = existing_pos.target_price
+                        pos.trailing_stop_loss = existing_pos.trailing_stop_loss
 
                     current_positions[pos.tradingsymbol] = pos
 
@@ -100,7 +104,6 @@ class PositionManager(QObject):
 
         self.positions_updated.emit(self.get_all_positions())
         self.pending_orders_updated.emit(self.get_pending_orders())
-
     def _convert_api_to_position(self, api_pos: dict) -> Optional[Position]:
         """
         Converts position data from the API into a rich Position object,
@@ -362,3 +365,28 @@ class PositionManager(QObject):
             logger.info(f"Auto-removed {len(expired_symbols)} expired positions")
             return len(expired_symbols)
         return 0
+
+    def update_sl_tp_for_position(self, tradingsymbol: str, sl_price: Optional[float], tp_price: Optional[float],
+                                  tsl_value: Optional[float]):
+        """
+        Updates SL/TP for an existing position, canceling old orders and placing new ones.
+        """
+        position = self.get_position(tradingsymbol)
+        if not position:
+            logger.error(f"Cannot update SL/TP: Position not found for {tradingsymbol}")
+            return
+
+        # Cancel any existing SL or TP orders before applying new ones.
+        self._cancel_pending_legs(position, "SL/TP Modified by user")
+
+        # Update the position object with the new values
+        position.stop_loss_price = sl_price if sl_price and sl_price > 0 else None
+        position.target_price = tp_price if tp_price and tp_price > 0 else None
+        position.trailing_stop_loss = tsl_value if tsl_value and tsl_value > 0 else None
+
+        logger.info(
+            f"Updating SL/TP for {position.tradingsymbol}: SL={position.stop_loss_price}, TP={position.target_price}, TSL={position.trailing_stop_loss}")
+
+        # Place new bracket orders based on the updated values.
+        # This method automatically triggers the UI update by calling _emit_all().
+        self.place_bracket_order(position)

@@ -50,7 +50,7 @@ class PositionsTable(QWidget):
         main_layout.setSpacing(0)
 
         self.table = QTableWidget()
-        self.table.headers = ["Symbol", "Qty", "Avg Price", "LTP", "P&L"]
+        self.table.headers = ["Symbol", "Qty", "Avg", "LTP", "P&L"]
         self.table.setColumnCount(len(self.table.headers))
         self.table.setHorizontalHeaderLabels(self.table.headers)
         self.table.setMouseTracking(True)
@@ -272,7 +272,7 @@ class PositionsTable(QWidget):
         else:
             item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             if is_price:
-                item.setText(f"₹{data:,.2f}")
+                item.setText(f"{data:,.2f}")
             else:
                 item.setText(f"{int(data):,}")
 
@@ -281,41 +281,18 @@ class PositionsTable(QWidget):
 
     def _set_symbol_item(self, row, pos_data):
         symbol = pos_data.get('tradingsymbol', 'N/A')
-        sl_set = pos_data.get('stop_loss_price') is not None and pos_data.get('stop_loss_price') > 0
-        tp_set = pos_data.get('target_price') is not None and pos_data.get('target_price') > 0
 
-        # Build symbol text with indicators
-        display_text = symbol
-        indicators = []
-
-        if sl_set:
-            indicators.append("SL")
-        if tp_set:
-            indicators.append("TP")
-
-        if indicators:
-            display_text += f" [{'/'.join(indicators)}]"
-
-        item = QTableWidgetItem(display_text)
+        item = QTableWidgetItem(symbol)
         item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         item.setFlags(item.flags() & ~Qt.ItemIsEditable)
-
-        # Color coding for indicators
-        if sl_set and tp_set:
-            item.setForeground(QColor("#4ECDC4"))  # Cyan for both
-        elif sl_set:
-            item.setForeground(QColor("#FF6B6B"))  # Red for SL
-        elif tp_set:
-            item.setForeground(QColor("#4ECDC4"))  # Cyan for TP
-        else:
-            item.setForeground(QColor("#E0E0E0"))  # Default
+        item.setForeground(QColor("#E0E0E0"))  # Default color
 
         self.table.setItem(row, self.SYMBOL_COL, item)
 
     def _set_pnl_item(self, row, pnl_value):
         item = QTableWidgetItem()
         item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        item.setText(f"₹{pnl_value:,.0f}")
+        item.setText(f"{pnl_value:>6,.0f}")  # Minimum 6 digits, right-aligned
         item.setFlags(item.flags() & ~Qt.ItemIsEditable)
 
         # Color based on profit/loss
@@ -338,11 +315,11 @@ class PositionsTable(QWidget):
         # Create formatted info text
         info_parts = []
         if sl_price and sl_price > 0:
-            info_parts.append(f"SL: ₹{sl_price:.0f}")
+            info_parts.append(f"SL: {sl_price:.0f}")
         if tp_price and tp_price > 0:
-            info_parts.append(f"TP: ₹{tp_price:.0f}")
+            info_parts.append(f"TP: {tp_price:.0f}")
         if tsl and tsl > 0:
-            info_parts.append(f"TSL: ₹{tsl:.0f}")
+            info_parts.append(f"TSL: {tsl:.0f}")
 
         info_text = "   " + " • ".join(info_parts)  # Indent with spaces
 
@@ -394,19 +371,22 @@ class PositionsTable(QWidget):
             return False
 
     def _set_default_column_widths(self):
-        """Set sensible default column widths for 5-column layout"""
-        default_widths = {
-            self.SYMBOL_COL: 140,  # Symbol (wider since it contains SL/TP info too)
-            self.QUANTITY_COL: 80,  # Qty
-            self.AVG_PRICE_COL: 100,  # Avg Price
-            self.LTP_COL: 100,  # LTP
-            self.PNL_COL: 120  # P&L (slightly wider)
+        """Set minimum column widths - columns will auto-fit based on content"""
+        min_widths = {
+            self.SYMBOL_COL: 100,  # Symbol minimum
+            self.QUANTITY_COL: 50,  # Qty minimum
+            self.AVG_PRICE_COL: 70,  # Avg Price minimum
+            self.LTP_COL: 70,  # LTP minimum
+            self.PNL_COL: 100  # P&L minimum (for 6 digits)
         }
 
-        for col_index, width in default_widths.items():
-            self.table.setColumnWidth(col_index, width)
+        # Set minimum widths
+        for col_index, min_width in min_widths.items():
+            self.table.setColumnWidth(col_index, min_width)
+            header = self.table.horizontalHeader()
+            header.setMinimumSectionSize(min_width)
 
-        logger.info("Applied default column widths for compact layout")
+        logger.info("Applied minimum column widths with auto-fit")
 
     def _on_column_resized(self, logical_index, old_size, new_size):
         """Called when user resizes a column - save the new widths"""

@@ -245,3 +245,4 @@ class PaperTradingManager(QObject):
                     del self._positions[symbol]
                     logger.info(f"PaperTradingManager: Removed expired position {symbol} from state.")
             self._save_state()
+
