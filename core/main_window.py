@@ -937,42 +937,39 @@ class ScalperMainWindow(QMainWindow):
             QMessageBox.critical(self, "Cancel Failed", f"Could not cancel order {order_id}:\n{e}")
 
     def _show_about(self):
-        """Displays a brief 'About' dialog for the application."""
+        """Displays a concise About dialog for the application."""
         about_text = """
-        <div style="font-family: 'Segoe UI', sans-serif; font-size: 10.5pt;">
-            <h2 style="margin-bottom: 4px;">Options Scalper Pro</h2>
-            <p style="margin: 2px 0;"><b>Version:</b> 1.0.0</p>
-            <p style="margin: 2px 0;">© 2025 Kaviarasu</p>
-            <hr>
+        <div style="font-family:'Segoe UI',sans-serif; font-size:10.5pt; line-height:1.45;">
+            <h2 style="margin-bottom:6px;">Blue Whale Trading Terminal</h2>
 
-            <p style="margin-top: 12px;">
-                A high-performance options scalping application built with PySide6,
-                utilizing the Kite Connect API with a full paper trading mode.
+            <p style="margin:2px 0;"><b>Version:</b> 1.0.0</p>
+            <p style="margin:2px 0;"><b>Owner:</b> Kaviarasu Murugan</p>
+            <p style="margin:2px 0;"><b>Contact:</b> kaviarasu301@gmail.com</p>
+            <p style="margin:2px 0;">© 2025 Kaviarasu</p>
+
+            <hr style="margin:10px 0;">
+
+            <p>
+                Blue Whale Trading Terminal is a desktop application designed for
+                fast, stable, and secure options trading and market monitoring.
+                It provides real-time data visualization, order management,
+                and analytical tools focused on intraday decision-making.
             </p>
 
-            <h4 style="margin-top: 16px;">Key Features:</h4>
-            <ul style="margin-left: -16px;">
-                <li style="margin-bottom: 8px;">
-                    <b>Integrated Features:</b> Combines a Strike Ladder, Buy/Exit Panel,
-                    and a real-time Positions Table for efficient workflow.
-                </li>
-                <li style="margin-bottom: 8px;">
-                    <b>Advanced Analytics:</b>
-                    Chart and detachable Market Monitor windows for in-depth analysis.
-                </li>
-                <li style="margin-bottom: 8px;">
-                    <b>Robust Order Management:</b> Supports multi-strike, single-strike,
-                    and pending order management through dedicated dialogs.
-                </li>
-                <li style="margin-bottom: 8px;">
-                    <b>Reliable Backend:</b> Built with a multi-threaded architecture,
-                    including a Position Manager and API circuit breakers to ensure
-                    stability and data integrity.
-                </li>
-            </ul>
+            <p>
+                The application is built using Python and PySide6, with integration
+                to the Kite Connect API. It supports both live trading and paper
+                trading modes for testing and analysis.
+            </p>
+
+            <p style="margin-top:10px;">
+                <b>License Notice:</b><br>
+                Sale or redistribution of this software is not permitted.
+            </p>
         </div>
         """
-        QMessageBox.about(self, "About Options Scalper Pro", about_text)
+
+        QMessageBox.about(self, "About Blue Whale Trading Terminal", about_text)
 
     def _show_settings(self):
         """

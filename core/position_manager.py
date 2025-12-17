@@ -95,10 +95,9 @@ class PositionManager(QObject):
                         pos.stop_loss_price = existing_pos.stop_loss_price
                         pos.target_price = existing_pos.target_price
                         pos.trailing_stop_loss = existing_pos.trailing_stop_loss
-
+                        pos.is_exiting = False
                     current_positions[pos.tradingsymbol] = pos
 
-        self._check_and_cancel_oco_orders(api_orders)
         self._synchronize_positions(current_positions)
         self._pending_orders = pending_orders
 
@@ -155,7 +154,6 @@ class PositionManager(QObject):
 
         for symbol in old_symbols - new_symbols:
             exited_pos = self._positions.pop(symbol)
-            self._cancel_pending_legs(exited_pos, "Position closed")
             if exited_pos.pnl is not None:
                 self.realized_day_pnl += exited_pos.pnl
                 self.pnl_logger.log_pnl(datetime.today(), exited_pos.pnl)
@@ -197,35 +195,39 @@ class PositionManager(QObject):
                     self.exit_position(pos)
                     continue  # Skip further checks for this position
 
-            # Trailing Stop Loss Logic
-            if pos.trailing_stop_loss and pos.stop_loss_order_id and pos.stop_loss_price:
-                pnl_points = (pos.ltp - pos.average_price)
+            # Trailing Stop Loss – LOCAL ONLY
+            if pos.trailing_stop_loss and pos.stop_loss_price and pos.quantity > 0:
+                pnl_points = pos.ltp - pos.average_price
 
                 if pnl_points > 0:
-                    current_trail_level = (pos.average_price - pos.stop_loss_price) // pos.trailing_stop_loss
-                    new_trail_level = pnl_points // pos.trailing_stop_loss
+                    current_trail = (pos.average_price - pos.stop_loss_price) // pos.trailing_stop_loss
+                    new_trail = pnl_points // pos.trailing_stop_loss
 
-                    if new_trail_level > current_trail_level:
-                        new_sl_price = pos.stop_loss_price + (
-                                new_trail_level - current_trail_level) * pos.trailing_stop_loss
+                    if new_trail > current_trail:
+                        new_sl_price = pos.stop_loss_price + (new_trail - current_trail) * pos.trailing_stop_loss
                         logger.info(
-                            f"Trailing SL update for {pos.tradingsymbol}: {pos.stop_loss_price} -> {new_sl_price}")
-                        self.modify_stop_loss(pos.tradingsymbol, new_sl_price)
+                            f"Trailing SL moved for {pos.tradingsymbol}: {pos.stop_loss_price} → {new_sl_price}"
+                        )
+                        pos.stop_loss_price = new_sl_price
 
         if updated:
             self.positions_updated.emit(self.get_all_positions())
 
     def add_position(self, position: Position):
         self._positions[position.tradingsymbol] = position
-        if position.stop_loss_price or position.target_price:
-            self.place_bracket_order(position)
+        # if position.stop_loss_price or position.target_price:
+        #     self.place_bracket_order(position)
         self.position_added.emit(position)
         self._emit_all()
 
     def exit_position(self, position: Position):
-        """Exit a single position."""
+        if position.is_exiting:
+            return
+
+        position.is_exiting = True
+
         try:
-            order_id = self.trader.place_order(
+            self.trader.place_order(
                 variety=self.trader.VARIETY_REGULAR,
                 exchange=position.exchange,
                 tradingsymbol=position.tradingsymbol,
@@ -234,15 +236,14 @@ class PositionManager(QObject):
                 product=position.product,
                 order_type=self.trader.ORDER_TYPE_MARKET,
             )
-            logger.info(f"Exit order placed for {position.tradingsymbol} -> Order ID: {order_id}")
-            self.remove_position(position.tradingsymbol)
+            logger.info(f"Exit order placed for {position.tradingsymbol}")
         except Exception as e:
-            logger.error(f"Failed to exit position for {position.tradingsymbol}: {e}")
+            position.is_exiting = False
+            logger.error(f"Exit failed for {position.tradingsymbol}: {e}")
 
     def remove_position(self, tradingsymbol: str):
         if tradingsymbol in self._positions:
             exited_pos = self._positions.pop(tradingsymbol)
-            self._cancel_pending_legs(exited_pos, f"Manual exit for {tradingsymbol}")
             self.position_removed.emit(tradingsymbol)
             self._emit_all()
 
@@ -264,82 +265,6 @@ class PositionManager(QObject):
     def has_positions(self) -> bool:
         """Checks if there are any open positions with non-zero quantity."""
         return any(pos.quantity != 0 for pos in self._positions.values())
-
-    def _check_and_cancel_oco_orders(self, api_orders: List[Dict]):
-        executed_exit_order_ids = {o['order_id'] for o in api_orders if o.get('status') == 'COMPLETE'}
-        for pos in list(self._positions.values()):
-            sl_id, tp_id = pos.stop_loss_order_id, pos.target_order_id
-            if not (sl_id or tp_id): continue
-
-            sl_executed = sl_id and sl_id in executed_exit_order_ids
-            tp_executed = tp_id and tp_id in executed_exit_order_ids
-
-            if sl_executed and tp_id:
-                self._cancel_order(tp_id, f"SL hit for {pos.tradingsymbol}")
-                pos.target_order_id = None
-            elif tp_executed and sl_id:
-                self._cancel_order(sl_id, f"TP hit for {pos.tradingsymbol}")
-                pos.stop_loss_order_id = None
-
-    def _cancel_pending_legs(self, position: Position, reason: str):
-        """Cancels any open SL or TP orders associated with a position."""
-        if position.stop_loss_order_id:
-            self._cancel_order(position.stop_loss_order_id, reason)
-            position.stop_loss_order_id = None
-        if position.target_order_id:
-            self._cancel_order(position.target_order_id, reason)
-            position.target_order_id = None
-
-    def _cancel_order(self, order_id: str, reason: str):
-        if not order_id: return
-        try:
-            self.trader.cancel_order(self.trader.VARIETY_REGULAR, order_id)
-            logger.info(f"Cancelled order {order_id} due to {reason}.")
-        except Exception as e:
-            logger.warning(
-                f"Could not cancel order {order_id} (reason: {reason}). It may have already executed/cancelled. Error: {e}")
-
-    def place_bracket_order(self, position: Position):
-        if position.stop_loss_price: self.place_stop_loss_order(position)
-        if position.target_price: self.place_target_order(position)
-        self._emit_all()  # Refresh UI after setting SL/TP
-
-    def place_stop_loss_order(self, position: Position):
-        try:
-            order_id = self.trader.place_order(
-                variety=self.trader.VARIETY_REGULAR, exchange=position.exchange,
-                tradingsymbol=position.tradingsymbol, transaction_type=self.trader.TRANSACTION_TYPE_SELL,
-                quantity=abs(position.quantity), product=position.product, order_type=self.trader.ORDER_TYPE_SL,
-                price=position.stop_loss_price, trigger_price=position.stop_loss_price
-            )
-            position.stop_loss_order_id = order_id
-            logger.info(f"Placed SL order {order_id} for {position.tradingsymbol} at {position.stop_loss_price}")
-        except Exception as e:
-            logger.error(f"Failed to place SL order for {position.tradingsymbol}: {e}")
-
-    def place_target_order(self, position: Position):
-        try:
-            order_id = self.trader.place_order(
-                variety=self.trader.VARIETY_REGULAR, exchange=position.exchange,
-                tradingsymbol=position.tradingsymbol, transaction_type=self.trader.TRANSACTION_TYPE_SELL,
-                quantity=abs(position.quantity), product=position.product, order_type=self.trader.ORDER_TYPE_LIMIT,
-                price=position.target_price
-            )
-            position.target_order_id = order_id
-            logger.info(f"Placed TP order {order_id} for {position.tradingsymbol} at {position.target_price}")
-        except Exception as e:
-            logger.error(f"Failed to place TP order for {position.tradingsymbol}: {e}")
-
-    def modify_stop_loss(self, tradingsymbol: str, new_sl_price: float):
-        position = self.get_position(tradingsymbol)
-        if not position or not position.stop_loss_order_id: return
-        try:
-            self.trader.cancel_order(self.trader.VARIETY_REGULAR, position.stop_loss_order_id)
-            logger.info(f"Cancelled old SL order {position.stop_loss_order_id} for TSL.")
-            position.stop_loss_price = new_sl_price
-            self.place_stop_loss_order(position)
-        except Exception as e:
-            logger.error(f"Failed to modify SL for TSL on {tradingsymbol}: {e}")
 
     def _emit_all(self):
         self.positions_updated.emit(self.get_all_positions())
@@ -383,27 +308,27 @@ class PositionManager(QObject):
             return len(expired_symbols)
         return 0
 
-    def update_sl_tp_for_position(self, tradingsymbol: str, sl_price: Optional[float], tp_price: Optional[float],
-                                  tsl_value: Optional[float]):
-        """
-        Updates SL/TP for an existing position, canceling old orders and placing new ones.
-        """
+    def update_sl_tp_for_position(
+            self,
+            tradingsymbol: str,
+            sl_price: Optional[float],
+            tp_price: Optional[float],
+            tsl_value: Optional[float]
+    ):
         position = self.get_position(tradingsymbol)
         if not position:
-            logger.error(f"Cannot update SL/TP: Position not found for {tradingsymbol}")
+            logger.error(f"Position not found for SL/TP update: {tradingsymbol}")
             return
 
-        # Cancel any existing SL or TP orders before applying new ones.
-        self._cancel_pending_legs(position, "SL/TP Modified by user")
-
-        # Update the position object with the new values
         position.stop_loss_price = sl_price if sl_price and sl_price > 0 else None
         position.target_price = tp_price if tp_price and tp_price > 0 else None
         position.trailing_stop_loss = tsl_value if tsl_value and tsl_value > 0 else None
 
         logger.info(
-            f"Updating SL/TP for {position.tradingsymbol}: SL={position.stop_loss_price}, TP={position.target_price}, TSL={position.trailing_stop_loss}")
+            f"Local SL/TP updated for {tradingsymbol}: "
+            f"SL={position.stop_loss_price}, "
+            f"TP={position.target_price}, "
+            f"TSL={position.trailing_stop_loss}"
+        )
 
-        # Place new bracket orders based on the updated values.
-        # This method automatically triggers the UI update by calling _emit_all().
-        self.place_bracket_order(position)
+        self._emit_all()

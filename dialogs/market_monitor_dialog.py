@@ -175,19 +175,31 @@ class MarketChartWidget(QWidget):
         self.set_visible_range("Auto")
 
     def _draw_cpr(self):
-        if not self.cpr_levels: return
-        if 'tc' in self.cpr_levels and 'bc' in self.cpr_levels:
-            cpr_brush = pg.mkBrush(color=(0, 116, 217, 15))
-            cpr_pen = pg.mkPen(color=(0, 116, 217, 0))
-            cpr_region = pg.LinearRegionItem(
-                values=[self.cpr_levels['bc'], self.cpr_levels['tc']],
-                orientation='horizontal', brush=cpr_brush, pen=cpr_pen, movable=False
-            )
-            self.plot_widget.addItem(cpr_region)
-        if 'pivot' in self.cpr_levels:
-            pivot_pen = pg.mkPen(color='#F39C12', style=Qt.DotLine, width=1.5)
-            pivot_line = pg.InfiniteLine(pos=self.cpr_levels['pivot'], angle=0, movable=False, pen=pivot_pen)
-            self.plot_widget.addItem(pivot_line)
+        """
+        Draw ONLY the CPR center (Pivot) line.
+        No background shading, no BC/TC region.
+        """
+        if not self.cpr_levels:
+            return
+
+        pivot = self.cpr_levels.get("pivot")
+        if pivot is None:
+            return
+
+        pivot_pen = pg.mkPen(
+            color="#F39C12",  # same amber tone you already use
+            width=1,
+            style=Qt.DashLine
+        )
+
+        pivot_line = pg.InfiniteLine(
+            pos=pivot,
+            angle=0,
+            movable=False,
+            pen=pivot_pen
+        )
+
+        self.plot_widget.addItem(pivot_line)
 
     def _plot_chart_data(self, full_redraw=False):
         if full_redraw:
@@ -196,59 +208,108 @@ class MarketChartWidget(QWidget):
             self._line_plot_today = None
             self._line_plot_prev = None
             self._live_indicator = None
+
+            # Draw CPR (only pivot, as already fixed)
             self._draw_cpr()
+
             if self.day_separator_pos is not None:
-                sep = pg.InfiniteLine(pos=self.day_separator_pos - 0.5, angle=90,
-                                      pen=pg.mkPen(color='#3A4458', style=Qt.DashLine, width=1.5))
+                sep = pg.InfiniteLine(
+                    pos=self.day_separator_pos - 0.5,
+                    angle=90,
+                    pen=pg.mkPen(color='#3A4458', style=Qt.DashLine, width=1.5)
+                )
                 self.plot_widget.addItem(sep)
 
         x = np.arange(len(self.chart_data))
 
+        # ------------------------------------------------------------------
+        # LINE MODE
+        # ------------------------------------------------------------------
         if self.chart_mode == 'line':
+
+            # Remove candle item if switching modes
             if self._candlestick_item:
                 self.plot_widget.removeItem(self._candlestick_item)
                 self._candlestick_item = None
 
+            # Create plots if needed
             if self._line_plot_today is None:
                 fill_brush = pg.mkBrush(color=(41, 199, 201, 20))
+
                 self._line_plot_today = self.plot_widget.plot(
                     [], [],
                     pen=pg.mkPen(color='#29C7C9', width=2),
                     fillLevel=0,
                     fillBrush=fill_brush
                 )
+
                 self._line_plot_prev = self.plot_widget.plot(
                     [], [],
-                    pen=pg.mkPen(color='#E0E0E0', width=1.5, style=Qt.SolidLine)
+                    pen=pg.mkPen(color='#E0E0E0', width=1.5)
                 )
+
                 self._live_indicator = pg.ScatterPlotItem(
-                    [], [], size=8, pen=pg.mkPen(color='white', width=1),
+                    [], [],
+                    size=8,
+                    pen=pg.mkPen(color='white', width=1),
                     brush=pg.mkBrush(color='#29C7C9')
                 )
                 self.plot_widget.addItem(self._live_indicator)
 
-            if self.day_separator_pos is not None:
+            # ---------------- FIX: build Y series correctly ----------------
+            closes = self.chart_data['close'].values
+            opens = self.chart_data['open'].values
+
+            if len(closes) > 0:
+                # First point = OPEN of first candle
+                full_y = np.concatenate(([opens[0]], closes[1:]))
+            else:
+                full_y = closes
+
+            # ---------------- Handle prev / today split ----------------
+            if self.day_separator_pos is not None and self.day_separator_pos > 0:
                 prev_x = x[:self.day_separator_pos]
-                prev_y = self.chart_data['close'].values[:self.day_separator_pos]
+                prev_y = full_y[:self.day_separator_pos]
+
                 today_x = x[self.day_separator_pos:]
-                today_y = self.chart_data['close'].values[self.day_separator_pos:]
+                today_y = full_y[self.day_separator_pos:]
+
                 self._line_plot_prev.setData(prev_x, prev_y)
                 self._line_plot_today.setData(today_x, today_y)
-                self._live_indicator.setData([today_x[-1]], [today_y[-1]])
+
+                if len(today_x) > 0:
+                    self._live_indicator.setData(
+                        [today_x[-1]],
+                        [today_y[-1]]
+                    )
             else:
-                self._line_plot_today.setData(x, self.chart_data['close'].values)
-                self._live_indicator.setData([x[-1]], [self.chart_data['close'].values[-1]])
+                self._line_plot_prev.clear()
+                self._line_plot_today.setData(x, full_y)
+
+                if len(x) > 0:
+                    self._live_indicator.setData(
+                        [x[-1]],
+                        [full_y[-1]]
+                    )
+
+        # ------------------------------------------------------------------
+        # CANDLESTICK MODE
+        # ------------------------------------------------------------------
         else:
             if self._line_plot_today:
                 self.plot_widget.removeItem(self._line_plot_today)
                 self.plot_widget.removeItem(self._line_plot_prev)
                 self.plot_widget.removeItem(self._live_indicator)
+
                 self._line_plot_today = None
                 self._line_plot_prev = None
                 self._live_indicator = None
 
-            cs_data = [(i, *self.chart_data.iloc[i][['open', 'high', 'low', 'close']].values)
-                       for i in range(len(self.chart_data))]
+            cs_data = [
+                (i, *self.chart_data.iloc[i][['open', 'high', 'low', 'close']].values)
+                for i in range(len(self.chart_data))
+            ]
+
             if self._candlestick_item is None:
                 self._candlestick_item = CandlestickItem(cs_data)
                 self.plot_widget.addItem(self._candlestick_item)
@@ -321,6 +382,68 @@ class MarketChartWidget(QWidget):
             text.setFont(QFont("Segoe UI", 10))
             self.plot_widget.addItem(text, ignoreBounds=True)
 
+class AddSymbolSetDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Add Symbol Set")
+        self.setFixedSize(400, 220)
+
+        layout = QVBoxLayout(self)
+
+        layout.addWidget(QLabel("Group Name"))
+        self.name_edit = QLineEdit()
+        layout.addWidget(self.name_edit)
+
+        layout.addWidget(QLabel("Symbols (comma separated)"))
+        self.symbols_edit = QLineEdit()
+        layout.addWidget(self.symbols_edit)
+
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+
+        save_btn = QPushButton("Save")
+        cancel_btn = QPushButton("Cancel")
+
+        save_btn.clicked.connect(self.accept)
+        cancel_btn.clicked.connect(self.reject)
+
+        btn_layout.addWidget(save_btn)
+        btn_layout.addWidget(cancel_btn)
+
+        layout.addLayout(btn_layout)
+
+    def get_data(self):
+        return {
+            "name": self.name_edit.text().strip(),
+            "symbols": self.symbols_edit.text().strip()
+        }
+class ManageSymbolSetsDialog(QDialog):
+    def __init__(self, symbol_sets: list[dict], parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Manage Symbol Sets")
+        self.setFixedSize(350, 300)
+        self.symbol_sets = symbol_sets
+
+        layout = QVBoxLayout(self)
+
+        self.list_widget = QComboBox()
+        for s in symbol_sets:
+            self.list_widget.addItem(s["name"])
+        layout.addWidget(self.list_widget)
+
+        delete_btn = QPushButton("Delete Selected")
+        delete_btn.clicked.connect(self._delete_selected)
+        layout.addWidget(delete_btn)
+
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        layout.addWidget(close_btn)
+
+    def _delete_selected(self):
+        idx = self.list_widget.currentIndex()
+        if idx >= 0:
+            self.symbol_sets.pop(idx)
+            self.list_widget.removeItem(idx)
 
 class MarketMonitorDialog(QDialog):
     def __init__(self, real_kite_client: KiteConnect, market_data_worker: MarketDataWorker,
@@ -349,7 +472,7 @@ class MarketMonitorDialog(QDialog):
         self._load_and_populate_sets()
         self._restore_state()
 
-        self.symbols_entry.setText("NIFTY 50, NIFTY BANK, FINNIFTY, SENSEX")
+        self.symbols_entry.setText("NIFTY 50, NIFTY BANK, SENSEX, FINNIFTY")
         print("[MarketMonitor] Init complete")
         QTimer.singleShot(100, self._load_charts_data)
 
@@ -553,16 +676,49 @@ class MarketMonitorDialog(QDialog):
 
     def _load_and_populate_sets(self):
         self.symbol_sets = self.config_manager.load_market_monitor_sets()
+
+        self.set_selector_combo.blockSignals(True)
         self.set_selector_combo.clear()
+
         self.set_selector_combo.addItem("Select a Symbol Set")
-        for s in self.symbol_sets: self.set_selector_combo.addItem(s.get("name"))
+
+        for s in self.symbol_sets:
+            self.set_selector_combo.addItem(s.get("name"))
+
+        self.set_selector_combo.insertSeparator(self.set_selector_combo.count())
+        self.set_selector_combo.addItem("➕ Add New Set…")
+        self.set_selector_combo.addItem("🗑️ Manage Sets…")
+
+        self.set_selector_combo.blockSignals(False)
 
     def _on_set_selected(self, index: int):
-        if index > 0 and (index - 1) < len(self.symbol_sets):
-            self.symbols_entry.setText(self.symbol_sets[index - 1].get("symbols", ""))
-            QTimer.singleShot(50, self._load_charts_data)
-        elif index == 0:
+        if index == 0:
             self.symbols_entry.clear()
+            return
+
+        text = self.set_selector_combo.itemText(index)
+
+        if text.startswith("➕"):
+            dlg = AddSymbolSetDialog(self)
+            if dlg.exec() == QDialog.Accepted:
+                data = dlg.get_data()
+                if data["name"] and data["symbols"]:
+                    self.symbol_sets.append(data)
+                    self.config_manager.save_market_monitor_sets(self.symbol_sets)
+                    self._load_and_populate_sets()
+            return
+
+        if text.startswith("🗑️"):
+            dlg = ManageSymbolSetsDialog(self.symbol_sets, self)
+            dlg.exec()
+            self.config_manager.save_market_monitor_sets(self.symbol_sets)
+            self._load_and_populate_sets()
+            return
+
+        set_idx = index - 1
+        if 0 <= set_idx < len(self.symbol_sets):
+            self.symbols_entry.setText(self.symbol_sets[set_idx]["symbols"])
+            QTimer.singleShot(50, self._load_charts_data)
 
     def _save_current_set(self):
         if (idx := self.set_selector_combo.currentIndex()) <= 0: return

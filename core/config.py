@@ -15,8 +15,8 @@ APP_VERSION = "1.0.0"
 
 # Trading constants
 DEFAULT_LOT_SIZES = {
-    "NIFTY": 25,
-    "BANKNIFTY": 15,
+    "NIFTY": 70,
+    "BANKNIFTY": 35,
     "FINNIFTY": 25,
     "MIDCPNIFTY": 50
 }

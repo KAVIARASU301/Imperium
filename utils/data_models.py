@@ -50,6 +50,7 @@ class Position:
     order_id: Optional[str]
     exchange: str = "NFO"
     product: str = "MIS"
+    is_exiting: bool = False
 
     # --- New fields for Stop-Loss and Target ---
     stop_loss_price: Optional[float] = field(default=None)
