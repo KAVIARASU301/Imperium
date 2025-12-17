@@ -32,6 +32,7 @@ class QuickOrderDialog(QDialog):
         super().__init__(parent)
         self.contract = contract
         self._drag_pos = None
+        self._last_ltp = None
 
         self._setup_window(parent)
         self._setup_ui(default_lots)
@@ -127,8 +128,20 @@ class QuickOrderDialog(QDialog):
         self.symbol_label.setObjectName("symbolLabel")
         parent_layout.addWidget(self.symbol_label)
 
-        self.info_label = QLabel(f"Strike: ₹{int(self.contract.strike):,}  |  LTP: ₹{self.contract.ltp:.2f}")
+        self.info_label = QLabel()
         self.info_label.setObjectName("infoLabel")
+        self.info_label.setText(
+            f"""
+            <span class="badge strike">
+                STRIKE ₹{int(self.contract.strike):,}
+            </span>
+            &nbsp;&nbsp;
+            <span class="badge ltp">
+                LTP ₹{self.contract.ltp:.2f}
+            </span>
+            """
+        )
+
         parent_layout.addWidget(self.info_label)
 
         divider = QFrame()
@@ -217,6 +230,8 @@ class QuickOrderDialog(QDialog):
         self.lots_spinbox.valueChanged.connect(self._update_summary)
         self.price_spinbox.valueChanged.connect(self._update_summary)
         self._update_summary()
+        self.buy_radio.toggled.connect(self._update_summary)
+        self.sell_radio.toggled.connect(self._update_summary)
 
     def _create_action_buttons(self, parent_layout):
         action_layout = QHBoxLayout()
@@ -305,9 +320,19 @@ class QuickOrderDialog(QDialog):
             QDoubleSpinBox:focus { border: 1px solid #29C7C9; }
 
             #totalValueLabel {
-                color: #FFFFFF; font-size: 18px; font-weight: 500; padding: 12px;
-                background-color: #212635; border-radius: 8px;
+                color: #FFFFFF;
+                font-size: 18px;
+                font-weight: 500;
+            
+                /* FIX: prevent comma clipping */
+                padding: 10px 14px;
+            
+                /* FIX: improve numeric readability */
+            
+                background-color: #212635;
+                border-radius: 8px;
             }
+
             QPushButton {
                 font-weight: bold; border-radius: 6px; padding: 12px; font-size: 14px;
             }
@@ -321,6 +346,28 @@ class QuickOrderDialog(QDialog):
             #primaryButton[transaction_type="BUY"]:hover { background-color: #32E0E3; }
             #primaryButton[transaction_type="SELL"] { background-color: #F85149; color: #161A25; }
             #primaryButton[transaction_type="SELL"]:hover { background-color: #FA6B64; }
+        #infoLabel {
+                font-size: 12.5px;
+            }
+            
+            .badge {
+                padding: 4px 10px;
+                border-radius: 10px;
+                font-weight: 600;
+                letter-spacing: 0.3px;
+            }
+            
+            .badge.strike {
+                background-color: #1E2433;   /* calm blue-grey */
+                color: #A9B1C3;
+                border: 1px solid #2A3140;
+            }
+            
+            .badge.ltp {
+                background-color: rgba(41, 199, 201, 0.15); /* teal glow */
+                color: #29C7C9;
+                border: 1px solid rgba(41, 199, 201, 0.35);
+            }
 
             /* Refresh button styling */
         #refreshButton {
@@ -354,16 +401,73 @@ class QuickOrderDialog(QDialog):
     def _update_summary(self):
         qty = self.lots_spinbox.value() * self.contract.lot_size
         price = self.price_spinbox.value()
-        total_value = int(qty * price)  # convert to int to remove .00
-        formatted_value = locale.format_string("%d", total_value, grouping=True)
-        self.total_value_label.setText(f"Est. Value: ₹ {formatted_value}")
+
+        if self.buy_radio.isChecked():
+            total_value = int(qty * price)
+            formatted_value = locale.format_string("%d", total_value, grouping=True)
+            self.total_value_label.setText(
+                f"Required Premium: ₹ {formatted_value}"
+            )
+        else:
+            self.total_value_label.setText(
+                """
+                <div style="text-align:center;">
+                    <div style="font-size:16px; font-weight:600;">
+                        SPAN + EXPOSURE MARGIN
+                    </div>
+                    <div style="font-size:12px; color:#8A9BA8;">
+                        Margin reduces when BUY legs are added
+                    </div>
+                </div>
+                """
+            )
 
     def update_contract_data(self, new_contract: Contract):
         self.contract = new_contract
-        self.info_label.setText(f"Strike: ₹{int(self.contract.strike):,}  |  LTP: ₹{self.contract.ltp:.2f}")
-        self.price_spinbox.setValue(calculate_smart_limit_price(self.contract))
+
+        # Determine ATM status
+        is_atm = (
+                hasattr(self.contract, "atm_strike")
+                and self.contract.strike == self.contract.atm_strike
+        )
+        atm_class = " atm" if is_atm else ""
+
+        # Determine LTP direction
+        if self._last_ltp is None:
+            ltp_class = "ltp"
+        elif self.contract.ltp > self._last_ltp:
+            ltp_class = "ltp up"
+        elif self.contract.ltp < self._last_ltp:
+            ltp_class = "ltp down"
+        else:
+            ltp_class = "ltp"
+
+        # Update label text (DO NOT recreate QLabel)
+        self.info_label.setText(
+            f"""
+            <span class="badge strike{atm_class}">
+                STRIKE ₹{int(self.contract.strike):,}
+            </span>
+            &nbsp;&nbsp;
+            <span class="badge {ltp_class}">
+                LTP ₹{self.contract.ltp:.2f}
+            </span>
+            """
+        )
+
+        # Update internal state
+        self._last_ltp = self.contract.ltp
+
+        # Update price input intelligently
+        self.price_spinbox.setValue(
+            calculate_smart_limit_price(self.contract)
+        )
+
         self._update_summary()
-        logger.info(f"Quick Order Dialog refreshed for {self.contract.tradingsymbol}")
+
+        logger.info(
+            f"Quick Order Dialog refreshed for {self.contract.tradingsymbol}"
+        )
 
     def populate_from_order(self, data):
         is_position = isinstance(data, Position)

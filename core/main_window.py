@@ -2,7 +2,7 @@
 import logging
 import os
 from typing import Dict, List, Optional, Union
-from datetime import datetime, timedelta, time, date
+from datetime import datetime, timedelta, time
 from PySide6.QtWidgets import (QMainWindow, QPushButton, QApplication, QWidget, QVBoxLayout,
                                QMessageBox, QDialog, QSplitter, QHBoxLayout, QBoxLayout)
 from PySide6.QtCore import Qt, QTimer, QUrl, QByteArray, QPoint
@@ -36,7 +36,6 @@ from widgets.order_status_widget import OrderStatusWidget
 from core.paper_trading_manager import PaperTradingManager
 from dialogs.option_chain_dialog import OptionChainDialog
 from dialogs.order_confirmation_dialog import OrderConfirmationDialog
-from utils.pnl_logger import PnlLogger
 from dialogs.market_monitor_dialog import MarketMonitorDialog
 
 logger = logging.getLogger(__name__)
@@ -1082,7 +1081,7 @@ class ScalperMainWindow(QMainWindow):
             self.header.lot_size_spin.setValue(default_lots_setting)
         self._on_settings_changed(self._get_current_settings())
         try:
-            from src.utils.config_manager import ConfigManager
+            # from src.utils.config_manager import ConfigManager
             config_manager = ConfigManager()
             config_manager.save_settings(self.settings)
             logger.info("Settings saved to configuration file.")
@@ -1091,9 +1090,11 @@ class ScalperMainWindow(QMainWindow):
         except Exception as e:
             logger.error(f"Failed to save settings: {e}")
 
+
     def closeEvent(self, event):
         logger.info("Close event triggered.")
 
+        # Stop timers first
         if hasattr(self, 'api_health_check_timer'):
             self.api_health_check_timer.stop()
         if hasattr(self, 'update_timer'):
@@ -1101,6 +1102,7 @@ class ScalperMainWindow(QMainWindow):
         if hasattr(self, 'pending_order_refresh_timer'):
             self.pending_order_refresh_timer.stop()
 
+        # Background workers
         if hasattr(self, 'market_data_worker') and self.market_data_worker.is_running:
             logger.info("Stopping market data worker...")
 
@@ -1113,19 +1115,30 @@ class ScalperMainWindow(QMainWindow):
             else:
                 logger.info("Instrument loader stopped.")
 
+        # ---- CLEAR EXIT CONFIRMATION ----
         if self.position_manager.has_positions():
-            reply = QMessageBox.question(
-                self, "Confirm Exit",
-                "You have open positions. Are you sure you want to exit?",
+            reply = QMessageBox.warning(
+                self,
+                "Exit Application",
+                (
+                    "You have open positions.\n\n"
+                    "Closing the application will NOT exit or square off your positions.\n"
+                    "They will remain open in your trading account.\n\n"
+                    "Do you still want to close the application?"
+                ),
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No
             )
+
             if reply == QMessageBox.StandardButton.No:
                 event.ignore()
+
+                # Restart timers if exit cancelled
                 if hasattr(self, 'api_health_check_timer'):
                     self.api_health_check_timer.start()
                 if hasattr(self, 'update_timer'):
                     self.update_timer.start()
+
                 return
 
         logger.info("Proceeding with application shutdown.")
