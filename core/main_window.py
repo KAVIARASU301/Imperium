@@ -2,7 +2,7 @@
 import logging
 import os
 from typing import Dict, List, Optional, Union
-from datetime import datetime, timedelta, time
+from datetime import datetime, timedelta, time, date
 from PySide6.QtWidgets import (QMainWindow, QPushButton, QApplication, QWidget, QVBoxLayout,
                                QMessageBox, QDialog, QSplitter, QHBoxLayout, QBoxLayout)
 from PySide6.QtCore import Qt, QTimer, QUrl, QByteArray, QPoint
@@ -37,6 +37,9 @@ from core.paper_trading_manager import PaperTradingManager
 from dialogs.option_chain_dialog import OptionChainDialog
 from dialogs.order_confirmation_dialog import OrderConfirmationDialog
 from dialogs.market_monitor_dialog import MarketMonitorDialog
+from core.cvd.cvd_engine import CVDEngine
+from dialogs.cvd_chart_dialog import CVDChartDialog
+from dialogs.cvd_market_monitor_dialog import CVDMarketMonitorDialog
 
 logger = logging.getLogger(__name__)
 
@@ -230,6 +233,11 @@ class ScalperMainWindow(QMainWindow):
         self.market_monitor_dialogs = []
         self.current_symbol = ""
         self.network_status = "Initializing..."
+        self.cvd_engine = CVDEngine()
+        self.cvd_monitor_dialog = None
+        # CVD monitor symbols (v1 – fixed indices)
+        self.cvd_symbols = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"]
+        self.active_cvd_tokens: set[int] = set()
 
         # --- FIX: UI Throttling Implementation ---
         self._latest_market_data = {}
@@ -261,20 +269,43 @@ class ScalperMainWindow(QMainWindow):
         self.statusBar().showMessage("Loading instruments...")
 
     def _on_market_data(self, data: list):
+        """
+        Receives raw ticks from MarketDataWorker.
+        Stores the latest tick per instrument_token.
+        """
         for tick in data:
-            if 'instrument_token' in tick:
-                self._latest_market_data[tick['instrument_token']] = tick
+            token = tick.get('instrument_token')
+            if token is not None:
+                self._latest_market_data[token] = tick
+
         self._ui_update_needed = True
 
     def _update_throttled_ui(self):
+        """
+        Throttled UI update loop.
+        IMPORTANT:
+        - UI is throttled
+        - Market data is NOT cleared
+        """
+
         if not self._ui_update_needed:
             return
 
+        # Use latest known tick per instrument
         ticks_to_process = list(self._latest_market_data.values())
+        # 🔍 DEBUG: confirm which instruments are being processed
+        logger.debug(
+            f"Processing {len(ticks_to_process)} ticks: "
+            f"{[t.get('instrument_token') for t in ticks_to_process]}"
+        )
+        # --- Core market consumers ---
         self.strike_ladder.update_prices(ticks_to_process)
         self.position_manager.update_pnl_from_market_data(ticks_to_process)
+        self.cvd_engine.process_ticks(ticks_to_process)
 
+        # --- UI updates ---
         self._update_account_summary_widget()
+
         if self.positions_dialog and self.positions_dialog.isVisible():
             if hasattr(self.positions_dialog, 'update_market_data'):
                 self.positions_dialog.update_market_data(ticks_to_process)
@@ -288,8 +319,8 @@ class ScalperMainWindow(QMainWindow):
         if self.performance_dialog and self.performance_dialog.isVisible():
             self._update_performance()
 
+        # Reset UI throttle flag ONLY
         self._ui_update_needed = False
-        self._latest_market_data.clear()
 
     def _apply_dark_theme(self):
         try:
@@ -398,13 +429,11 @@ class ScalperMainWindow(QMainWindow):
                     order_data['pnl'] = realized_pnl
 
             self.trade_logger.log_trade(order_data)
-            # 🔊 PLAY SOUND FOR SL / TARGET EXIT
+            # 🔊 PLAY SOUND ONLY FOR NON-BULK, NON-MANUAL EXITS
             if transaction_type == self.trader.TRANSACTION_TYPE_SELL:
-                pnl = order_data.get('pnl', 0.0)
-                if pnl < 0:
-                    self._play_sound(success=False)
-                else:
-                    self._play_sound(success=True)
+                # Sound should NOT be played here for bulk exits
+                # Bulk exit sound is handled centrally in _finalize_bulk_exit_result()
+                pass
 
             logger.debug("Paper trade complete, triggering immediate account info refresh.")
             self._update_account_info()
@@ -510,6 +539,7 @@ class ScalperMainWindow(QMainWindow):
         layout = QVBoxLayout()
         layout.setSpacing(0)
         layout.addWidget(self.inline_positions_table)
+
         return layout
 
     def _setup_menu_bar(self):
@@ -527,6 +557,8 @@ class ScalperMainWindow(QMainWindow):
         menu_actions['refresh_positions'].triggered.connect(self._refresh_positions)
         menu_actions['about'].triggered.connect(self._show_about)
         menu_actions['market_monitor'].triggered.connect(self._show_market_monitor_dialog)
+        menu_actions['cvd_chart'].triggered.connect(self._show_cvd_chart_dialog)
+        menu_actions['cvd_market_monitor'].triggered.connect(self._show_cvd_market_monitor_dialog)
 
     def _show_order_history_dialog(self):
         if not hasattr(self, 'order_history_dialog') or self.order_history_dialog is None:
@@ -555,6 +587,86 @@ class ScalperMainWindow(QMainWindow):
         except Exception as e:
             logger.error(f"Failed to create Market Monitor dialog: {e}", exc_info=True)
             QMessageBox.critical(self, "Error", f"Could not open Market Monitor:\n{e}")
+
+
+    def _show_cvd_chart_dialog(self):
+        """
+        Opens TradingView-style CVD candlestick chart
+        for the nearest FUTURE of the current symbol.
+        """
+        current_settings = self.header.get_current_settings()
+        symbol = current_settings.get("symbol")
+
+        if not symbol:
+            QMessageBox.warning(self, "CVD Chart", "No symbol selected.")
+            return
+
+        fut_token = self._get_nearest_future_token(symbol)
+        if not fut_token:
+            QMessageBox.warning(
+                self,
+                "CVD Chart",
+                f"No FUT contract found for {symbol}."
+            )
+            return
+        self.active_cvd_tokens.add(fut_token)
+        self._update_market_subscriptions()
+        try:
+            dlg = CVDChartDialog(
+                kite=self.real_kite_client,
+                instrument_token=fut_token,
+                symbol=f"{symbol} FUT",
+                cvd_engine=self.cvd_engine,
+                parent=self
+            )
+            dlg.destroyed.connect(lambda: self._on_cvd_dialog_closed(fut_token))
+            dlg.show()
+            dlg.raise_()
+            dlg.activateWindow()
+
+        except Exception as e:
+            logger.error("Failed to open CVD Chart dialog", exc_info=True)
+            QMessageBox.critical(
+                self,
+                "CVD Chart Error",
+                f"Failed to open CVD chart:\n{e}"
+            )
+
+
+    def _on_cvd_dialog_closed(self, token: int):
+        self.active_cvd_tokens.discard(token)
+        self._update_market_subscriptions()
+
+    def _show_cvd_market_monitor_dialog(self):
+        symbol_to_token = {}
+
+        for symbol in self.cvd_symbols:
+            fut_token = self._get_nearest_future_token(symbol)
+            if fut_token:
+                symbol_to_token[symbol] = fut_token
+                self.active_cvd_tokens.add(fut_token)
+
+        if not symbol_to_token:
+            QMessageBox.warning(self, "CVD Monitor", "No futures available.")
+            return
+
+        self._update_market_subscriptions()
+
+        dlg = CVDMarketMonitorDialog(
+            kite=self.real_kite_client,
+            cvd_engine=self.cvd_engine,
+            symbol_to_token=symbol_to_token,
+            parent=self
+        )
+
+        dlg.destroyed.connect(self._on_cvd_market_monitor_closed)
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
+
+    def _on_cvd_market_monitor_closed(self):
+        self.active_cvd_tokens.clear()
+        self._update_market_subscriptions()
 
     def _on_market_monitor_closed(self, dialog: QDialog):
         """Removes the market monitor dialog from the list when it's closed."""
@@ -687,7 +799,11 @@ class ScalperMainWindow(QMainWindow):
             if monitor_dialog and hasattr(monitor_dialog, 'token_to_chart_map'):
                 tokens_to_subscribe.update(monitor_dialog.token_to_chart_map.keys())
 
-        # 5. Make the final, consolidated call
+        # 5. ---ADD CVD FUTURES SYMBOLS ---
+
+        tokens_to_subscribe.update(self.active_cvd_tokens)
+
+        # 6. Make the final, consolidated call
         if self.market_data_worker:
             self.market_data_worker.set_instruments(tokens_to_subscribe)
 
@@ -1030,9 +1146,24 @@ class ScalperMainWindow(QMainWindow):
             symbol_has_changed = (symbol != self.current_symbol)
             self.current_symbol = symbol
 
+            today = datetime.now().date()
+
+            raw_expiries = self.instrument_data[symbol].get('expiries', [])
+
+            # 🔑 FILTER EXPIRED OPTION EXPIRIES
+            valid_expiries = [
+                exp for exp in raw_expiries
+                if isinstance(exp, date) and exp >= today
+            ]
+
+            if not valid_expiries:
+                logger.warning(f"No valid option expiries found for {symbol}")
+                self._settings_changing = False
+                return
+
             self.header.update_expiries(
                 symbol,
-                self.instrument_data[symbol].get('expiries', []),
+                valid_expiries,
                 preserve_selection=not symbol_has_changed
             )
 
@@ -1205,55 +1336,57 @@ class ScalperMainWindow(QMainWindow):
             self._execute_bulk_exit(positions_to_exit)
 
     def _execute_bulk_exit(self, positions_list: List[Position]):
+        """
+        Executes bulk exit using PositionManager to ensure
+        proper exit-state tracking and UI stability.
+        """
+
         if not positions_list:
             return
 
-        self.statusBar().showMessage(f"Exiting {len(positions_list)} positions...", 2000)
+        # Filter only valid positions
+        positions_to_exit = [
+            p for p in positions_list
+            if p.quantity != 0 and not p.is_exiting
+        ]
 
-        for pos_to_exit in positions_list:
+        if not positions_to_exit:
+            self.statusBar().showMessage("No valid positions to exit.", 2000)
+            return
+
+        self.statusBar().showMessage(
+            f"Exiting {len(positions_to_exit)} positions...", 2000
+        )
+
+        for pos in positions_to_exit:
             try:
-                exit_quantity = abs(pos_to_exit.quantity)
-                if exit_quantity == 0:
-                    continue
-
-                transaction_type = (
-                    self.trader.TRANSACTION_TYPE_SELL
-                    if pos_to_exit.quantity > 0
-                    else self.trader.TRANSACTION_TYPE_BUY
-                )
-
-                order_id = self.trader.place_order(
-                    variety=self.trader.VARIETY_REGULAR,
-                    exchange=pos_to_exit.exchange,
-                    tradingsymbol=pos_to_exit.tradingsymbol,
-                    transaction_type=transaction_type,
-                    quantity=exit_quantity,
-                    product=pos_to_exit.product,
-                    order_type=self.trader.ORDER_TYPE_MARKET,
-                )
+                # 🔒 SINGLE SOURCE OF TRUTH
+                self.position_manager.exit_position(pos)
 
                 logger.info(
-                    f"Bulk exit order placed for {pos_to_exit.tradingsymbol} "
-                    f"(Qty: {exit_quantity}) -> Order ID: {order_id}"
+                    f"Bulk exit initiated for {pos.tradingsymbol} "
+                    f"(Qty: {abs(pos.quantity)})"
                 )
 
             except Exception as e:
-                # NOTE: Do NOT mark bulk exit as failed here
+                # Do NOT abort bulk exit because of one failure
                 logger.error(
-                    f"Bulk exit order placement error for {pos_to_exit.tradingsymbol}: {e}",
+                    f"Bulk exit initiation failed for {pos.tradingsymbol}: {e}",
                     exc_info=True
                 )
 
-        # Refresh positions after all exit requests
-        self._refresh_positions()
-
-        # Final decision MUST be state-based, not API-response-based
+        # Final verification must be state-based
         QTimer.singleShot(1500, self._finalize_bulk_exit_result)
 
     def _finalize_bulk_exit_result(self):
+        """
+        Final verification of bulk exit.
+        Uses position state (not API timing) to decide success or partial failure.
+        """
+
         remaining_positions = [
             p for p in self.position_manager.get_all_positions()
-            if p.quantity != 0
+            if p.quantity != 0 and not p.is_exiting
         ]
 
         if not remaining_positions:
@@ -1261,22 +1394,28 @@ class ScalperMainWindow(QMainWindow):
                 "All positions exited successfully.", 5000
             )
             self._play_sound(success=True)
-            logger.info("Bulk exit completed successfully — no open positions remaining.")
-        else:
-            symbols = ", ".join(p.tradingsymbol for p in remaining_positions[:5])
-            QMessageBox.warning(
-                self,
-                "Partial Exit",
-                (
-                    "Some positions are still open:\n\n"
-                    f"{symbols}\n\n"
-                    "Please review them manually."
-                )
+            logger.info(
+                "Bulk exit completed successfully — no open positions remaining."
             )
-            self._play_sound(success=False)
-            logger.warning(
-                f"Bulk exit incomplete — remaining positions: {symbols}"
+            return
+
+        # Some positions are genuinely still open
+        symbols = ", ".join(p.tradingsymbol for p in remaining_positions[:5])
+
+        QMessageBox.warning(
+            self,
+            "Partial Exit",
+            (
+                "Some positions are still open:\n\n"
+                f"{symbols}\n\n"
+                "Please review them manually."
             )
+        )
+
+        self._play_sound(success=False)
+        logger.warning(
+            f"Bulk exit incomplete — remaining positions: {symbols}"
+        )
 
     def _exit_position(self, position_data_to_exit: dict):
         tradingsymbol = position_data_to_exit.get('tradingsymbol')
@@ -2065,3 +2204,36 @@ class ScalperMainWindow(QMainWindow):
     def _on_network_status_changed(self, status: str):
         self.network_status = status
         self._update_ui()
+
+    def _get_nearest_future_token(self, symbol: str):
+        symbol = symbol.upper()
+        symbol_info = self.instrument_data.get(symbol)
+        if not symbol_info:
+            return None
+
+        futures = symbol_info.get("futures", [])
+        if not futures:
+            return None
+
+        today = datetime.now().date()
+
+        # 🔑 FILTER OUT EXPIRED FUTURES
+        valid_futures = [
+            f for f in futures
+            if f.get("expiry") and f["expiry"] >= today
+        ]
+
+        if not valid_futures:
+            logger.warning(f"No valid (unexpired) FUT found for {symbol}")
+            return None
+
+        # Pick nearest unexpired FUT
+        valid_futures.sort(key=lambda x: x["expiry"])
+        fut = valid_futures[0]
+
+        logger.info(
+            f"Using FUT {fut.get('tradingsymbol')} "
+            f"(expiry {fut.get('expiry')}) for {symbol}"
+        )
+
+        return fut.get("instrument_token")

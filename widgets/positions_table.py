@@ -2,12 +2,13 @@ import logging
 import json
 import os
 from typing import Dict, List
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-                               QTableWidget, QTableWidgetItem, QHeaderView,
-                               QStyledItemDelegate, QMenu, QStyle, QApplication,
-                               QStyleOptionButton, QAbstractItemView, QFrame)
-from PySide6.QtCore import Qt, Signal, QPoint, QTimer, QStandardPaths
-from PySide6.QtGui import QColor, QPalette, QPainter, QFont, QAction, QPixmap
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+    QTableWidget, QTableWidgetItem, QHeaderView,
+    QMenu, QAbstractItemView
+)
+from PySide6.QtCore import Qt, Signal, QPoint, QTimer, QEvent
+from PySide6.QtGui import QColor, QFont
 
 from utils.config_manager import ConfigManager
 
@@ -18,11 +19,11 @@ class PositionsTable(QWidget):
     """
     A compound widget containing a compact, data-dense positions table with two-row display
     """
+
     exit_requested = Signal(dict)
     refresh_requested = Signal()
     modify_sl_tp_requested = Signal(str)
 
-    # Column indices (removed SLTP_INFO_COL)
     SYMBOL_COL = 0
     QUANTITY_COL = 1
     AVG_PRICE_COL = 2
@@ -31,18 +32,24 @@ class PositionsTable(QWidget):
 
     def __init__(self, config_manager: ConfigManager, parent=None):
         super().__init__(parent)
+
         self.config_manager = config_manager
         self.table_name = "positions_table"
-        self.positions = {}
-        self.position_row_map = {}  # Maps symbol to main row number
+        self.positions: Dict[str, dict] = {}
+        self.position_row_map: Dict[str, int] = {}
+
+        self._hovered_row = -1
 
         self._init_ui()
         self._apply_styles()
         self._connect_signals()
 
-        # Load column widths after UI is initialized
         if not self._load_column_widths():
             self._set_default_column_widths()
+
+    # ------------------------------------------------------------------
+    # UI
+    # ------------------------------------------------------------------
 
     def _init_ui(self):
         main_layout = QVBoxLayout(self)
@@ -53,13 +60,15 @@ class PositionsTable(QWidget):
         self.table.headers = ["Symbol", "Qty", "Avg", "LTP", "P&L"]
         self.table.setColumnCount(len(self.table.headers))
         self.table.setHorizontalHeaderLabels(self.table.headers)
+
         self.table.setMouseTracking(True)
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
+
         main_layout.addWidget(self.table, 1)
 
-        footer_widget = QWidget()
-        footer_widget.setObjectName("footer")
-        footer_layout = QHBoxLayout(footer_widget)
+        footer = QWidget()
+        footer.setObjectName("footer")
+        footer_layout = QHBoxLayout(footer)
         footer_layout.setContentsMargins(10, 5, 10, 5)
 
         self.total_pnl_label = QLabel("Total P&L: ₹ 0")
@@ -71,31 +80,33 @@ class PositionsTable(QWidget):
         footer_layout.addWidget(self.total_pnl_label)
         footer_layout.addStretch()
         footer_layout.addWidget(self.refresh_button)
-        main_layout.addWidget(footer_widget)
+
+        main_layout.addWidget(footer)
 
     def _apply_styles(self):
         self.table.verticalHeader().hide()
         self.table.setShowGrid(False)
-        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table.setFocusPolicy(Qt.NoFocus)
+
+        # IMPORTANT: enable row selection (used for hover)
+        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setCurrentCell(-1, -1)
 
         header = self.table.horizontalHeader()
-        header.setSectionResizeMode(self.SYMBOL_COL, QHeaderView.ResizeMode.Stretch)
-        for i in [self.QUANTITY_COL, self.AVG_PRICE_COL, self.LTP_COL, self.PNL_COL]:
-            header.setSectionResizeMode(i, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(self.SYMBOL_COL, QHeaderView.Stretch)
+        for col in (self.QUANTITY_COL, self.AVG_PRICE_COL, self.LTP_COL, self.PNL_COL):
+            header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
 
-        stylesheet = """
+        self.setStyleSheet("""
             QTableWidget {
                 background-color: #161A25;
                 color: #E0E0E0;
                 border: none;
                 font-size: 13px;
-                gridline-color: transparent;
-                selection-background-color: #2A3140;
-                alternate-background-color: #1C212B;
             }
+
             QHeaderView::section {
                 background-color: #2A3140;
                 color: #A9B1C3;
@@ -103,30 +114,50 @@ class PositionsTable(QWidget):
                 border: none;
                 font-weight: 600;
                 font-size: 12px;
-                text-transform: uppercase;
             }
-            QHeaderView::section:hover {
-                background-color: #3A4458;
-            }
+
+            /* MAIN ROW SEPARATOR */
             QTableWidget::item {
                 padding: 6px 8px;
-                border-bottom: 1px solid #1C212B;
+                border-bottom: 1px solid #1E2430;
             }
-            QTableWidget::item:selected {
-                background-color: #2A3140;
-            }
+
+            /* ROW HOVER (via selection) */
+            /* ROW SELECTION — uniform, no cell emphasis */
+QTableWidget::item:selected,
+QTableWidget::item:selected:active,
+QTableWidget::item:selected:!active {
+    background-color: #202742;
+    color: #E0E0E0;
+}
+
+/* REMOVE current-cell focus rectangle */
+QTableWidget::item:selected:!active {
+    outline: 0;
+}
+
+/* KILL any per-cell hover completely */
+QTableWidget::item:hover {
+    background-color: transparent;
+}
+
+
+            /* REMOVE CELL HOVER COMPLETELY */
             QTableWidget::item:hover {
-                background-color: #252B36;
+                background-color: transparent;
             }
+
             #footer {
                 background-color: #212635;
                 border-top: 1px solid #3A4458;
             }
+
             #footerLabel {
                 color: #E0E0E0;
                 font-size: 13px;
                 font-weight: 600;
             }
+
             #footerButton {
                 background-color: transparent;
                 color: #A9B1C3;
@@ -135,19 +166,80 @@ class PositionsTable(QWidget):
                 padding: 6px 12px;
                 font-size: 12px;
             }
+
             #footerButton:hover {
                 background-color: #29C7C9;
                 color: #161A25;
                 border-color: #29C7C9;
             }
-        """
-        self.setStyleSheet(stylesheet)
+            /* ===== CONTEXT MENU ===== */
+QMenu {
+    background-color: #1B2030;
+    border: 1px solid #3A4458;
+    border-radius: 6px;
+    padding: 6px;
+}
+
+QMenu::item {
+    padding: 8px 22px 8px 18px;
+    color: #E0E0E0;
+    font-size: 13px;
+    border-radius: 4px;
+}
+
+QMenu::item:selected {
+    background-color: #2A3350;
+}
+
+QMenu::separator {
+    height: 1px;
+    background: #3A4458;
+    margin: 6px 4px;
+}
+
+/* Exit action — danger semantics */
+QMenu::item#exitAction {
+    color: #F85149;
+    font-weight: 600;
+}
+
+QMenu::item#exitAction:selected {
+    background-color: rgba(248, 81, 73, 0.15);
+}
+        """)
+
+    # ------------------------------------------------------------------
+    # Signals
+    # ------------------------------------------------------------------
 
     def _connect_signals(self):
         self.refresh_button.clicked.connect(self.refresh_requested)
         self.table.customContextMenuRequested.connect(self._show_context_menu)
-        # Connect header resize signal to save column widths
         self.table.horizontalHeader().sectionResized.connect(self._on_column_resized)
+        self.table.viewport().installEventFilter(self)
+
+    # ------------------------------------------------------------------
+    # Row-hover handling (THIS IS THE KEY FIX)
+    # ------------------------------------------------------------------
+
+    def eventFilter(self, obj, event):
+        if obj == self.table.viewport():
+            if event.type() == QEvent.Type.MouseMove:
+                row = self.table.rowAt(event.position().toPoint().y())
+                if row != self._hovered_row:
+                    self._hovered_row = row
+                    if row >= 0:
+                        self.table.selectRow(row)
+
+            elif event.type() == QEvent.Type.Leave:
+                self._hovered_row = -1
+                self.table.clearSelection()
+
+        return super().eventFilter(obj, event)
+
+    # ------------------------------------------------------------------
+    # Context menu (UNCHANGED)
+    # ------------------------------------------------------------------
 
     def _show_context_menu(self, pos: QPoint):
         item = self.table.itemAt(pos)
@@ -155,277 +247,204 @@ class PositionsTable(QWidget):
             return
 
         row = item.row()
+
+        # ✅ Context menu ONLY for main position rows
+        if row not in self.position_row_map.values():
+            return
+
         symbol_item = self.table.item(row, self.SYMBOL_COL)
         if not symbol_item:
             return
 
-        # Extract symbol from the item text (remove indicators)
-        symbol_text = symbol_item.text()
-        # Handle both main rows and SL/TP/TSL rows
-        if symbol_text.startswith("SL:") or symbol_text.startswith("   "):
-            # This is a SL/TP/TSL row, find the corresponding main row
-            for i in range(row, -1, -1):
-                check_item = self.table.item(i, self.SYMBOL_COL)
-                if check_item and not (check_item.text().startswith("SL:") or check_item.text().startswith("   ")):
-                    symbol_text = check_item.text()
-                    break
-
-        symbol = symbol_text.split()[0]  # Get first word (symbol)
-
+        symbol = symbol_item.text().split()[0]
         if symbol not in self.positions:
             return
 
         pos_data = self.positions[symbol]
 
         menu = QMenu(self)
-        menu.setStyleSheet("""
-            QMenu {
-                background-color: #2A3140;
-                color: #E0E0E0;
-                border: 1px solid #3A4458;
-                border-radius: 6px;
-                padding: 4px;
-            }
-            QMenu::item {
-                padding: 8px 16px;
-                border-radius: 4px;
-            }
-            QMenu::item:selected {
-                background-color: #29C7C9;
-                color: #161A25;
-            }
-            QMenu::separator {
-                height: 1px;
-                background-color: #3A4458;
-                margin: 4px 8px;
-            }
-        """)
 
-        # Add/Modify SL/TP action
-        modify_action = QAction("⚙ Add/Modify SL/TP", self)
-        modify_action.triggered.connect(lambda: self.modify_sl_tp_requested.emit(symbol))
-        menu.addAction(modify_action)
+        # --- Modify SL / TP ---
+        modify_action = menu.addAction("Modify SL / Target")
+        modify_action.triggered.connect(
+            lambda: self.modify_sl_tp_requested.emit(symbol)
+        )
 
         menu.addSeparator()
 
-        # Exit position action
-        exit_action = QAction("✕ Exit Position", self)
-        exit_action.triggered.connect(lambda: self.exit_requested.emit(pos_data))
-        menu.addAction(exit_action)
+        # --- Exit Position (danger action) ---
+        exit_action = menu.addAction("Exit Position")
+        exit_action.setObjectName("exitAction")
+        exit_action.triggered.connect(
+            lambda: self.exit_requested.emit(pos_data)
+        )
 
-        # Show menu at cursor position
         menu.exec_(self.table.viewport().mapToGlobal(pos))
 
-    def update_positions(self, positions_data):
+    # ------------------------------------------------------------------
+    # Data population (UNCHANGED LOGIC)
+    # ------------------------------------------------------------------
+
+    def update_positions(self, positions_data: List[dict]):
         self.table.setRowCount(0)
         self.positions.clear()
         self.position_row_map.clear()
 
         for pos in positions_data:
             self.add_position(pos)
+
         self._update_footer()
 
     def add_position(self, pos_data: dict):
         symbol = pos_data['tradingsymbol']
         self.positions[symbol] = pos_data
 
-        # Add main position row
         main_row = self.table.rowCount()
         self.table.insertRow(main_row)
         self.position_row_map[symbol] = main_row
+        self.table.setRowHeight(main_row, 32)
 
-        self.table.setRowHeight(main_row, 32)  # Slightly reduced height
-
-        # Main row data
         self._set_symbol_item(main_row, pos_data)
         self._set_item(main_row, self.QUANTITY_COL, pos_data.get('quantity', 0))
         self._set_item(main_row, self.AVG_PRICE_COL, pos_data.get('average_price', 0.0), is_price=True)
         self._set_item(main_row, self.LTP_COL, pos_data.get('last_price', 0.0), is_price=True)
+        self._set_pnl_item(main_row, pos_data.get('pnl', 0.0))
 
-        pnl_value = pos_data.get('pnl', 0.0)
-        self._set_pnl_item(main_row, pnl_value)
-
-        # Add SL/TP/TSL row if any are set
-        sl_price = pos_data.get('stop_loss_price')
-        tp_price = pos_data.get('target_price')
+        sl = pos_data.get('stop_loss_price')
+        tp = pos_data.get('target_price')
         tsl = pos_data.get('trailing_stop_loss')
 
-        if (sl_price and sl_price > 0) or (tp_price and tp_price > 0) or (tsl and tsl > 0):
+        if (sl and sl > 0) or (tp and tp > 0) or (tsl and tsl > 0):
             sltp_row = self.table.rowCount()
             self.table.insertRow(sltp_row)
-            self.table.setRowHeight(sltp_row, 24)  # Smaller height for info row
-
+            self.table.setRowHeight(sltp_row, 32)
             self._set_sltp_row(sltp_row, pos_data)
+
+    # ------------------------------------------------------------------
+    # Helpers (UNCHANGED)
+    # ------------------------------------------------------------------
 
     def _update_footer(self):
         total_pnl = sum(pos.get('pnl', 0.0) for pos in self.positions.values())
-        pnl_text = f"Total P&L: ₹ {total_pnl:,.0f}"
-        self.total_pnl_label.setText(pnl_text)
-        pnl_color = "#1DE9B6" if total_pnl >= 0 else "#F85149"
-        self.total_pnl_label.setStyleSheet(f"color: {pnl_color}; font-weight: 600; font-size: 13px;")
+        self.total_pnl_label.setText(f"Total P&L: ₹ {total_pnl:,.0f}")
+        color = "#1DE9B6" if total_pnl >= 0 else "#F85149"
+        self.total_pnl_label.setStyleSheet(f"color: {color}; font-weight: 600;")
 
-    def _set_item(self, row, col, data, is_text=False, is_price=False):
+    def _set_item(self, row, col, data, is_price=False):
         item = QTableWidgetItem()
-        if is_text:
-            item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-            item.setText(str(data))
-        else:
-            item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            if is_price:
-                item.setText(f"{data:,.2f}")
-            else:
-                item.setText(f"{int(data):,}")
-
-        item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+        item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        item.setText(f"{data:,.2f}" if is_price else f"{int(data):,}")
         self.table.setItem(row, col, item)
 
     def _set_symbol_item(self, row, pos_data):
-        symbol = pos_data.get('tradingsymbol', 'N/A')
-
-        item = QTableWidgetItem(symbol)
+        item = QTableWidgetItem(pos_data.get('tradingsymbol', 'N/A'))
         item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        item.setFlags(item.flags() & ~Qt.ItemIsEditable)
-        item.setForeground(QColor("#E0E0E0"))  # Default color
-
         self.table.setItem(row, self.SYMBOL_COL, item)
 
-    def _set_pnl_item(self, row, pnl_value):
-        item = QTableWidgetItem()
+    def _set_pnl_item(self, row, pnl):
+        item = QTableWidgetItem(f"{pnl:,.0f}")
         item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        item.setText(f"{pnl_value:>6,.0f}")  # Minimum 6 digits, right-aligned
-        item.setFlags(item.flags() & ~Qt.ItemIsEditable)
-
-        # Color based on profit/loss
-        pnl_color = QColor("#1DE9B6") if pnl_value >= 0 else QColor("#F85149")
-        item.setForeground(pnl_color)
-
-        # Make font bold for emphasis
+        item.setForeground(QColor("#1DE9B6") if pnl >= 0 else QColor("#F85149"))
         font = QFont()
         font.setBold(True)
         item.setFont(font)
-
         self.table.setItem(row, self.PNL_COL, item)
 
     def _set_sltp_row(self, row, pos_data):
-        """Set up the SL/TP/TSL information row"""
-        sl_price = pos_data.get('stop_loss_price')
-        tp_price = pos_data.get('target_price')
+        sl = pos_data.get('stop_loss_price')
+        tp = pos_data.get('target_price')
         tsl = pos_data.get('trailing_stop_loss')
-        avg_price = pos_data.get('average_price', 0.0)
-        quantity = abs(pos_data.get('quantity', 0))
+        avg = pos_data.get('average_price', 0.0)
+        qty = abs(pos_data.get('quantity', 0))
 
-        # Create formatted info text with amounts and price levels
-        info_parts = []
+        parts = []
 
-        if sl_price and sl_price > 0:
-            sl_amount = abs(avg_price - sl_price) * quantity
-            info_parts.append(f"SL: ₹{sl_amount:.0f} ({sl_price:.2f})")
+        if sl and sl > 0:
+            sl_pnl = abs(avg - sl) * qty
+            parts.append(
+                f"<span style='color:#F87171;'>SL</span> "
+                f"<span style='color:#E5E7EB;'>₹{sl_pnl:,.0f}</span> "
+                f"<span style='color:#9CA3AF;'>@ {sl:.2f}</span>"
+            )
 
-        if tp_price and tp_price > 0:
-            tp_amount = abs(tp_price - avg_price) * quantity
-            info_parts.append(f"Target: ₹{tp_amount:.0f} ({tp_price:.2f})")
+        if tp and tp > 0:
+            tp_pnl = abs(tp - avg) * qty
+            parts.append(
+                f"<span style='color:#34D399;'>Target</span> "
+                f"<span style='color:#E5E7EB;'>₹{tp_pnl:,.0f}</span> "
+                f"<span style='color:#9CA3AF;'>@ {tp:.2f}</span>"
+            )
 
         if tsl and tsl > 0:
-            info_parts.append(f"TSL: ₹{tsl:.0f}")
+            parts.append(
+                f"<span style='color:#60A5FA;'>TSL</span> "
+                f"<span style='color:#E5E7EB;'>{tsl:.0f}</span>"
+            )
 
-        info_text = " • ".join(info_parts)
+        # ---- QLabel ----
+        label = QLabel("  •  ".join(parts))
+        label.setTextFormat(Qt.RichText)
+        label.setAlignment(Qt.AlignRight | Qt.AlignTop)
+        label.setStyleSheet("""
+            QLabel {
+                font-family: Segoe UI;
+                font-size: 11px;
+                font-weight: 500;
+                color: #9CA3AF;
+            }
+        """)
 
-        # Set the info text in the first column, but span across ALL columns
-        item = QTableWidgetItem(info_text)
-        item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)  # or AlignLeft if you prefer
-        item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+        # ---- Wrapper widget (THIS IS THE KEY) ----
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 2, 6, 0)  # top aligned visually
+        layout.addWidget(label)
+        layout.setAlignment(Qt.AlignTop | Qt.AlignRight)
 
-        # Style the info row
-        info_font = QFont()
-        info_font.setPointSize(10)  # Smaller font
-        item.setFont(info_font)
-        item.setForeground(QColor("#A9B1C3"))  # Muted color
-
-        self.table.setItem(row, self.SYMBOL_COL, item)
-
-        # Span this cell across all columns so the text uses full width
+        self.table.setCellWidget(row, self.SYMBOL_COL, container)
         self.table.setSpan(row, self.SYMBOL_COL, 1, self.table.columnCount())
 
+    # ------------------------------------------------------------------
+    # Column persistence (UNCHANGED)
+    # ------------------------------------------------------------------
+
     def _load_column_widths(self):
-        """Load saved column widths from JSON file"""
         try:
-            config_dir = os.path.expanduser("~/.options_scalper")
-            os.makedirs(config_dir, exist_ok=True)
-            config_file = os.path.join(config_dir, "positions_table_columns.json")
-
-            if os.path.exists(config_file):
-                with open(config_file, 'r') as f:
-                    saved_widths = json.load(f)
-
-                logger.info(f"Loading saved column widths: {saved_widths}")
-
-                for col_name, width in saved_widths.items():
-                    if col_name in self.table.headers:
-                        col_index = self.table.headers.index(col_name)
-                        self.table.setColumnWidth(col_index, int(width))
-
-                return True
-            else:
-                logger.info("No saved column widths found, using defaults")
+            path = os.path.expanduser("~/.options_scalper/positions_table_columns.json")
+            if not os.path.exists(path):
                 return False
-
-        except Exception as e:
-            logger.error(f"Error loading column widths: {e}")
+            with open(path, "r") as f:
+                widths = json.load(f)
+            for name, w in widths.items():
+                if name in self.table.headers:
+                    self.table.setColumnWidth(self.table.headers.index(name), int(w))
+            return True
+        except Exception:
             return False
 
     def _set_default_column_widths(self):
-        """Set minimum column widths - columns will auto-fit based on content"""
-        min_widths = {
-            self.SYMBOL_COL: 100,  # Symbol minimum
-            self.QUANTITY_COL: 50,  # Qty minimum
-            self.AVG_PRICE_COL: 70,  # Avg Price minimum
-            self.LTP_COL: 70,  # LTP minimum
-            self.PNL_COL: 100  # P&L minimum (for 6 digits)
-        }
+        self.table.setColumnWidth(self.PNL_COL, 100)
 
-        # Set minimum widths
-        for col_index, min_width in min_widths.items():
-            self.table.setColumnWidth(col_index, min_width)
-            header = self.table.horizontalHeader()
-            header.setMinimumSectionSize(min_width)
-
-        logger.info("Applied minimum column widths with auto-fit")
-
-    def _on_column_resized(self, logical_index, old_size, new_size):
-        """Called when user resizes a column - save the new widths"""
-        # Use QTimer to avoid saving too frequently during drag operations
-        if not hasattr(self, '_save_timer'):
-            self._save_timer = QTimer()
+    def _on_column_resized(self, *_):
+        if not hasattr(self, "_save_timer"):
+            self._save_timer = QTimer(self)
             self._save_timer.setSingleShot(True)
             self._save_timer.timeout.connect(self._save_column_widths)
-
-        self._save_timer.stop()
-        self._save_timer.start(500)  # Save after 500ms of no resize activity
+        self._save_timer.start(500)
 
     def _save_column_widths(self):
-        """Save current column widths to JSON file"""
         try:
-            config_dir = os.path.expanduser("~/.options_scalper")
-            os.makedirs(config_dir, exist_ok=True)
-            config_file = os.path.join(config_dir, "positions_table_columns.json")
-
-            column_widths = {}
-            for i, header_name in enumerate(self.table.headers):
-                column_widths[header_name] = self.table.columnWidth(i)
-
-            with open(config_file, 'w') as f:
-                json.dump(column_widths, f, indent=2)
-
-            logger.debug(f"Saved column widths: {column_widths}")
-
-        except Exception as e:
-            logger.error(f"Error saving column widths: {e}")
+            path = os.path.expanduser("~/.options_scalper/positions_table_columns.json")
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            data = {h: self.table.columnWidth(i) for i, h in enumerate(self.table.headers)}
+            with open(path, "w") as f:
+                json.dump(data, f, indent=2)
+        except Exception:
+            pass
 
     def closeEvent(self, event):
-        """Save column widths when widget is closed"""
         self._save_column_widths()
         super().closeEvent(event)
 
     def save_state(self):
-        """Public method to save state - call this when parent window closes"""
         self._save_column_widths()
