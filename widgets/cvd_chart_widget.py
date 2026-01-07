@@ -5,33 +5,39 @@ from datetime import datetime, timedelta
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QHBoxLayout, QPushButton
 )
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import QColor
 
 from core.cvd.cvd_historical import CVDHistoricalBuilder
 
 
 class CVDChartWidget(QWidget):
     """
-    CVD Chart Widget (Market Monitor / Dashboard Style)
+    Professional CVD Chart Widget with synchronized crosshairs.
 
-    • Historical minute candles only
-    • Refreshes every 3 seconds
-    • Rebased / Session toggle
-    • Moving dot with momentum-based color
+    Features:
+    - Historical minute candles with date navigation
+    - Synchronized crosshair across multiple charts
+    - Rebased / Session toggle
+    - Momentum-based color indicators
+    - Smart date handling (weekend-aware)
     """
 
-    REFRESH_INTERVAL_MS = 3000  # 3 seconds
+    # Signal for crosshair synchronization (x_position, timestamp)
+    crosshair_moved = Signal(float, datetime)
 
-    COLOR_UP = "#26A69A"     # green
-    COLOR_DOWN = "#EF5350"   # red
-    COLOR_FLAT = "#8A9BA8"   # grey
+    REFRESH_INTERVAL_MS = 3000  # 3 seconds (live mode)
+
+    COLOR_UP = "#26A69A"  # green
+    COLOR_DOWN = "#EF5350"  # red
+    COLOR_FLAT = "#8A9BA8"  # grey
 
     def __init__(
-        self,
-        kite,
-        instrument_token,
-        symbol: str,
-        parent=None
+            self,
+            kite,
+            instrument_token,
+            symbol: str,
+            parent=None
     ):
         super().__init__(parent)
 
@@ -43,11 +49,35 @@ class CVDChartWidget(QWidget):
         self.prev_day_close_cvd = 0.0
         self.rebased_mode = True
 
+        # Date navigation support
+        self.current_date = None
+        self.previous_date = None
+        self.live_mode = True
+
+        # --- Live dot pulse state ---
+        self._pulse_size = 6
+        self._pulse_target = 6
+        self._pulse_velocity = 0
+        self._last_slope = None
+
+        # Crosshair state
+        self.all_timestamps = []
+        self.x_offset_map = {}  # session -> x_offset
+        self.crosshair_line = None
+        self.crosshair_label = None
+        self.external_update = False  # Flag to prevent feedback loop
+
         self.axis = pg.AxisItem(orientation="bottom")
 
         self._setup_ui()
+        self._setup_crosshair()
         self._load_historical()
         self._start_refresh_timer()
+
+        # Pulse animation timer (smooth decay)
+        self.pulse_timer = QTimer(self)
+        self.pulse_timer.timeout.connect(self._update_pulse)
+        self.pulse_timer.start(40)  # ~25 FPS, light and smooth
 
     # ------------------------------------------------------------------
     # UI
@@ -88,6 +118,9 @@ class CVDChartWidget(QWidget):
                 background-color: #2A3B5C;
                 color: #FFFFFF;
             }
+            QPushButton:hover {
+                border-color: #4A5468;
+            }
         """)
         self.toggle_btn.clicked.connect(self._toggle_mode)
         header.addWidget(self.toggle_btn)
@@ -118,6 +151,125 @@ class CVDChartWidget(QWidget):
 
         root.addWidget(self.plot)
 
+    def _setup_crosshair(self):
+        """Setup synchronized crosshair."""
+        # Vertical line
+        pen = pg.mkPen(QColor(255, 255, 255, 100), width=1, style=Qt.DashLine)
+        self.crosshair_line = pg.InfiniteLine(
+            angle=90,
+            movable=False,
+            pen=pen
+        )
+        self.crosshair_line.hide()
+        self.plot.addItem(self.crosshair_line)
+
+        # Connect mouse move event
+        self.plot.scene().sigMouseMoved.connect(self._on_mouse_moved)
+
+    # ------------------------------------------------------------------
+    # Crosshair Sync
+    # ------------------------------------------------------------------
+
+    def _on_mouse_moved(self, pos):
+        """Handle mouse movement for crosshair."""
+        if self.external_update:
+            return
+
+        if self.plot.sceneBoundingRect().contains(pos):
+            mouse_point = self.plot.plotItem.vb.mapSceneToView(pos)
+            x = mouse_point.x()
+
+            # Find closest timestamp
+            if self.all_timestamps:
+                idx = int(round(x))
+                if 0 <= idx < len(self.all_timestamps):
+                    timestamp = self.all_timestamps[idx]
+
+                    self.crosshair_line.setPos(x)
+                    self.crosshair_line.show()
+
+                    # Emit signal for other charts
+                    self.crosshair_moved.emit(x, timestamp)
+        else:
+            self.crosshair_line.hide()
+
+    def update_crosshair(self, x_pos: float, timestamp: datetime):
+        """Update crosshair from external signal."""
+        self.external_update = True
+
+        # Map timestamp to local x coordinate
+        if self.all_timestamps:
+            try:
+                # Find matching timestamp or closest
+                local_idx = None
+                for i, ts in enumerate(self.all_timestamps):
+                    if ts == timestamp:
+                        local_idx = i
+                        break
+
+                if local_idx is None:
+                    # Find closest timestamp
+                    time_diffs = [abs((ts - timestamp).total_seconds())
+                                  for ts in self.all_timestamps]
+                    local_idx = time_diffs.index(min(time_diffs))
+
+                if local_idx is not None:
+                    self.crosshair_line.setPos(local_idx)
+                    self.crosshair_line.show()
+            except Exception:
+                pass
+
+        self.external_update = False
+
+    def _update_pulse(self):
+        """
+        Smoothly animate dot size back to normal.
+        """
+        if self._pulse_size == self._pulse_target:
+            return
+
+        # Simple spring-like decay
+        diff = self._pulse_target - self._pulse_size
+        self._pulse_velocity += diff * 0.25
+        self._pulse_velocity *= 0.6
+
+        self._pulse_size += self._pulse_velocity
+
+        # Clamp + settle
+        if abs(diff) < 0.1:
+            self._pulse_size = self._pulse_target
+            self._pulse_velocity = 0
+
+        self.end_dot.setSize(max(4, int(self._pulse_size)))
+
+    # ------------------------------------------------------------------
+    # Date Navigation
+    # ------------------------------------------------------------------
+
+    def load_historical_dates(self, current_date: datetime, previous_date: datetime):
+        """Load data for specific dates (used by navigator)."""
+
+        today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+
+        self.current_date = current_date
+        self.previous_date = previous_date
+
+        # ✅ Decide mode based on date
+        if current_date >= today:
+            # LIVE MODE
+            self.live_mode = True
+
+            if hasattr(self, "timer") and not self.timer.isActive():
+                self.timer.start(self.REFRESH_INTERVAL_MS)
+        else:
+            # HISTORICAL MODE
+            self.live_mode = False
+
+            if hasattr(self, "timer"):
+                self.timer.stop()
+
+        self._load_historical()
+
     # ------------------------------------------------------------------
     # Historical load
     # ------------------------------------------------------------------
@@ -127,8 +279,16 @@ class CVDChartWidget(QWidget):
             return
 
         try:
-            to_dt = datetime.now()
-            from_dt = to_dt - timedelta(days=2)
+            # Determine date range
+            if self.live_mode:
+                to_dt = datetime.now()
+                # Fetch wider window to safely include last trading session (weekends safe)
+                from_dt = to_dt - timedelta(days=5)
+
+            else:
+                # Historical mode with specific dates
+                to_dt = self.current_date + timedelta(days=1)
+                from_dt = self.previous_date
 
             hist = self.kite.historical_data(
                 self.instrument_token,
@@ -147,22 +307,33 @@ class CVDChartWidget(QWidget):
             cvd_df = CVDHistoricalBuilder.build_cvd_ohlc(df)
 
             cvd_df["session"] = cvd_df.index.date
-            sessions = sorted(cvd_df["session"].unique())[-2:]
+
+            # Filter to target dates
+            if self.live_mode:
+                sessions = sorted(cvd_df["session"].unique())[-2:]
+            else:
+                target_dates = [self.previous_date.date(), self.current_date.date()]
+                sessions = [d for d in sorted(cvd_df["session"].unique())
+                            if d in target_dates]
+
             cvd_df = cvd_df[cvd_df["session"].isin(sessions)]
 
-            if len(sessions) == 2:
+            if len(sessions) >= 2:
                 prev_sess = sessions[0]
-                self.prev_day_close_cvd = (
-                    cvd_df[cvd_df["session"] == prev_sess]["close"].iloc[-1]
-                )
+                prev_data = cvd_df[cvd_df["session"] == prev_sess]
+                if not prev_data.empty:
+                    self.prev_day_close_cvd = prev_data["close"].iloc[-1]
+                else:
+                    self.prev_day_close_cvd = 0.0
             else:
                 self.prev_day_close_cvd = 0.0
 
             self.cvd_df = cvd_df
             self._plot()
 
-        except Exception:
-            pass
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).exception(f"Failed to load data: {e}")
 
     # ------------------------------------------------------------------
     # Plotting + Momentum Dot
@@ -175,17 +346,26 @@ class CVDChartWidget(QWidget):
         self.plot.clear()
         self.plot.addItem(self.zero_line)
         self.plot.addItem(self.end_dot)
+        self.plot.addItem(self.crosshair_line)
 
         sessions = sorted(self.cvd_df["session"].unique())
-        all_times = list(self.cvd_df.index)
+        self.all_timestamps = []
+        self.x_offset_map = {}
 
         x_offset = 0
         last_two_y = []
+        last_x = None
+        last_y = None
 
         for i, sess in enumerate(sessions):
             df_sess = self.cvd_df[self.cvd_df["session"] == sess]
             y_raw = df_sess["close"].values
 
+            # Store timestamps
+            self.all_timestamps.extend(df_sess.index.tolist())
+            self.x_offset_map[sess] = x_offset
+
+            # Rebasing logic
             if self.rebased_mode and i == 0 and len(sessions) == 2:
                 y = y_raw - self.prev_day_close_cvd
             else:
@@ -193,6 +373,7 @@ class CVDChartWidget(QWidget):
 
             x = list(range(x_offset, x_offset + len(y)))
 
+            # Styling: previous day dimmed, current day bright
             pen = (
                 pg.mkPen("#7A7A7A", width=1.2)
                 if i == 0 and len(sessions) == 2
@@ -208,28 +389,42 @@ class CVDChartWidget(QWidget):
 
             x_offset += len(y)
 
-        # --- Momentum logic ---
-        if len(last_two_y) == 2:
+        # --- Momentum-based dot color ---
+        if len(last_two_y) == 2 and last_x is not None:
             prev_y, curr_y = last_two_y
+            slope = curr_y - prev_y
 
-            if curr_y > prev_y:
+            # Momentum color
+            if slope > 0:
                 color = self.COLOR_UP
-            elif curr_y < prev_y:
+            elif slope < 0:
                 color = self.COLOR_DOWN
             else:
                 color = self.COLOR_FLAT
 
             self.end_dot.setBrush(pg.mkBrush(color))
             self.end_dot.setData([last_x], [last_y])
+
+            # --- Pulse trigger ---
+            if self._last_slope is not None:
+                # Pulse when direction flips OR acceleration increases
+                if (slope > 0 > self._last_slope) or (slope < 0 < self._last_slope) or abs(slope) > abs(
+                        self._last_slope) * 1.4:
+                    self._pulse_size = 14  # instant expansion
+                    self._pulse_target = 6  # decay back to normal
+                    self._pulse_velocity = 0
+
+            self._last_slope = slope
         else:
             self.end_dot.clear()
 
+        # --- Time axis formatter ---
         def time_formatter(values, *_):
             out = []
             for v in values:
                 idx = int(v)
-                if 0 <= idx < len(all_times):
-                    out.append(all_times[idx].strftime("%H:%M"))
+                if 0 <= idx < len(self.all_timestamps):
+                    out.append(self.all_timestamps[idx].strftime("%H:%M"))
                 else:
                     out.append("")
             return out
@@ -245,9 +440,22 @@ class CVDChartWidget(QWidget):
     # ------------------------------------------------------------------
 
     def _start_refresh_timer(self):
+        """Start auto-refresh timer (only in live mode)."""
         self.timer = QTimer(self)
-        self.timer.timeout.connect(self._load_historical)
+        self.timer.timeout.connect(self._refresh_if_live)
         self.timer.start(self.REFRESH_INTERVAL_MS)
+
+    def _refresh_if_live(self):
+        """Refresh only if in live mode."""
+        if self.live_mode:
+            self._load_historical()
+
+    def stop_updates(self):
+        """Stop timer (called on cleanup)."""
+        if hasattr(self, "timer"):
+            self.timer.stop()
+        if hasattr(self, "pulse_timer"):
+            self.pulse_timer.stop()
 
     # ------------------------------------------------------------------
     # Toggle
@@ -270,6 +478,5 @@ class CVDChartWidget(QWidget):
     # ------------------------------------------------------------------
 
     def closeEvent(self, event):
-        if hasattr(self, "timer"):
-            self.timer.stop()
+        self.stop_updates()
         super().closeEvent(event)

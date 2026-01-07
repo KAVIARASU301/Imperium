@@ -388,7 +388,7 @@ QMenu::item#exitAction:selected {
         label.setStyleSheet("""
             QLabel {
                 font-family: Segoe UI;
-                font-size: 11px;
+                font-size: 12px;
                 font-weight: 500;
                 color: #9CA3AF;
             }

@@ -38,8 +38,8 @@ from dialogs.option_chain_dialog import OptionChainDialog
 from dialogs.order_confirmation_dialog import OrderConfirmationDialog
 from dialogs.market_monitor_dialog import MarketMonitorDialog
 from core.cvd.cvd_engine import CVDEngine
-from dialogs.cvd_chart_dialog import CVDChartDialog
-from dialogs.cvd_market_monitor_dialog import CVDMarketMonitorDialog
+from dialogs.cvd_single_chart_dialog import CVDSingleChartDialog
+from dialogs.cvd_multi_chart_dialog import CVDMultiChartDialog
 
 logger = logging.getLogger(__name__)
 
@@ -631,7 +631,7 @@ class ScalperMainWindow(QMainWindow):
                     )
 
             # Open dialog anyway
-            dlg = CVDChartDialog(
+            dlg = CVDSingleChartDialog(
                 kite=self.real_kite_client,
                 instrument_token=fut_token,
                 symbol=f"{symbol} FUT",
@@ -687,7 +687,7 @@ class ScalperMainWindow(QMainWindow):
 
         self._update_market_subscriptions()
 
-        dlg = CVDMarketMonitorDialog(
+        dlg = CVDMultiChartDialog(
             kite=self.real_kite_client,
             symbol_to_token=symbol_to_token,
             parent=self
