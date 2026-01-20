@@ -8,8 +8,6 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QCursor, QFont
 from kiteconnect import KiteConnect
-from PySide6.QtCore import QPropertyAnimation, QEasingCurve
-from PySide6.QtWidgets import QGraphicsOpacityEffect
 
 from utils.data_models import OptionType, Contract
 import locale
@@ -34,6 +32,37 @@ class ClickableLabel(QLabel):
         self.doubleClicked.emit()
         super().mouseDoubleClickEvent(event)
 
+from PySide6.QtWidgets import QSpinBox
+from PySide6.QtCore import Qt
+
+
+class NoSelectSpinBox(QSpinBox):
+    """
+    SpinBox with:
+    - No text selection
+    - Cursor always at end
+    - Keyboard entry enabled
+    - Mouse wheel & arrows enabled
+    """
+
+    def focusInEvent(self, event):
+        super().focusInEvent(event)
+        le = self.lineEdit()
+        le.setCursorPosition(len(le.text()))
+        le.deselect()
+
+    def mousePressEvent(self, event):
+        super().mousePressEvent(event)
+        le = self.lineEdit()
+        le.setCursorPosition(len(le.text()))
+        le.deselect()
+
+    def mouseDoubleClickEvent(self, event):
+        # Prevent full selection on double click
+        event.accept()
+        le = self.lineEdit()
+        le.setCursorPosition(len(le.text()))
+        le.deselect()
 
 class BuyExitPanel(QWidget):
     """
@@ -112,12 +141,15 @@ class BuyExitPanel(QWidget):
         return group
 
     def _create_spinbox(self):
-        spinbox = QSpinBox()
+        spinbox = NoSelectSpinBox()
         spinbox.setRange(0, 10)
         spinbox.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         spinbox.setAlignment(Qt.AlignCenter)
         spinbox.setFont(UI_SPIN_FONT)
+        spinbox.setFocusPolicy(Qt.StrongFocus)
+
         spinbox.valueChanged.connect(self._update_margin)
+
         return spinbox
 
     def _create_radio_buttons(self):
@@ -178,10 +210,11 @@ class BuyExitPanel(QWidget):
         self.margin_label.setObjectName("marginValue")
         self.margin_label.setTextFormat(Qt.RichText)
         self.margin_label.setAlignment(Qt.AlignCenter)
+        self.margin_label.setGraphicsEffect(None)
+        self.margin_label.setMinimumWidth(140)
         layout.addWidget(self.margin_label, 4, 0, 1, 2, Qt.AlignmentFlag.AlignCenter)
         # --- Margin animation setup (safe: margin_label exists here) ---
         self._last_margin_value = None
-        self._setup_margin_animation()
 
         return info_frame
 
@@ -234,24 +267,96 @@ class BuyExitPanel(QWidget):
             #divider { background-color: #3A4458; height: 1px; border: none; }
             QLabel { color: #A9B1C3;  }
             #infoValue { color: #E0E0E0; }
-            #marginValue { color: #FFFFFF; }
+            #marginValue { color: #FFFFFF; font-weight: bold; }
             
+            /* ---------------- SPINBOX ---------------- */
+
             QSpinBox {
-                background-color: #212635;
-                color: #E0E0E0;
-                border: 1px solid #3A4458;
-                border-radius: 6px;
-                padding: 2px;
+                background-color: qlineargradient(
+                    x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #242A3A,
+                    stop:1 #1A1F2B
+                );
+            
+                color: #E8EAF0;
+                border: 1.2px solid #3A4458;
+                border-radius: 8px;
+            
+                padding: 4px 6px;
+                font-weight: 600;
+                selection-background-color: #29C7C9;
+                selection-color: #0B0F14;
+            }
+            
+            /* Hover = subtle readiness */
+            QSpinBox:hover {
+                border-color: #6C7386;
+            }
+            
+            /* Focus = decisive but calm */
+            QSpinBox:focus {
+                border-color: #29C7C9;
+                background-color: #1E2535;
+            }
+            QSpinBox::selection {
+                background: transparent;
+                color: inherit;
             }
 
-            QSpinBox:focus { border-color: #29C7C9; }
-            QRadioButton { color: #A9B1C3; spacing: 5px; font-weight: bold; }
-            QRadioButton::indicator {
-                width: 9px; height: 9px; border-radius: 9px;
-                background-color: #2A3140; border: 1px solid #3A4458;
+            /* Disabled state (important for trust) */
+            QSpinBox:disabled {
+                color: #6C7386;
+                background-color: #161A25;
+                border-color: #2A3140;
             }
-            #callRadio::indicator:checked { background-color: #29C7C9; border-color: #29C7C9; }
-            #putRadio::indicator:checked { background-color: #F85149; border-color: #F85149; }
+
+            
+            /* ---------------- RADIO BUTTON ---------------- */
+
+            QRadioButton {
+                color: #A9B1C3;
+                spacing: 8px;
+                font-weight: 600;
+            }
+            
+            /* Base indicator */
+            QRadioButton::indicator {
+                width: 14px;
+                height: 14px;
+                border-radius: 7px;
+            
+                background-color: #1E2433;
+                border: 1.5px solid #3A4458;
+            }
+            
+            /* Hover feedback */
+            QRadioButton::indicator:hover {
+                border-color: #6C7386;
+            }
+            
+            /* Checked base (inner dot illusion) */
+            QRadioButton::indicator:checked {
+                background-color: #0F131D;
+                border-width: 2px;
+            }
+            
+            /* CALL (teal) */
+            #callRadio::indicator:checked {
+                border-color: #29C7C9;
+                background-color: #0F2C30;
+            }
+            
+            /* PUT (red) */
+            #putRadio::indicator:checked {
+                border-color: #F85149;
+                background-color: #2A1212;
+            }
+            
+            /* Optional: subtle focus ring (keyboard users) */
+            QRadioButton::indicator:checked:focus {
+                border-color: #FFFFFF;
+            }
+
             /* --- MODIFIED BUTTON STYLES --- */
             QPushButton {
                 font-weight: bold;
@@ -330,9 +435,9 @@ class BuyExitPanel(QWidget):
 
         self.margin_label.setText(html)
 
-        if self._last_margin_value != total_premium:
-            self._margin_anim.stop()
-            self._margin_anim.start()
+        # if self._last_margin_value != total_premium:
+        #     self._margin_anim.stop()
+        #     self._margin_anim.start()
 
         self._last_margin_value = total_premium
 
@@ -398,12 +503,3 @@ class BuyExitPanel(QWidget):
                     strikes.append({"strike": data['strike'], "ltp": contract.ltp, "contract": contract})
         return strikes
 
-    def _setup_margin_animation(self):
-        self._margin_opacity = QGraphicsOpacityEffect(self.margin_label)
-        self.margin_label.setGraphicsEffect(self._margin_opacity)
-
-        self._margin_anim = QPropertyAnimation(self._margin_opacity, b"opacity", self)
-        self._margin_anim.setDuration(220)
-        self._margin_anim.setStartValue(0.4)
-        self._margin_anim.setEndValue(1.0)
-        self._margin_anim.setEasingCurve(QEasingCurve.OutCubic)

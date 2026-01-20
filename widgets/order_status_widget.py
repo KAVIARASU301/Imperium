@@ -1,37 +1,43 @@
 import logging
 import sys
 
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame, QApplication
-from PySide6.QtCore import Qt, Signal, QPropertyAnimation, QEasingCurve, QByteArray, QTimer
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame, QApplication, \
+    QGraphicsDropShadowEffect
+from PySide6.QtCore import Qt, Signal, QPropertyAnimation, QEasingCurve, QByteArray, QTimer, QParallelAnimationGroup, \
+    QPoint, Property
+from PySide6.QtGui import QColor
 
 logger = logging.getLogger(__name__)
 
 
 class OrderStatusWidget(QWidget):
     """
-    Small, non-modal widgets that display the status of a single pending order.
-    It appears in the corner of the screen and provides modify/cancel actions.
+    Premium toast notification for order status with glassmorphism design,
+    smooth animations, and modern interactions.
     """
-    cancel_requested = Signal(str)  # Emits order_id
-    modify_requested = Signal(dict)  # Emits order data
+    cancel_requested = Signal(str)
+    modify_requested = Signal(dict)
 
     def __init__(self, order_data: dict, parent=None):
         super().__init__(parent)
         self.order_data = order_data
         self.order_id = order_data.get("order_id")
-        self.animation = None
+        self._offset = 0
 
         self._setup_ui()
         self._apply_styles()
+        self._add_shadow()
         self.show()
         self.animate_in()
+
 
     def _setup_ui(self):
         self.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_DeleteOnClose)
-        self.setFixedSize(280, 110)
+        self.setFixedSize(320, 120)
 
+        # Main container with glassmorphism
         container = QFrame(self)
         container.setObjectName("mainContainer")
 
@@ -40,127 +46,309 @@ class OrderStatusWidget(QWidget):
         main_layout.addWidget(container)
 
         layout = QVBoxLayout(container)
-        layout.setContentsMargins(15, 10, 15, 10)
-        layout.setSpacing(5)
+        layout.setContentsMargins(20, 15, 20, 15)
+        layout.setSpacing(8)
 
-        # Top row: Symbol and Status
-        top_layout = QHBoxLayout()
+        # Status indicator line
+        status_line = QFrame()
+        status_line.setObjectName("statusLine")
+        status_line.setFixedHeight(3)
+        layout.addWidget(status_line)
+
+        status = self.order_data.get("status", "").lower()
+        txn = self.order_data.get("transaction_type", "").upper()
+
+        # Default (BUY / pending / open)
+        line_color = "#29C7C9"  # teal
+
+        if status in ("rejected", "cancelled", "canceled"):
+            line_color = "#F85149"  # red
+        elif status in ("complete", "filled"):
+            line_color = "#00D1B2"  # success green
+        elif txn == "SELL":
+            line_color = "#F85149"  # sell = red intent
+
+        status_line.setStyleSheet(f"background-color: {line_color};")
+
+        # Header with symbol and status badge
+        header = QHBoxLayout()
+        header.setSpacing(10)
+
         symbol = self.order_data.get('tradingsymbol', 'N/A')
         symbol_label = QLabel(symbol)
         symbol_label.setObjectName("symbolLabel")
 
         status = self.order_data.get('status', 'N/A').replace("_", " ").title()
-        status_label = QLabel(status)
-        status_label.setObjectName("statusLabel")
+        status_badge = QLabel(status)
+        status_badge.setObjectName("statusBadge")
 
-        top_layout.addWidget(symbol_label)
-        top_layout.addStretch()
-        top_layout.addWidget(status_label)
-        layout.addLayout(top_layout)
+        header.addWidget(symbol_label)
+        header.addStretch()
+        header.addWidget(status_badge)
+        layout.addLayout(header)
 
-        # Info row: Type, Qty, Price
-        info_text = (
-            f"{self.order_data.get('transaction_type', '')} "
-            f"{self.order_data.get('quantity', 0)} @ "
-            f"₹{self.order_data.get('price', 0.0):.2f}"
-        )
-        info_label = QLabel(info_text)
+        # Order details
+        transaction_type = self.order_data.get('transaction_type', '')
+        qty = self.order_data.get('quantity', 0)
+        price = self.order_data.get('price', 0.0)
+
+        details = QHBoxLayout()
+        details.setSpacing(15)
+
+        # Transaction type indicator
+        type_label = QLabel(f"● {transaction_type}")
+        type_label.setObjectName("buyLabel" if transaction_type == "BUY" else "sellLabel")
+
+        # Quantity and price
+        info_label = QLabel(f"{qty} qty @ ₹{price:.2f}")
         info_label.setObjectName("infoLabel")
-        layout.addWidget(info_label)
+
+        details.addWidget(type_label)
+        details.addWidget(info_label)
+        details.addStretch()
+        layout.addLayout(details)
 
         layout.addStretch()
 
         # Action buttons
-        button_layout = QHBoxLayout()
-        self.modify_btn = QPushButton("EDIT")
+        buttons = QHBoxLayout()
+        buttons.setSpacing(10)
+        buttons.setContentsMargins(0, 6, 0, 0)
+
+        self.modify_btn = QPushButton("Modify")
         self.modify_btn.setObjectName("modifyButton")
+        self.modify_btn.setCursor(Qt.PointingHandCursor)
         self.modify_btn.clicked.connect(lambda: self.modify_requested.emit(self.order_data))
 
-        self.cancel_btn = QPushButton("CANCEL")
+        self.cancel_btn = QPushButton("Cancel")
         self.cancel_btn.setObjectName("cancelButton")
+        self.cancel_btn.setCursor(Qt.PointingHandCursor)
         self.cancel_btn.clicked.connect(lambda: self.cancel_requested.emit(self.order_id))
 
-        button_layout.addWidget(self.modify_btn)
-        button_layout.addWidget(self.cancel_btn)
-        layout.addLayout(button_layout)
+        buttons.addWidget(self.modify_btn)
+        buttons.addWidget(self.cancel_btn)
+        layout.addLayout(buttons)
+
+    def _add_shadow(self):
+        """Add premium drop shadow effect"""
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(30)
+        shadow.setColor(QColor(0, 0, 0, 100))
+        shadow.setOffset(0, 8)
+        self.setGraphicsEffect(shadow)
 
     def animate_in(self):
-        self.animation = QPropertyAnimation(self, QByteArray(b"windowOpacity"))
-        self.animation.setDuration(300)
-        self.animation.setStartValue(0.0)
-        self.animation.setEndValue(1.0)
-        self.animation.setEasingCurve(QEasingCurve.Type.InQuad)
-        self.animation.start()
+        """Slide in from right with fade"""
+        # Opacity animation
+        opacity_anim = QPropertyAnimation(self, QByteArray(b"windowOpacity"))
+        opacity_anim.setDuration(400)
+        opacity_anim.setStartValue(0.0)
+        opacity_anim.setEndValue(1.0)
+        opacity_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+        # Slide animation
+        slide_anim = QPropertyAnimation(self, b"offset")
+        slide_anim.setDuration(400)
+        slide_anim.setStartValue(50)
+        slide_anim.setEndValue(0)
+        slide_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+        # Run both animations together
+        group = QParallelAnimationGroup(self)
+        group.addAnimation(opacity_anim)
+        group.addAnimation(slide_anim)
+        group.start()
 
     def close_widget(self):
-        self.animation = QPropertyAnimation(self, QByteArray(b"windowOpacity"))
-        self.animation.setDuration(300)
-        self.animation.setStartValue(1.0)
-        self.animation.setEndValue(0.0)
-        self.animation.setEasingCurve(QEasingCurve.Type.OutQuad)
-        self.animation.finished.connect(self.close)
-        self.animation.start()
+        """Slide out with fade"""
+        opacity_anim = QPropertyAnimation(self, QByteArray(b"windowOpacity"))
+        opacity_anim.setDuration(300)
+        opacity_anim.setStartValue(1.0)
+        opacity_anim.setEndValue(0.0)
+        opacity_anim.setEasingCurve(QEasingCurve.Type.InCubic)
+
+        slide_anim = QPropertyAnimation(self, b"offset")
+        slide_anim.setDuration(300)
+        slide_anim.setStartValue(0)
+        slide_anim.setEndValue(50)
+        slide_anim.setEasingCurve(QEasingCurve.Type.InCubic)
+
+        group = QParallelAnimationGroup(self)
+        group.addAnimation(opacity_anim)
+        group.addAnimation(slide_anim)
+        group.finished.connect(self.close)
+        group.start()
+
+    @Property(int)
+    def offset(self):
+        return self._offset
+
+    @offset.setter
+    def offset(self, value):
+        self._offset = value
+        pos = self.pos()
+        self.move(pos.x() + value - self._offset, pos.y())
 
     def _apply_styles(self):
         self.setStyleSheet("""
-            #mainContainer {
-                background-color: #1c1c1c;
-                border: 1px solid #333;
-                border-radius: 4px;
-            }
-            #symbolLabel {
-                color: #e0e0e0; font-size: 13px; font-weight: bold;
-            }
-            #statusLabel {
-                color: #ffb86c; font-size: 10px; font-weight: bold;
-                text-transform: uppercase;
-            }
-            #infoLabel { color: #a0a0a0; font-size: 11px; }
+        /* =========================
+           MAIN CONTAINER
+           ========================= */
 
-            QPushButton {
-                font-family: "Segoe UI"; font-weight: bold; border-radius: 5px; 
-                padding: 6px 12px; font-size: 10px; border: none;
-            }
-            #modifyButton { background-color: #444; color: #e0e0e0; }
-            #modifyButton:hover { background-color: #555; }
-            #cancelButton { background-color: #ff3860; color: #1c1c1c; }
-            #cancelButton:hover { background-color: #ff5070; }
+        #mainContainer {
+            background-color: #161A25;
+            border: 1px solid #3A4458;
+            border-radius: 6px;
+        }
+
+        /* =========================
+           STATUS INDICATOR LINE
+           (color is overridden in code based on status)
+           ========================= */
+
+        #statusLine {
+            background-color: #29C7C9;
+            border-top-left-radius: 6px;
+            border-top-right-radius: 6px;
+        }
+
+        /* =========================
+           HEADER
+           ========================= */
+
+        #symbolLabel {
+            color: #FFFFFF;
+            font-size: 15px;
+            font-weight: 600;
+            letter-spacing: 0.2px;
+        }
+
+        #statusBadge {
+            background-color: #212635;
+            color: #A9B1C3;
+            border: 1px solid #3A4458;
+            font-size: 10px;
+            font-weight: 700;
+            padding: 4px 10px;
+            border-radius: 6px;
+            letter-spacing: 0.4px;
+        }
+
+        /* =========================
+           ORDER DETAILS
+           ========================= */
+
+        #buyLabel {
+            color: #29C7C9;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        #sellLabel {
+            color: #F85149;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        #infoLabel {
+            color: #A9B1C3;
+            font-size: 12px;
+            font-weight: 500;
+        }
+
+        /* =========================
+           BUTTONS (TERMINAL STYLE)
+           ========================= */
+
+        QPushButton {
+            font-family: "Segoe UI", system-ui;
+            font-weight: 600;
+            border-radius: 3px;
+            padding: 5px 12px;
+            font-size: 10px;
+            border: none;
+            letter-spacing: 0.3px;
+            min-height: 22px;
+        }
+
+
+        /* Secondary action */
+        #modifyButton {
+            background-color: #212635;
+            color: #A9B1C3;
+            border: none;
+        }
+        
+        #modifyButton:hover {
+            background-color: #2A3140;
+            color: #E0E0E0;
+        }
+        
+        #modifyButton:pressed {
+            background-color: #1E2433;
+        }
+
+        /* Danger action */
+        #cancelButton {
+            background-color: rgba(248, 81, 73, 0.9);
+            color: #161A25;
+            font-weight: 700;
+            padding: 6px 14px;
+        }
+        
+        #cancelButton:hover {
+            background-color: #FA6B64;
+        }
+        
+        #cancelButton:pressed {
+            background-color: #E6453E;
+        }
+
         """)
 
-#---------------------------------------
+
 def usage():
-    """
-    Usage function to test the OrderStatusWidget.
-    It creates a QApplication and displays a sample OrderStatusWidget.
-    """
+    """Demo with multiple order types"""
     app = QApplication(sys.argv)
 
-    # Sample order data
-    sample_order = {
-        "order_id": "ORD12345",
-        "tradingsymbol": "INFY",
-        "status": "pending_validation",
-        "transaction_type": "BUY",
-        "quantity": 100,
-        "price": 1500.75,
-    }
+    orders = [
+        {
+            "order_id": "ORD12345",
+            "tradingsymbol": "RELIANCE",
+            "status": "pending",
+            "transaction_type": "BUY",
+            "quantity": 50,
+            "price": 2456.75,
+        },
+        {
+            "order_id": "ORD12346",
+            "tradingsymbol": "TCS",
+            "status": "open",
+            "transaction_type": "SELL",
+            "quantity": 25,
+            "price": 3890.50,
+        }
+    ]
 
-    widget = OrderStatusWidget(sample_order)
-
-    # Connect signals to a simple print function for demonstration
-    widget.cancel_requested.connect(lambda order_id: print(f"Cancel requested for Order ID: {order_id}"))
-    widget.modify_requested.connect(lambda order_data: print(f"Modify requested for Order: {order_data}"))
-
-    # Position the widget in the bottom-right corner
+    widgets = []
     screen_geometry = app.primaryScreen().availableGeometry()
-    x = screen_geometry.width() - widget.width() - 20
-    y = screen_geometry.height() - widget.height() - 20
-    widget.move(x, y)
 
-    # Optional: Close the widget after some time for demonstration
-    QTimer.singleShot(5000, widget.close_widget)
+    for i, order in enumerate(orders):
+        widget = OrderStatusWidget(order)
+        widget.cancel_requested.connect(lambda oid: print(f"Cancel: {oid}"))
+        widget.modify_requested.connect(lambda od: print(f"Modify: {od}"))
+
+        # Stack widgets vertically
+        x = screen_geometry.width() - widget.width() - 20
+        y = screen_geometry.height() - (widget.height() + 15) * (i + 1) - 20
+        widget.move(x, y)
+        widgets.append(widget)
+
+        # Stagger animations
+        QTimer.singleShot(i * 150, widget.animate_in)
 
     sys.exit(app.exec())
+
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)

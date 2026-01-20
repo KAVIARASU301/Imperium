@@ -187,9 +187,9 @@ class QuickOrderDialog(QDialog):
         # Stop Loss
         self.sl_checkbox = QCheckBox("Stop Loss (₹)")
         self.sl_spinbox = QDoubleSpinBox()
-        self.sl_spinbox.setRange(0, 10000)
-        self.sl_spinbox.setDecimals(2)
-        self.sl_spinbox.setSingleStep(10)
+        self.sl_spinbox.setRange(0, 10000000)
+        self.sl_spinbox.setDecimals(0)
+        self.sl_spinbox.setSingleStep(500)
         self.sl_spinbox.setValue(1000)
         self.sl_spinbox.setEnabled(False)
         self.sl_checkbox.toggled.connect(self.sl_spinbox.setEnabled)
@@ -199,9 +199,9 @@ class QuickOrderDialog(QDialog):
         # Take Profit
         self.tp_checkbox = QCheckBox("Take Profit (₹)")
         self.tp_spinbox = QDoubleSpinBox()
-        self.tp_spinbox.setRange(0, 10000)
-        self.tp_spinbox.setDecimals(2)
-        self.tp_spinbox.setSingleStep(10)
+        self.tp_spinbox.setRange(0, 10000000)
+        self.tp_spinbox.setDecimals(0)
+        self.tp_spinbox.setSingleStep(500)
         self.tp_spinbox.setValue(1500)
         self.tp_spinbox.setEnabled(False)
         self.tp_checkbox.toggled.connect(self.tp_spinbox.setEnabled)
@@ -211,9 +211,9 @@ class QuickOrderDialog(QDialog):
         # Trailing SL
         self.tsl_checkbox = QCheckBox("Trailing SL (₹)")
         self.tsl_spinbox = QDoubleSpinBox()
-        self.tsl_spinbox.setRange(0, 10000)
-        self.tsl_spinbox.setDecimals(2)
-        self.tsl_spinbox.setSingleStep(10)
+        self.tsl_spinbox.setRange(0, 10000000)
+        self.tsl_spinbox.setDecimals(0)
+        self.tsl_spinbox.setSingleStep(500)
         self.tsl_spinbox.setValue(1000)
         self.tsl_spinbox.setEnabled(False)
         self.tsl_checkbox.toggled.connect(self.tsl_spinbox.setEnabled)
@@ -281,123 +281,236 @@ class QuickOrderDialog(QDialog):
     def _apply_styles(self):
         self.setStyleSheet("""
             #mainContainer {
-                background-color: #161A25;
-                border: 1px solid #3A4458;
-                border-radius: 12px;
-                font-family: "Segoe UI", sans-serif;
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #1A1F2E, stop:1 #151923);
+                border: 1px solid #2D3548;
+                border-radius: 16px;
+                font-family: "Inter", "Segoe UI", sans-serif;
             }
-            #dialogTitle { color: #E0E0E0; font-size: 14px; font-weight: 600; }
+
+            #dialogTitle { 
+                color: #F0F2F5; 
+                font-size: 14px; 
+                font-weight: 600;
+                letter-spacing: 0.3px;
+            }
+
             #closeButton {
-                background-color: transparent; border: none; color: #8A9BA8;
-                font-size: 16px; font-weight: bold;
+                background-color: transparent; 
+                border: none; 
+                color: #6B7280;
+                font-size: 18px; 
+                font-weight: bold;
+                padding: 6px;
             }
-            #closeButton:hover, #navButton:hover { background-color: #3A4458; color: #f52a20; }
+            #closeButton:hover { 
+                background-color: rgba(248, 81, 73, 0.15);
+                color: #FF6B6B;
+                border-radius: 6px;
+            }
 
-            #symbolLabel { color: #FFFFFF; font-size: 24px; font-weight: 300; }
-            #infoLabel { color: #A9B1C3; font-size: 12px; }
-            #divider { background-color: #2A3140; height: 1px; border: none; }
-            QLabel { color: #A9B1C3; font-size: 13px; }
+            #symbolLabel { 
+                color: #FFFFFF; 
+                font-size: 26px; 
+                font-weight: 600;
+                letter-spacing: -0.5px;
+            }
 
-            QRadioButton { spacing: 8px; color: #A9B1C3; font-weight: bold; }
+            #infoLabel { 
+                font-size: 12.5px;
+                color: #9CA3AF;
+                font-weight: 500;
+            }
+
+            #divider { 
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 transparent, stop:0.5 #2D3548, stop:1 transparent);
+                height: 1px; 
+                border: none;
+                margin: 4px 0px;
+            }
+
+            QLabel { 
+                color: #D1D5DB; 
+                font-size: 13px;
+                font-weight: 500;
+            }
+
+            QRadioButton { 
+                spacing: 10px; 
+                color: #D1D5DB; 
+                font-weight: 600;
+                font-size: 13px;
+            }
             QRadioButton::indicator {
-                width: 18px; height: 18px; border-radius: 9px;
-                background-color: #2A3140; border: 1px solid #3A4458;
+                width: 20px; 
+                height: 20px; 
+                border-radius: 10px;
+                background-color: #1F2937; 
+                border: 2px solid #374151;
             }
-            #buyRadio::indicator:checked { background-color: #29C7C9; border-color: #29C7C9; }
-            #sellRadio::indicator:checked { background-color: #F85149; border-color: #F85149; }
+            #buyRadio::indicator:checked { 
+                background: qradialgradient(cx:0.5, cy:0.5, radius:0.5,
+                    fx:0.5, fy:0.5, stop:0 #3DFFDC, stop:0.6 #00D4AA, stop:1 #00B894);
+                border-color: #00D4AA;
+            }
+            #sellRadio::indicator:checked { 
+                background: qradialgradient(cx:0.5, cy:0.5, radius:0.5,
+                    fx:0.5, fy:0.5, stop:0 #FF6B9D, stop:0.6 #FF4757, stop:1 #EE5A6F);
+                border-color: #FF4757;
+            }
 
-            QCheckBox { color: #A9B1C3; spacing: 8px; font-weight: bold; }
-            QCheckBox::indicator {
-                width: 18px; height: 18px; border-radius: 4px;
-                background-color: #2A3140; border: 1px solid #3A4458;
+            QCheckBox { 
+                color: #D1D5DB; 
+                spacing: 10px; 
+                font-weight: 600;
+                font-size: 13px;
             }
-            QCheckBox::indicator:checked { background-color: #29C7C9; }
+            QCheckBox::indicator {
+                width: 20px; 
+                height: 20px; 
+                border-radius: 5px;
+                background-color: #1F2937; 
+                border: 2px solid #374151;
+            }
+            QCheckBox::indicator:checked { 
+                background-color: #8B5CF6;
+                border-color: #8B5CF6;
+                image: url(data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTIiIGhlaWdodD0iMTIiIHZpZXdCb3g9IjAgMCAxMiAxMiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cGF0aCBkPSJNMTAgM0w0LjUgOC41TDIgNiIgc3Ryb2tlPSJ3aGl0ZSIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiLz48L3N2Zz4=);
+            }
 
             QDoubleSpinBox {
-                background-color: #212635; border: 1px solid #3A4458;
-                color: #E0E0E0; font-size: 14px; padding: 10px; border-radius: 6px;
+                background-color: #1F2937; 
+                border: 2px solid #374151;
+                color: #F9FAFB; 
+                font-size: 15px; 
+                font-weight: 600;
+                padding: 8px 8px 8px 8px; 
+                border-radius: 8px;
             }
-            QDoubleSpinBox:focus { border: 1px solid #29C7C9; }
+            QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {
+                width: 20px;
+                border: none;
+                background-color: transparent;
+            }
+            QDoubleSpinBox:focus { 
+                border: 2px solid #6366F1;
+                background-color: #222938;
+            }
+            QDoubleSpinBox:hover {
+                border: 2px solid #4B5563;
+            }
 
             #totalValueLabel {
                 color: #FFFFFF;
                 font-size: 18px;
                 font-weight: 500;
-            
-                /* FIX: prevent comma clipping */
-                padding: 10px 14px;
-            
-                /* FIX: improve numeric readability */
-            
-                background-color: #212635;
-                border-radius: 8px;
+                letter-spacing: -0.3px;
+                padding: 8px 16px;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 rgba(99, 102, 241, 0.08), 
+                    stop:0.5 rgba(139, 92, 246, 0.08), 
+                    stop:1 rgba(168, 85, 247, 0.08));
+                border: 1px solid rgba(139, 92, 246, 0.2);
+                border-radius: 10px;
             }
 
             QPushButton {
-                font-weight: bold; border-radius: 6px; padding: 12px; font-size: 14px;
-            }
-            #secondaryButton {
-                background-color: #3A4458; color: #E0E0E0; border: none;
-            }
-            #secondaryButton:hover { background-color: #4A5568; }
-
-            #primaryButton { border: none; }
-            #primaryButton[transaction_type="BUY"] { background-color: #29C7C9; color: #161A25; }
-            #primaryButton[transaction_type="BUY"]:hover { background-color: #32E0E3; }
-            #primaryButton[transaction_type="SELL"] { background-color: #F85149; color: #161A25; }
-            #primaryButton[transaction_type="SELL"]:hover { background-color: #FA6B64; }
-        #infoLabel {
-                font-size: 12.5px;
-            }
-            
-            .badge {
-                padding: 4px 10px;
-                border-radius: 10px;
-                font-weight: 600;
+                font-weight: 700; 
+                border-radius: 8px; 
+                padding: 14px 24px; 
+                font-size: 14px;
                 letter-spacing: 0.3px;
             }
-            
+
+            #secondaryButton {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #374151, stop:1 #2D3748);
+                color: #E5E7EB; 
+                border: 1px solid #4B5563;
+            }
+            #secondaryButton:hover { 
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #4B5563, stop:1 #374151);
+                border: 1px solid #6B7280;
+            }
+
+            #primaryButton { 
+                border: none;
+                font-weight: 700;
+            }
+            #primaryButton[transaction_type="BUY"] { 
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #10B981, stop:1 #059669);
+                color: #FFFFFF;
+            }
+            #primaryButton[transaction_type="BUY"]:hover { 
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #34D399, stop:1 #10B981);
+            }
+            #primaryButton[transaction_type="SELL"] { 
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #EF4444, stop:1 #DC2626);
+                color: #FFFFFF;
+            }
+            #primaryButton[transaction_type="SELL"]:hover { 
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #F87171, stop:1 #EF4444);
+            }
+
+            .badge {
+                padding: 6px 12px;
+                border-radius: 12px;
+                font-weight: 700;
+                font-size: 12px;
+                letter-spacing: 0.5px;
+            }
+
             .badge.strike {
-                background-color: #1E2433;   /* calm blue-grey */
-                color: #A9B1C3;
-                border: 1px solid #2A3140;
+                background: rgba(107, 114, 128, 0.15);
+                color: #9CA3AF;
+                border: 1px solid rgba(107, 114, 128, 0.25);
             }
-            
+
             .badge.ltp {
-                background-color: rgba(41, 199, 201, 0.15); /* teal glow */
-                color: #29C7C9;
-                border: 1px solid rgba(41, 199, 201, 0.35);
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 rgba(16, 185, 129, 0.2), 
+                    stop:1 rgba(5, 150, 105, 0.2));
+                color: #34D399;
+                border: 1px solid rgba(16, 185, 129, 0.4);
             }
 
-            /* Refresh button styling */
-        #refreshButton {
-            background-color: #3A4458; 
-            color: #E0E0E0; 
-            border: 1px solid #4A5568;
-        }
-        #refreshButton:hover { 
-            background-color: #4A5568; 
-            color: #FFFFFF;
-        }
-        #refreshButton:pressed {
-            background-color: #2A3140;
-        }
+            #refreshButton {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #374151, stop:1 #2D3748);
+                color: #E5E7EB; 
+                border: 1px solid #4B5563;
+            }
+            #refreshButton:hover { 
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #6366F1, stop:1 #4F46E5);
+                color: #FFFFFF;
+                border: 1px solid #6366F1;
+            }
+            #refreshButton:pressed {
+                background: #4338CA;
+            }
 
-        /* Confirm/Place Order button styling */
-        #confirmButton {
-            background-color: #29C7C9; 
-            color: #161A25;
-            font-weight: bold;
-        }
-        #confirmButton:hover { 
-            background-color: #32E0E3; 
-            color: #161A25;
-        }
-        #confirmButton:pressed {
-            background-color: #1FA8AA;
-        }
+            #confirmButton {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #8B5CF6, stop:1 #7C3AED);
+                color: #FFFFFF;
+                font-weight: 700;
+                border: 1px solid rgba(139, 92, 246, 0.3);
+            }
+            #confirmButton:hover { 
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #A78BFA, stop:1 #8B5CF6);
+            }
+            #confirmButton:pressed {
+                background: #6D28D9;
+            }
         """)
-
     def _update_summary(self):
         qty = self.lots_spinbox.value() * self.contract.lot_size
         price = self.price_spinbox.value()

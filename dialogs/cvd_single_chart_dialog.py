@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
     QPushButton, QWidget
 )
 from PySide6.QtCore import Qt, QTimer, Signal
-from pyqtgraph import AxisItem
+from pyqtgraph import AxisItem, TextItem
 
 from kiteconnect import KiteConnect
 from core.cvd.cvd_historical import CVDHistoricalBuilder
@@ -213,6 +213,16 @@ class CVDSingleChartDialog(QDialog):
         self.crosshair_line = pg.InfiniteLine(angle=90, movable=False, pen=pen)
         self.crosshair_line.hide()
         self.plot.addItem(self.crosshair_line)
+        # --- X-axis floating time label (TradingView style) ---
+        self.x_time_label = pg.TextItem(
+            "",
+            anchor=(0.5, 0),  # center horizontally, stick to axis
+            color="#E0E0E0",
+            fill=pg.mkBrush("#212635"),
+            border=pg.mkPen("#3A4458")
+        )
+        self.x_time_label.hide()
+        self.plot.addItem(self.x_time_label, ignoreBounds=True)
 
         self.plot.scene().sigMouseMoved.connect(self._on_mouse_moved)
         self.dot_timer = QTimer(self)
@@ -229,19 +239,35 @@ class CVDSingleChartDialog(QDialog):
     def _on_mouse_moved(self, pos):
         if not self.plot.sceneBoundingRect().contains(pos):
             self.crosshair_line.hide()
+            self.x_time_label.hide()
             return
 
         mouse_point = self.plot.plotItem.vb.mapSceneToView(pos)
         x = int(round(mouse_point.x()))
 
-        if 0 <= x < len(self.all_timestamps):
-            self.crosshair_line.setPos(x)
-            self.crosshair_line.show()
+        total = len(self.all_timestamps)
+        if not (0 <= x < total):
+            self.crosshair_line.hide()
+            self.x_time_label.hide()
+            return
 
-            ts = self.all_timestamps[x]
-            self.status_label.setText(
-                f"{ts.strftime('%Y-%m-%d %H:%M')} | CVD cursor"
-            )
+        # Move crosshair
+        self.crosshair_line.setPos(x)
+        self.crosshair_line.show()
+
+        # Timestamp for this candle
+        ts = self.all_timestamps[x]
+        time_text = ts.strftime("%H:%M")
+
+        # --- Position label on X-axis ---
+        vb = self.plot.plotItem.vb
+        y_min = vb.viewRange()[1][0]
+        y_max = vb.viewRange()[1][1]
+        y_pos = y_min + (y_max - y_min) * 0.03  # 6% above bottom
+
+        self.x_time_label.setText(time_text)
+        self.x_time_label.setPos(x, y_pos)
+        self.x_time_label.show()
 
     def _on_date_changed(self, current_date: datetime, previous_date: datetime):
         today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
