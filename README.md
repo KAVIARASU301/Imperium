@@ -1,4 +1,4 @@
-# Options Scalper
+# Options Badger
 
 Hey there! Welcome to the Options Scalper project. This is a trading application I've been working on, built to make scalping options on the Indian stock market a bit easier and more intuitive. It connects to Zerodha's Kite API to handle live data, place orders, and manage positions.
 
