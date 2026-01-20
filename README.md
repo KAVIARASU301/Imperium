@@ -10,33 +10,7 @@ This started as a personal project to build a tool that fit my own trading style
 * **Quick Trading:** Panels for quickly buying and selling calls/puts, and for exiting positions with a single click.
 * **Position Tracking:** Keeps track of your open positions, showing your real-time profit and loss.
 * **Market Monitor:** A separate window to monitor price charts for different indices.
+* **CVD Monitor:** A separate window to monitor price charts for different indices.
 * **Paper Trading Mode:** A built-in paper trading feature to test out strategies without risking real money.
-
-## A Quick Look
-![Screenshot](https://github.com/user-attachments/assets/b0085bd3-21d9-4bcf-adee-8ae887dbdf9b)
-
-
-
-## Getting Started
-
-1.  **Clone the repository:**
-    ```bash
-    git clone [https://github.com/KAVIARASU301/Options_Trading.git]
-    cd options_scalper
-    ```
-2.  **Install the necessary libraries:**
-    ```bash
-    pip install -r requirements.txt
-    ```
-3.  **Set up your API keys:**
-    You'll need to add your Zerodha Kite API key and secret in the configuration files.
-4.  **Run the application:**
-    ```bash
-    python main.py
-    ```
-
-## Heads Up! (Disclaimer)
-
-Please remember that this is a personal project. While I'm using it myself, it's not a professionally audited piece of software. Trading in the stock market carries significant risk, and you should be fully aware of what you're doing. Use this tool at your own risk, and I'd highly recommend running it in paper trading mode first to get comfortable with how it works.
 
 Happy trading!
