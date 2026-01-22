@@ -109,6 +109,9 @@ def create_enhanced_menu_bar(parent) -> Tuple[QMenuBar, Dict[str, QAction]]:
     menu_actions["cvd_market_monitor"] = tools_menu.addAction("CVD Multi Chart")
     menu_actions["cvd_market_monitor"].setShortcut("Ctrl+D")
 
+    menu_actions["cvd_symbol_sets"] = tools_menu.addAction("CVD Symbol Sets")
+    menu_actions["cvd_symbol_sets"].setShortcut("Ctrl+Shift+D")
+
     menu_actions["option_chain"] = QAction("Option Chain", parent)
     menu_actions["option_chain"].setShortcut("Ctrl+O")
     tools_menu.addAction(menu_actions["option_chain"])

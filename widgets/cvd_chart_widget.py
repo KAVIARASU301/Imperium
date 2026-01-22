@@ -53,6 +53,8 @@ class CVDChartWidget(QWidget):
         self.current_date = None
         self.previous_date = None
         self.live_mode = True
+        self._historical_loaded = False
+        self._historical_failed = False
 
         # --- Live dot pulse state ---
         self._pulse_size = 6
@@ -71,8 +73,8 @@ class CVDChartWidget(QWidget):
 
         self._setup_ui()
         self._setup_crosshair()
-        self._load_historical()
-        self._start_refresh_timer()
+        # self._load_historical()
+        # self._start_refresh_timer()
 
         # Pulse animation timer (smooth decay)
         self.pulse_timer = QTimer(self)
@@ -150,6 +152,26 @@ class CVDChartWidget(QWidget):
         self.plot.addItem(self.end_dot)
 
         root.addWidget(self.plot)
+
+    def set_instrument(self, token: int, symbol: str):
+        if not token or not isinstance(token, int):
+            return
+
+        self.instrument_token = token
+        self.symbol = symbol
+        self.title_label.setText(f"{symbol} (Rebased)")
+
+        # Reset historical state
+        self._historical_loaded = False
+        self._historical_failed = False
+        self._last_hist_range = None
+
+        # ✅ Start timer ONLY now
+        if not hasattr(self, "timer"):
+            self._start_refresh_timer()
+
+        # Load now (safe)
+        self._load_historical()
 
     def _setup_crosshair(self):
         """Setup synchronized crosshair."""
@@ -248,6 +270,8 @@ class CVDChartWidget(QWidget):
 
     def load_historical_dates(self, current_date: datetime, previous_date: datetime):
         """Load data for specific dates (used by navigator)."""
+        if not self.instrument_token or not isinstance(self.instrument_token, int):
+            return
 
         today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
 
@@ -275,21 +299,44 @@ class CVDChartWidget(QWidget):
     # ------------------------------------------------------------------
 
     def _load_historical(self):
+        """
+        Load historical data ONCE per date-range.
+
+        Design rules:
+        - Never spam REST API
+        - Fail once, then stop retrying
+        - Reload ONLY if date range actually changes
+        - Safe for multi-chart dialogs
+        """
+
+        # --- Hard guards ---
+        if self._historical_failed:
+            return
+
         if not self.kite or not getattr(self.kite, "access_token", None):
+            self._historical_failed = True
             return
 
         try:
-            # Determine date range
+            # --- Determine date range ---
             if self.live_mode:
                 to_dt = datetime.now()
-                # Fetch wider window to safely include last trading session (weekends safe)
                 from_dt = to_dt - timedelta(days=5)
-
             else:
-                # Historical mode with specific dates
+                if not self.current_date or not self.previous_date:
+                    return
                 to_dt = self.current_date + timedelta(days=1)
                 from_dt = self.previous_date
 
+            date_key = (from_dt, to_dt)
+
+            # --- Prevent duplicate reloads ---
+            if self._historical_loaded and self._last_hist_range == date_key:
+                return
+
+            self._last_hist_range = date_key
+
+            # --- Fetch historical ---
             hist = self.kite.historical_data(
                 self.instrument_token,
                 from_dt,
@@ -298,42 +345,53 @@ class CVDChartWidget(QWidget):
             )
 
             if not hist:
+                self._historical_failed = True
                 return
 
+            # --- Build dataframe ---
             df = pd.DataFrame(hist)
             df["date"] = pd.to_datetime(df["date"])
             df.set_index("date", inplace=True)
 
             cvd_df = CVDHistoricalBuilder.build_cvd_ohlc(df)
-
             cvd_df["session"] = cvd_df.index.date
 
-            # Filter to target dates
+            # --- Filter sessions ---
             if self.live_mode:
                 sessions = sorted(cvd_df["session"].unique())[-2:]
             else:
-                target_dates = [self.previous_date.date(), self.current_date.date()]
-                sessions = [d for d in sorted(cvd_df["session"].unique())
-                            if d in target_dates]
+                target_dates = {
+                    self.previous_date.date(),
+                    self.current_date.date()
+                }
+                sessions = [
+                    d for d in sorted(cvd_df["session"].unique())
+                    if d in target_dates
+                ]
 
             cvd_df = cvd_df[cvd_df["session"].isin(sessions)]
 
+            # --- Previous day close ---
             if len(sessions) >= 2:
-                prev_sess = sessions[0]
-                prev_data = cvd_df[cvd_df["session"] == prev_sess]
-                if not prev_data.empty:
-                    self.prev_day_close_cvd = prev_data["close"].iloc[-1]
-                else:
-                    self.prev_day_close_cvd = 0.0
+                prev_data = cvd_df[cvd_df["session"] == sessions[0]]
+                self.prev_day_close_cvd = (
+                    prev_data["close"].iloc[-1]
+                    if not prev_data.empty else 0.0
+                )
             else:
                 self.prev_day_close_cvd = 0.0
 
+            # --- Commit ---
             self.cvd_df = cvd_df
+            self._historical_loaded = True
             self._plot()
 
         except Exception as e:
+            self._historical_failed = True
             import logging
-            logging.getLogger(__name__).exception(f"Failed to load data: {e}")
+            logging.getLogger(__name__).exception(
+                f"CVD historical failed once for {self.symbol}. Disabling retries."
+            )
 
     # ------------------------------------------------------------------
     # Plotting + Momentum Dot

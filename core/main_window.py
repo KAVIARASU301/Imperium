@@ -1,6 +1,7 @@
 # core/main_window.py
 import logging
 import os
+from pathlib import Path
 from typing import Dict, List, Optional, Union
 from datetime import datetime, timedelta, time, date
 from PySide6.QtWidgets import (QMainWindow, QPushButton, QApplication, QWidget, QVBoxLayout,
@@ -40,6 +41,8 @@ from dialogs.market_monitor_dialog import MarketMonitorDialog
 from core.cvd.cvd_engine import CVDEngine
 from dialogs.cvd_single_chart_dialog import CVDSingleChartDialog
 from dialogs.cvd_multi_chart_dialog import CVDMultiChartDialog
+from core.cvd.cvd_symbol_sets import CVDSymbolSetManager
+from dialogs.cvd_symbol_set_multi_chart_dialog import CVDSetMultiChartDialog
 
 logger = logging.getLogger(__name__)
 
@@ -238,7 +241,7 @@ class ScalperMainWindow(QMainWindow):
         # CVD monitor symbols (v1 – fixed indices)
         self.cvd_symbols = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"]
         self.active_cvd_tokens: set[int] = set()
-
+        self.cvd_symbol_set_manager = CVDSymbolSetManager(base_dir=Path.home() / ".options_badger")
         # --- FIX: UI Throttling Implementation ---
         self._latest_market_data = {}
         self._ui_update_needed = False
@@ -564,6 +567,7 @@ class ScalperMainWindow(QMainWindow):
         menu_actions['market_monitor'].triggered.connect(self._show_market_monitor_dialog)
         menu_actions['cvd_chart'].triggered.connect(self._show_cvd_chart_dialog)
         menu_actions['cvd_market_monitor'].triggered.connect(self._show_cvd_market_monitor_dialog)
+        menu_actions['cvd_symbol_sets'].triggered.connect(self._show_cvd_symbol_set_dialog)
 
     def _show_order_history_dialog(self):
         if not hasattr(self, 'order_history_dialog') or self.order_history_dialog is None:
@@ -699,8 +703,25 @@ class ScalperMainWindow(QMainWindow):
         dlg.raise_()
         dlg.activateWindow()
 
+    def _show_cvd_symbol_set_dialog(self):
+        dlg = CVDSetMultiChartDialog(
+            kite=self.real_kite_client,
+            symbol_set_manager=self.cvd_symbol_set_manager,
+            resolve_fut_token_fn=self._get_nearest_future_token,
+            register_token_fn=lambda t: (
+                self.cvd_engine.register_token(t),
+                self.active_cvd_tokens.add(t),
+                self._update_market_subscriptions()
+            ),
+            unregister_tokens_fn=lambda tokens: (
+                self.active_cvd_tokens.difference_update(tokens),
+                self._update_market_subscriptions()
+            ),
+            parent=self
+        )
+        dlg.show()
+
     def _on_cvd_market_monitor_closed(self):
-        self.active_cvd_tokens.clear()
         self._update_market_subscriptions()
 
     def _on_market_monitor_closed(self, dialog: QDialog):
