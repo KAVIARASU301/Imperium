@@ -243,6 +243,10 @@ class QuickOrderDialog(QDialog):
         self.place_order_btn.setObjectName("confirmButton")
         self.place_order_btn.clicked.connect(self._accept_dialog)
 
+        # ✅ ENTER key will trigger this button
+        self.place_order_btn.setDefault(True)
+        self.place_order_btn.setAutoDefault(True)
+
         action_layout.addWidget(self.refresh_btn)
         action_layout.addWidget(self.place_order_btn)
         parent_layout.addLayout(action_layout)
@@ -640,6 +644,17 @@ class QuickOrderDialog(QDialog):
             price = order_data.get('price', self.contract.ltp)
             self.price_spinbox.setValue(price)
             logger.info(f"Dialog populated for modifying order {order_data.get('order_id')}")
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+            self._accept_dialog()
+            event.accept()
+            return
+        elif event.key() == Qt.Key_Escape:
+            self.reject()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def mousePressEvent(self, event: QMouseEvent):
         if event.button() == Qt.LeftButton:

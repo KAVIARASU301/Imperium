@@ -246,14 +246,18 @@ class OrderConfirmationDialog(QDialog):
         self.refresh_btn.setObjectName("secondaryButton")
         self.refresh_btn.clicked.connect(self.refresh_requested.emit)
 
-        confirm_btn = QPushButton("CONFIRM ORDER")
-        confirm_btn.setObjectName("primaryButton")  # Changed for consistency
-        confirm_btn.clicked.connect(self.accept)
+        self.confirm_btn = QPushButton("CONFIRM ORDER")
+        self.confirm_btn.setObjectName("primaryButton")
+        self.confirm_btn.clicked.connect(self.accept)
+
+        # ✅ Enter key will trigger this
+        self.confirm_btn.setDefault(True)
+        self.confirm_btn.setAutoDefault(True)
 
         layout.addWidget(cancel_btn)
         layout.addWidget(self.refresh_btn)
         layout.addStretch()
-        layout.addWidget(confirm_btn)
+        layout.addWidget(self.confirm_btn)
         return layout
 
     def _apply_styles(self):
@@ -309,6 +313,18 @@ class OrderConfirmationDialog(QDialog):
             }
             #primaryButton:hover { background-color: #32E0E3; }
         """)
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+            # Explicit confirmation
+            self.accept()
+            event.accept()
+            return
+        elif event.key() == Qt.Key_Escape:
+            self.reject()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def mousePressEvent(self, event: QMouseEvent):
         if event.button() == Qt.LeftButton:

@@ -3,12 +3,12 @@ import json
 import os
 from typing import Dict, List
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QTableWidget, QTableWidgetItem, QHeaderView,
-    QMenu, QAbstractItemView
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel,
+    QTableWidget, QTableWidgetItem, QHeaderView, QApplication,
+    QMenu, QAbstractItemView, QDialog, QFormLayout, QDoubleSpinBox, QPushButton
 )
 from PySide6.QtCore import Qt, Signal, QPoint, QTimer, QEvent
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtGui import QColor, QFont, QFontMetrics
 
 from utils.config_manager import ConfigManager
 
@@ -23,6 +23,8 @@ class PositionsTable(QWidget):
     exit_requested = Signal(dict)
     refresh_requested = Signal()
     modify_sl_tp_requested = Signal(str)
+    portfolio_sl_tp_requested = Signal(float, float)
+    portfolio_sl_tp_cleared = Signal()
 
     SYMBOL_COL = 0
     QUANTITY_COL = 1
@@ -47,6 +49,9 @@ class PositionsTable(QWidget):
         if not self._load_column_widths():
             self._set_default_column_widths()
 
+        self._portfolio_sl = None
+        self._portfolio_tp = None
+
     # ------------------------------------------------------------------
     # UI
     # ------------------------------------------------------------------
@@ -66,22 +71,49 @@ class PositionsTable(QWidget):
 
         main_layout.addWidget(self.table, 1)
 
-        footer = QWidget()
-        footer.setObjectName("footer")
-        footer_layout = QHBoxLayout(footer)
+        self.footer = QWidget()
+        self.footer.setObjectName("footer")
+        footer_layout = QHBoxLayout(self.footer)
         footer_layout.setContentsMargins(10, 5, 10, 5)
+        self.footer.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.footer.customContextMenuRequested.connect(
+            self._show_footer_context_menu
+        )
 
-        self.total_pnl_label = QLabel("Total P&L: ₹ 0")
-        self.total_pnl_label.setObjectName("footerLabel")
+        # --- Refresh (icon only, static) ---
+        self.refresh_button = QPushButton("⟳")
+        self.refresh_button.setObjectName("footerIconButton")
+        self.refresh_button.setFixedWidth(28)
+        self.refresh_button.setToolTip("Refresh Positions")
 
-        self.refresh_button = QPushButton("Refresh")
-        self.refresh_button.setObjectName("footerButton")
+        # --- Portfolio SL / TP (static text) ---
+        self.portfolio_sl_tp_label = QLabel("SL/TP: —")
+        self.portfolio_sl_tp_label.setObjectName("portfolioSLTPLabel")
 
-        footer_layout.addWidget(self.total_pnl_label)
-        footer_layout.addStretch()
+        # --- Total P&L (static title) ---
+        self.total_pnl_title = QLabel("Total P&L: ₹")
+        self.total_pnl_title.setObjectName("footerTitleLabel")
+
+        # --- Total P&L value (fixed-width numeric lane) ---
+        self.total_pnl_value = QLabel("0")
+        self.total_pnl_value.setObjectName("footerValueLabel")
+        self.total_pnl_value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+
+        # Reserve space for ~6-digit P&L (₹ -9,99,999)
+        fm = QFontMetrics(self.total_pnl_value.font())
+        reserved_width = fm.horizontalAdvance("₹ -9,99,999")
+        self.total_pnl_value.setFixedWidth(reserved_width + 6)
+
+        # ---- Layout order ----
         footer_layout.addWidget(self.refresh_button)
+        footer_layout.addSpacing(10)
+        footer_layout.addWidget(self.portfolio_sl_tp_label)
+        footer_layout.addStretch()  # ⬅️ everything after this sticks to right
+        footer_layout.addWidget(self.total_pnl_title)
+        footer_layout.addSpacing(6)
+        footer_layout.addWidget(self.total_pnl_value)
 
-        main_layout.addWidget(footer)
+        main_layout.addWidget(self.footer)
 
     def _apply_styles(self):
         self.table.verticalHeader().hide()
@@ -124,22 +156,22 @@ class PositionsTable(QWidget):
 
             /* ROW HOVER (via selection) */
             /* ROW SELECTION — uniform, no cell emphasis */
-QTableWidget::item:selected,
-QTableWidget::item:selected:active,
-QTableWidget::item:selected:!active {
-    background-color: #202742;
-    color: #E0E0E0;
-}
-
-/* REMOVE current-cell focus rectangle */
-QTableWidget::item:selected:!active {
-    outline: 0;
-}
-
-/* KILL any per-cell hover completely */
-QTableWidget::item:hover {
-    background-color: transparent;
-}
+            QTableWidget::item:selected,
+            QTableWidget::item:selected:active,
+            QTableWidget::item:selected:!active {
+                background-color: #202742;
+                color: #E0E0E0;
+            }
+            
+            /* REMOVE current-cell focus rectangle */
+            QTableWidget::item:selected:!active {
+                outline: 0;
+            }
+            
+            /* KILL any per-cell hover completely */
+            QTableWidget::item:hover {
+                background-color: transparent;
+            }
 
 
             /* REMOVE CELL HOVER COMPLETELY */
@@ -172,6 +204,38 @@ QTableWidget::item:hover {
                 color: #161A25;
                 border-color: #29C7C9;
             }
+            #portfolioSLTPLabel {
+                color: #A9B1C3;
+                font-size: 12px;
+                font-weight: 500;
+            }
+            
+            #footerIconButton {
+                background-color: transparent;
+                color: #A9B1C3;
+                border: 1px solid #3A4458;
+                border-radius: 4px;
+                padding: 4px;
+                font-size: 14px;
+            }
+            
+            #footerIconButton:hover {
+                background-color: #29C7C9;
+                color: #161A25;
+                border-color: #29C7C9;
+            }
+            #footerTitleLabel {
+                color: #A9B1C3;
+                font-size: 13px;
+                font-weight: 600;
+            }
+            
+            #footerValueLabel {
+                font-size: 14px;
+                font-weight: 700;
+            }
+
+            
             /* ===== CONTEXT MENU ===== */
 QMenu {
     background-color: #1B2030;
@@ -281,6 +345,61 @@ QMenu::item#exitAction:selected {
 
         menu.exec_(self.table.viewport().mapToGlobal(pos))
 
+    def _show_footer_context_menu(self, pos: QPoint):
+        menu = QMenu(self)
+
+        is_set = self._is_portfolio_sl_tp_set()
+
+        set_or_alter_text = (
+            "Alter Portfolio SL / Target"
+            if is_set
+            else "Set Portfolio SL / Target"
+        )
+
+        set_sl_tp = menu.addAction(set_or_alter_text)
+        clear_sl_tp = menu.addAction("Clear Portfolio SL / Target")
+
+        # 🔒 HARD GUARD: no positions → cannot set/alter
+        if not self._has_open_positions():
+            set_sl_tp.setEnabled(False)
+            set_sl_tp.setText(f"{set_or_alter_text} (No positions)")
+
+        action = menu.exec(self.footer.mapToGlobal(pos))
+
+        if action == set_sl_tp and self._has_open_positions():
+            self._open_portfolio_sl_tp_dialog(alter=is_set)
+
+        elif action == clear_sl_tp:
+            self._clear_portfolio_sl_tp()
+            self.portfolio_sl_tp_cleared.emit()
+
+    def _clear_portfolio_sl_tp(self):
+        self._portfolio_sl = None
+        self._portfolio_tp = None
+        self._update_portfolio_sl_tp_label()
+
+    def _update_portfolio_sl_tp_label(self):
+        if not self._has_open_positions() or (
+                self._portfolio_sl is None and self._portfolio_tp is None
+        ):
+            self.portfolio_sl_tp_label.setText("SL/TP: —")
+            self.portfolio_sl_tp_label.setStyleSheet("color: #A9B1C3;")
+            return
+
+        parts = []
+        if self._portfolio_sl is not None:
+            parts.append(f"SL ₹{abs(self._portfolio_sl):,.0f}")
+        if self._portfolio_tp is not None:
+            parts.append(f"TP ₹{self._portfolio_tp:,.0f}")
+
+        text = "  •  ".join(parts)
+        self.portfolio_sl_tp_label.setText(f"{text}")
+
+        # Risk-aware coloring
+        self.portfolio_sl_tp_label.setStyleSheet(
+            "color: #FBBF24; font-weight: 600;"  # amber = armed
+        )
+
     # ------------------------------------------------------------------
     # Data population (UNCHANGED LOGIC)
     # ------------------------------------------------------------------
@@ -294,6 +413,9 @@ QMenu::item#exitAction:selected {
             self.add_position(pos)
 
         self._update_footer()
+
+        if not positions_data:
+            self._clear_portfolio_sl_tp()
 
     def add_position(self, pos_data: dict):
         symbol = pos_data['tradingsymbol']
@@ -326,9 +448,12 @@ QMenu::item#exitAction:selected {
 
     def _update_footer(self):
         total_pnl = sum(pos.get('pnl', 0.0) for pos in self.positions.values())
-        self.total_pnl_label.setText(f"Total P&L: ₹ {total_pnl:,.0f}")
+        self.total_pnl_value.setText(f"{total_pnl:,.0f}")
+
         color = "#1DE9B6" if total_pnl >= 0 else "#F85149"
-        self.total_pnl_label.setStyleSheet(f"color: {color}; font-weight: 600;")
+        self.total_pnl_value.setStyleSheet(
+            f"color: {color}; font-weight: 700; font-size: 14px;"
+        )
 
     def _set_item(self, row, col, data, is_price=False):
         item = QTableWidgetItem()
@@ -441,6 +566,162 @@ QMenu::item#exitAction:selected {
                 json.dump(data, f, indent=2)
         except Exception:
             pass
+
+    def _open_portfolio_sl_tp_dialog(self, alter: bool = False):
+        if not self._has_open_positions():
+            return
+
+        position_count = len(self.positions)
+
+        RISK_PER_POSITION = 1000
+        DEFAULT_RR = 1.5
+
+        if alter and self._portfolio_sl and self._portfolio_tp:
+            # Prefill from existing values
+            default_sl = abs(self._portfolio_sl)
+            default_tp = abs(self._portfolio_tp)
+            default_rr = round(default_tp / default_sl, 2) if default_sl else DEFAULT_RR
+        else:
+            # Fresh defaults
+            default_sl = position_count * RISK_PER_POSITION
+            default_rr = DEFAULT_RR
+            default_tp = int(default_sl * default_rr)
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Alter Portfolio Risk" if alter else "Set Portfolio Risk")
+        dialog.setFixedWidth(360)
+
+        self._updating = False  # guard against signal loops
+
+        main_layout = QVBoxLayout(dialog)
+        main_layout.setSpacing(14)
+
+        # ---- Header ----
+        title = QLabel("Portfolio Stop Loss & Target")
+        title.setStyleSheet("font-size: 15px; font-weight: 700;")
+        subtitle = QLabel(f"{position_count} open positions")
+        subtitle.setStyleSheet("font-size: 11px; color: #9CA3AF;")
+
+        main_layout.addWidget(title)
+        main_layout.addWidget(subtitle)
+
+        # ---- Form ----
+        form = QFormLayout()
+        form.setSpacing(10)
+
+        # Stop Loss (ANCHOR)
+        sl_spin = QDoubleSpinBox()
+        sl_spin.setRange(0, 1_000_000)
+        sl_spin.setDecimals(0)
+        sl_spin.setSingleStep(500)
+        sl_spin.setValue(default_sl)
+        sl_spin.setPrefix("₹ ")
+
+        # Risk Reward
+        rr_spin = QDoubleSpinBox()
+        rr_spin.setRange(0.5, 5.0)
+        rr_spin.setDecimals(2)
+        rr_spin.setSingleStep(0.1)
+        rr_spin.setValue(default_rr)
+
+        # Target
+        tp_spin = QDoubleSpinBox()
+        tp_spin.setRange(0, 5_000_000)
+        tp_spin.setDecimals(0)
+        tp_spin.setSingleStep(500)
+        tp_spin.setValue(default_tp)
+        tp_spin.setPrefix("₹ ")
+
+        form.addRow("Stop Loss (₹)", sl_spin)
+        form.addRow("Risk–Reward", rr_spin)
+        form.addRow("Target (₹)", tp_spin)
+
+        main_layout.addLayout(form)
+
+        # ---- Reactive logic ----
+        def on_sl_changed(value):
+            if self._updating:
+                return
+            self._updating = True
+            tp_spin.setValue(int(value * rr_spin.value()))
+            self._updating = False
+
+        def on_rr_changed(value):
+            if self._updating:
+                return
+            self._updating = True
+            tp_spin.setValue(int(sl_spin.value() * value))
+            self._updating = False
+
+        def on_tp_changed(value):
+            if self._updating or sl_spin.value() == 0:
+                return
+            self._updating = True
+            rr_spin.setValue(round(value / sl_spin.value(), 2))
+            self._updating = False
+
+        sl_spin.valueChanged.connect(on_sl_changed)
+        rr_spin.valueChanged.connect(on_rr_changed)
+        tp_spin.valueChanged.connect(on_tp_changed)
+
+        # ---- Action button ----
+        btn = QPushButton("ARM PORTFOLIO SL / TP")
+        btn.setFixedHeight(34)
+        btn.clicked.connect(
+            lambda: (
+                self._set_portfolio_sl_tp(
+                    sl_spin.value(),
+                    tp_spin.value()
+                ),
+                self.portfolio_sl_tp_requested.emit(
+                    -sl_spin.value(),
+                    tp_spin.value()
+                ),
+                dialog.accept()
+            )
+        )
+
+        main_layout.addWidget(btn)
+        self._position_dialog_above_footer(dialog)
+        dialog.exec()
+
+    def _set_portfolio_sl_tp(self, sl: float, tp: float):
+        # User provides positive numbers
+        self._portfolio_sl = -abs(sl) if sl > 0 else None
+        self._portfolio_tp = abs(tp) if tp > 0 else None
+        self._update_portfolio_sl_tp_label()
+
+    def _is_portfolio_sl_tp_set(self) -> bool:
+        return self._portfolio_sl is not None or self._portfolio_tp is not None
+
+    def _has_open_positions(self) -> bool:
+        return bool(self.positions)
+
+    def _position_dialog_above_footer(self, dialog: QDialog):
+        dialog.adjustSize()
+        dialog_size = dialog.sizeHint()
+
+        # Footer position in global coordinates
+        footer_global = self.footer.mapToGlobal(QPoint(0, 0))
+
+        # Default: align dialog left with footer
+        x = footer_global.x()
+        y = footer_global.y() - dialog_size.height() - 40  # small gap above footer
+
+        # Screen bounds safety
+        screen = QApplication.primaryScreen().availableGeometry()
+
+        # Clamp horizontally
+        if x + dialog_size.width() > screen.right():
+            x = screen.right() - dialog_size.width() - 6
+        if x < screen.left():
+            x = screen.left() + 20
+
+        # Clamp vertically (if footer is too low)
+        if y < screen.top():
+            y = footer_global.y() + self.footer.height() + 6  # open below footer instead
+
+        dialog.move(x, y)
 
     def closeEvent(self, event):
         self._save_column_widths()

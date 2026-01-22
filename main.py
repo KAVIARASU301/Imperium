@@ -23,11 +23,11 @@ logger = logging.getLogger(__name__)
 def main():
     """Main function to run the application."""
     app = QApplication(sys.argv)
-    app.setWindowIcon(QIcon("assets/options_scalper.png"))
+    app.setWindowIcon(QIcon("assets/options_badger_icon.png"))
 
     temp_widget = QWidget()  # Temporary widget as QMessageBox parent
     temp_widget.hide()
-    logger.info("Options Scalper starting...")
+    logger.info("Options Badger starting...")
 
     login_manager = LoginManager()
 

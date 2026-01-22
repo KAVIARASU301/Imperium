@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (QMainWindow, QPushButton, QApplication, QWidget, 
 from PySide6.QtCore import Qt, QTimer, QUrl, QByteArray, QPoint
 from PySide6.QtMultimedia import QSoundEffect
 from kiteconnect import KiteConnect
-from PySide6.QtGui import QPalette, QColor
+from PySide6.QtGui import QPalette, QColor, QShortcut, QKeySequence
 import ctypes
 
 # Internal imports
@@ -255,6 +255,7 @@ class ScalperMainWindow(QMainWindow):
         self._setup_ui()
         self._setup_position_manager()
         self._connect_signals()
+        self._setup_keyboard_shortcuts()
         self._init_background_workers()
 
         if isinstance(self.trader, PaperTradingManager):
@@ -741,6 +742,114 @@ class ScalperMainWindow(QMainWindow):
         self.account_summary.pnl_history_requested.connect(self._show_pnl_history_dialog)
         self.position_manager.pending_orders_updated.connect(self._update_pending_order_widgets)
         self.inline_positions_table.refresh_requested.connect(self._refresh_positions)
+        self.inline_positions_table.portfolio_sl_tp_requested.connect(self.position_manager.set_portfolio_sl_tp)
+        self.inline_positions_table.portfolio_sl_tp_cleared.connect(self.position_manager.clear_portfolio_sl_tp)
+
+    def _setup_keyboard_shortcuts(self):
+        """
+        Global keyboard shortcuts for ultra-fast trading.
+        These are safe because they reuse existing methods.
+        """
+
+        self._shortcuts = []
+
+        def bind(key, callback):
+            sc = QShortcut(QKeySequence(key), self)
+            sc.setContext(Qt.ApplicationShortcut)  # Works even if focus is elsewhere
+            sc.activated.connect(callback)
+            self._shortcuts.append(sc)
+
+        # -------------------------
+        # BUY / SELL (ATM)
+        # -------------------------
+        # BUY (current option type)
+        bind("B", lambda: self.buy_exit_panel._on_buy_clicked())
+
+        # Toggle CALL / PUT
+        bind("T", self.buy_exit_panel.toggle_option_type)
+
+        # -------------------------
+        # EXIT CONTROLS
+        # -------------------------
+        bind("X", self._exit_all_positions)  # Exit ALL
+        bind("Alt+C", lambda: self._exit_option_positions(OptionType.CALL))
+        bind("Alt+P", lambda: self._exit_option_positions(OptionType.PUT))
+
+        # -------------------------
+        # LOT SIZE CONTROL (SAFE)
+        # -------------------------
+
+        # Fine tuning
+        bind("+", lambda: self._change_lot_size(1))
+        bind("-", lambda: self._change_lot_size(-1))
+
+        # Direct lot jumps (INTENT REQUIRED)
+        bind("Alt+1", lambda: self._set_lot_size(1))
+        bind("Alt+2", lambda: self._set_lot_size(2))
+        bind("Alt+3", lambda: self._set_lot_size(3))
+        bind("Alt+4", lambda: self._set_lot_size(4))
+        bind("Alt+5", lambda: self._set_lot_size(5))
+        bind("Alt+6", lambda: self._set_lot_size(6))
+        bind("Alt+7", lambda: self._set_lot_size(7))
+        bind("Alt+8", lambda: self._set_lot_size(8))
+        bind("Alt+9", lambda: self._set_lot_size(9))
+        bind("Alt+0", lambda: self._set_lot_size(10))
+
+        # -------------------------
+        # EXACT SINGLE STRIKE BUY
+        # -------------------------
+
+        # ATM + exact strike
+        bind("Shift+1", lambda: self._buy_exact_relative_strike(+1))
+        bind("Shift+2", lambda: self._buy_exact_relative_strike(+2))
+        bind("Shift+3", lambda: self._buy_exact_relative_strike(+3))
+        bind("Shift+4", lambda: self._buy_exact_relative_strike(+4))
+        bind("Shift+5", lambda: self._buy_exact_relative_strike(+5))
+        bind("Shift+6", lambda: self._buy_exact_relative_strike(+6))
+        bind("Shift+7", lambda: self._buy_exact_relative_strike(+7))
+        bind("Shift+8", lambda: self._buy_exact_relative_strike(+8))
+        bind("Shift+9", lambda: self._buy_exact_relative_strike(+9))
+        bind("Shift+0", lambda: self._buy_exact_relative_strike(+10))
+
+        # ATM - exact strike
+        bind("Ctrl+1", lambda: self._buy_exact_relative_strike(-1))
+        bind("Ctrl+2", lambda: self._buy_exact_relative_strike(-2))
+        bind("Ctrl+3", lambda: self._buy_exact_relative_strike(-3))
+        bind("Ctrl+4", lambda: self._buy_exact_relative_strike(-4))
+        bind("Ctrl+5", lambda: self._buy_exact_relative_strike(-5))
+        bind("Ctrl+6", lambda: self._buy_exact_relative_strike(-6))
+        bind("Ctrl+7", lambda: self._buy_exact_relative_strike(-7))
+        bind("Ctrl+8", lambda: self._buy_exact_relative_strike(-8))
+        bind("Ctrl+9", lambda: self._buy_exact_relative_strike(-9))
+        bind("Ctrl+0", lambda: self._buy_exact_relative_strike(-10))
+
+        # -------------------------
+        # ATM RELATIVE STRIKE BUY (RANGE / ALL)
+        # -------------------------
+
+        # ATM → +N (ALL strikes in between)
+        bind("Alt+Shift+1", lambda: self._buy_relative_to_atm(above=1))
+        bind("Alt+Shift+2", lambda: self._buy_relative_to_atm(above=2))
+        bind("Alt+Shift+3", lambda: self._buy_relative_to_atm(above=3))
+        bind("Alt+Shift+4", lambda: self._buy_relative_to_atm(above=4))
+        bind("Alt+Shift+5", lambda: self._buy_relative_to_atm(above=5))
+        bind("Alt+Shift+6", lambda: self._buy_relative_to_atm(above=6))
+        bind("Alt+Shift+7", lambda: self._buy_relative_to_atm(above=7))
+        bind("Alt+Shift+8", lambda: self._buy_relative_to_atm(above=8))
+        bind("Alt+Shift+9", lambda: self._buy_relative_to_atm(above=9))
+        bind("Alt+Shift+0", lambda: self._buy_relative_to_atm(above=10))
+
+        # ATM → −N (ALL strikes in between)
+        bind("Alt+Ctrl+1", lambda: self._buy_relative_to_atm(below=1))
+        bind("Alt+Ctrl+2", lambda: self._buy_relative_to_atm(below=2))
+        bind("Alt+Ctrl+3", lambda: self._buy_relative_to_atm(below=3))
+        bind("Alt+Ctrl+4", lambda: self._buy_relative_to_atm(below=4))
+        bind("Alt+Ctrl+5", lambda: self._buy_relative_to_atm(below=5))
+        bind("Alt+Ctrl+6", lambda: self._buy_relative_to_atm(below=6))
+        bind("Alt+Ctrl+7", lambda: self._buy_relative_to_atm(below=7))
+        bind("Alt+Ctrl+8", lambda: self._buy_relative_to_atm(below=8))
+        bind("Alt+Ctrl+9", lambda: self._buy_relative_to_atm(below=9))
+        bind("Alt+Ctrl+0", lambda: self._buy_relative_to_atm(below=10))
 
     def _setup_position_manager(self):
         self.position_manager.positions_updated.connect(self._on_positions_updated)
@@ -748,6 +857,7 @@ class ScalperMainWindow(QMainWindow):
         self.position_manager.position_removed.connect(self._on_position_removed)
         self.position_manager.refresh_completed.connect(self._on_refresh_completed)
         self.position_manager.api_error_occurred.connect(self._on_api_error)
+        self.position_manager.portfolio_exit_triggered.connect(self._on_portfolio_exit_triggered)
 
     def _on_instruments_loaded(self, data: dict):
         self.instrument_data = data
@@ -961,6 +1071,17 @@ class ScalperMainWindow(QMainWindow):
         logger.error(f"PositionManager reported API error: {error_message}")
         self.statusBar().showMessage(f"API Error: {error_message}", 5000)
 
+    def _on_portfolio_exit_triggered(self, reason: str, pnl: float):
+        logger.info(
+            f"Portfolio exit handled by UI | Reason={reason}, PnL={pnl:.2f}"
+        )
+
+        # SUCCESS sound for TARGET, FAIL sound for SL
+        if reason == "TARGET":
+            self._play_sound(success=True)
+        else:
+            self._play_sound(success=False)
+
     def _show_positions_dialog(self):
         if self.positions_dialog is None:
             self.positions_dialog = OpenPositionsDialog(self)
@@ -1093,39 +1214,92 @@ class ScalperMainWindow(QMainWindow):
             QMessageBox.critical(self, "Cancel Failed", f"Could not cancel order {order_id}:\n{e}")
 
     def _show_about(self):
-        """Displays a concise About dialog for the application."""
+        """Displays a polished About dialog compatible with dark themes."""
+
         about_text = """
-        <div style="font-family:'Segoe UI',sans-serif; font-size:10.5pt; line-height:1.45;">
-            <h2 style="margin-bottom:6px;">Blue Whale Trading Terminal</h2>
+        <div style="
+            font-family:'Segoe UI',sans-serif;
+            font-size:11pt;
+            line-height:1.6;
+            color:#E6EAF2;
+        ">
 
-            <p style="margin:2px 0;"><b>Version:</b> 1.0.0</p>
-            <p style="margin:2px 0;"><b>Owner:</b> Kaviarasu Murugan</p>
-            <p style="margin:2px 0;"><b>Contact:</b> kaviarasu301@gmail.com</p>
-            <p style="margin:2px 0;">© 2025 Kaviarasu</p>
+            <h2 style="margin-bottom:4px; color:#FFFFFF;">
+                🦡 Options Badger Trading Terminal
+            </h2>
 
-            <hr style="margin:10px 0;">
+            <div style="color:#9AA4B2; margin-bottom:12px;">
+                Precision tools for serious options traders
+            </div>
 
-            <p>
-                Blue Whale Trading Terminal is a desktop application designed for
-                fast, stable, and secure options trading and market monitoring.
-                It provides real-time data visualization, order management,
-                and analytical tools focused on intraday decision-making.
+            <table style="margin-top:6px; margin-bottom:12px; color:#E6EAF2;">
+                <tr>
+                    <td style="padding-right:14px; color:#A9B1C3;"><b>Version</b></td>
+                    <td>1.0.0</td>
+                </tr>
+                <tr>
+                    <td style="padding-right:14px; color:#A9B1C3;"><b>Author</b></td>
+                    <td>Kaviarasu Murugan</td>
+                </tr>
+                <tr>
+                    <td style="padding-right:14px; color:#A9B1C3;"><b>Contact</b></td>
+                    <td>kaviarasu301@gmail.com</td>
+                </tr>
+                <tr>
+                    <td style="padding-right:14px; color:#A9B1C3;"><b>©</b></td>
+                    <td>2025</td>
+                </tr>
+            </table>
+
+            <hr style="margin:14px 0; border:1px solid #2A3140;">
+
+            <p style="color:#E6EAF2;">
+                <b>Options Badger</b> is a high-performance desktop trading terminal
+                designed for speed, stability, and clarity during live market conditions.
             </p>
 
-            <p>
-                The application is built using Python and PySide6, with integration
-                to the Kite Connect API. It supports both live trading and paper
-                trading modes for testing and analysis.
+            <p style="color:#E6EAF2;">
+                The platform is optimized for <b>options scalping, intraday monitoring,
+                and disciplined risk management</b>, with tools built for fast decision-making.
             </p>
 
-            <p style="margin-top:10px;">
-                <b>License Notice:</b><br>
-                Sale or redistribution of this software is not permitted.
+            <p style="color:#E6EAF2;">
+                Built entirely in <b>Python</b> and powered by the
+                <b>Kite Connect API</b>, the application supports both
+                <b>Live Trading</b> and <b>Paper Trading</b> modes.
             </p>
+
+            <div style="
+                margin-top:18px;
+                padding:14px;
+                background:linear-gradient(180deg, #1C2232, #161A25);
+                border-left:4px solid #F39C12;
+                border-radius:8px;
+                color:#E6EAF2;
+            ">
+                <div style="
+                font-size:11.5pt;
+                font-weight:700;
+                letter-spacing:0.4px;
+                color:#FFD37A;
+                margin-bottom:6px;
+            ">
+                LICENSE NOTICE
+            </div>
+
+            <div style="font-size:10.8pt; color:#C7CEDB;">
+                This software is intended for <b>personal use only</b>.<br>
+                Sale, redistribution, reverse engineering, or commercial use
+                without explicit written permission is strictly prohibited.
+            </div>
         </div>
         """
 
-        QMessageBox.about(self, "About Blue Whale Trading Terminal", about_text)
+        QMessageBox.about(
+            self,
+            "About Options Badger",
+            about_text
+        )
 
     def _show_settings(self):
         """
@@ -2272,3 +2446,74 @@ class ScalperMainWindow(QMainWindow):
         )
 
         return fut.get("instrument_token")
+
+    def _change_lot_size(self, delta: int):
+        current = self.header.lot_size_spin.value()
+        new_value = max(1, current + delta)
+        self.header.lot_size_spin.setValue(new_value)
+
+    def _set_lot_size(self, value: int):
+        if value > 0:
+            self.header.lot_size_spin.setValue(value)
+
+    def _buy_relative_to_atm(self, above: int = 0, below: int = 0):
+        """
+        Buy option at ATM / ATM+n / ATM-n using BuyExitPanel logic.
+        above: strikes above ATM
+        below: strikes below ATM
+        """
+
+        if not self.buy_exit_panel:
+            return
+
+        # Reset previous selections
+        self.buy_exit_panel.above_spin.setValue(0)
+        self.buy_exit_panel.below_spin.setValue(0)
+
+        # Apply new selection
+        if above > 0:
+            self.buy_exit_panel.above_spin.setValue(above)
+        if below > 0:
+            self.buy_exit_panel.below_spin.setValue(below)
+
+        # Trigger BUY using existing safe logic
+        self.buy_exit_panel._on_buy_clicked()
+
+    def _buy_exact_relative_strike(self, offset: int):
+        """
+        Buy EXACTLY one strike relative to ATM.
+        Must NOT inherit BuyExitPanel above/below state.
+        """
+
+        if not self.strike_ladder or not self.buy_exit_panel:
+            return
+
+        # 🔒 CRITICAL: clear any range-based selection state
+        self.buy_exit_panel.above_spin.blockSignals(True)
+        self.buy_exit_panel.below_spin.blockSignals(True)
+        self.buy_exit_panel.above_spin.setValue(0)
+        self.buy_exit_panel.below_spin.setValue(0)
+        self.buy_exit_panel.above_spin.blockSignals(False)
+        self.buy_exit_panel.below_spin.blockSignals(False)
+
+        atm_strike = self.strike_ladder.atm_strike
+        strike_step = self.strike_ladder.get_strike_interval()
+
+        if atm_strike is None or not strike_step:
+            return
+
+        target_strike = atm_strike + (offset * strike_step)
+        option_type = self.buy_exit_panel.option_type
+
+        contract = self.strike_ladder.contracts.get(target_strike, {}).get(option_type.value)
+
+        if not contract:
+            QMessageBox.warning(
+                self,
+                "Strike Not Available",
+                f"Strike {target_strike} not available for {option_type.name}"
+            )
+            return
+
+        # ✅ EXACT same behavior as clicking ONE ladder row
+        self._on_single_strike_selected(contract)

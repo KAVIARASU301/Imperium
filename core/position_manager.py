@@ -26,6 +26,8 @@ class PositionManager(QObject):
     api_error_occurred = Signal(str)
     position_added = Signal(object)
     position_removed = Signal(str)
+    portfolio_exit_triggered = Signal(str, float)
+    # args: reason ("STOP_LOSS" / "TARGET"), pnl
 
     def __init__(self, trader: Union[KiteConnect, PaperTradingManager], trade_logger: TradeLogger):
         super().__init__()
@@ -44,6 +46,10 @@ class PositionManager(QObject):
         self.instrument_data: Dict = {}
         self.tradingsymbol_map: Dict[str, Dict] = {}
 
+        self.portfolio_stop_loss: Optional[float] = None
+        self.portfolio_target: Optional[float] = None
+        self._portfolio_exit_triggered = False
+
     def set_instrument_data(self, instrument_data: Dict):
         """
         Receives and processes the instrument data to create a quick
@@ -59,6 +65,22 @@ class PositionManager(QObject):
 
     def set_kite_client(self, kite_client: KiteConnect):
         self.trader = kite_client
+
+    def set_portfolio_sl_tp(self, sl: float, tp: float):
+        self.portfolio_stop_loss = sl if sl < 0 else None
+        self.portfolio_target = tp if tp > 0 else None
+        self._portfolio_exit_triggered = False
+
+        logger.warning(
+            f"PORTFOLIO SL/TP ARMED | SL={self.portfolio_stop_loss}, TP={self.portfolio_target}"
+        )
+
+    def clear_portfolio_sl_tp(self):
+        self.portfolio_stop_loss = None
+        self.portfolio_target = None
+        self._portfolio_exit_triggered = False
+
+        logger.info("Portfolio SL/TP cleared")
 
     def refresh_from_api(self):
         if not self.trader or self._refresh_in_progress:
@@ -221,6 +243,9 @@ class PositionManager(QObject):
         if updated:
             self.positions_updated.emit(self.get_all_positions())
 
+        # 🔑 PORTFOLIO SL / TP CHECK (GLOBAL EXIT)
+        self._check_portfolio_sl_tp()
+
     def add_position(self, position: Position):
         self._positions[position.tradingsymbol] = position
         # if position.stop_loss_price or position.target_price:
@@ -284,6 +309,41 @@ class PositionManager(QObject):
 
     def get_total_pnl(self) -> float:
         return sum(p.pnl for p in self._positions.values() if p.pnl is not None)
+
+    def _check_portfolio_sl_tp(self):
+        if self._portfolio_exit_triggered:
+            return
+
+        if self.portfolio_stop_loss is None and self.portfolio_target is None:
+            return
+
+        total_pnl = self.get_total_pnl()
+
+        if self.portfolio_stop_loss is not None:
+            if total_pnl <= self.portfolio_stop_loss:
+                self._trigger_portfolio_exit("STOP_LOSS", total_pnl)
+                return
+
+        if self.portfolio_target is not None:
+            if total_pnl >= self.portfolio_target:
+                self._trigger_portfolio_exit("TARGET", total_pnl)
+        logger.debug(
+            f"[PORTFOLIO CHECK] Total PnL={total_pnl:.2f}, "
+            f"SL={self.portfolio_stop_loss}, TP={self.portfolio_target}"
+        )
+
+    def _trigger_portfolio_exit(self, reason: str, pnl: float):
+        if self._portfolio_exit_triggered:
+            return
+
+        self._portfolio_exit_triggered = True
+
+        logger.critical(f"PORTFOLIO EXIT TRIGGERED [{reason}] | PnL={pnl:.2f}")
+        self.portfolio_exit_triggered.emit(reason, pnl)
+
+        for pos in list(self._positions.values()):
+            if pos.quantity != 0 and not pos.is_exiting:
+                self.exit_position(pos)
 
     def get_position(self, tradingsymbol: str) -> Optional[Position]:
         return self._positions.get(tradingsymbol)
