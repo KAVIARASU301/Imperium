@@ -31,7 +31,7 @@ class PaperTradingManager(QObject):
         super().__init__()
         self.market_data: Dict[int, Dict] = {}
         self.tradingsymbol_to_token: Dict[str, int] = {}
-        self.config_path = os.path.join(os.path.expanduser("~"), ".options_scalper", "paper_account.json")
+        self.config_path = os.path.join(os.path.expanduser("~"), ".options_badger", "paper_account.json")
 
         self.balance = 100000.0
         self._positions: Dict[str, Dict] = {}

@@ -14,7 +14,7 @@ class ConfigManager:
 
     def __init__(self, config_dir: Optional[Path] = None):
         if config_dir is None:
-            self.config_dir = Path.home() / ".options_scalper"
+            self.config_dir = Path.home() / ".options_badger"
         else:
             self.config_dir = Path(config_dir)
 

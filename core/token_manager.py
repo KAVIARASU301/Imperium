@@ -13,7 +13,7 @@ class TokenManager:
     """Manages secure storage of API credentials and access tokens."""
 
     def __init__(self):
-        self.app_dir = Path.home() / ".options_scalper"
+        self.app_dir = Path.home() / ".options_badger"
         self.app_dir.mkdir(exist_ok=True)
         self.credentials_file = self.app_dir / "credentials.enc"
         self.token_file = self.app_dir / "token.enc"

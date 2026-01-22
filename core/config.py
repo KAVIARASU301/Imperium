@@ -10,7 +10,7 @@ from pathlib import Path
 from datetime import datetime
 
 # Application constants
-APP_NAME = "Options Scalper"
+APP_NAME = "Options Badger"
 APP_VERSION = "1.0.0"
 
 # Trading constants
@@ -40,7 +40,7 @@ COLORS = {
 
 def setup_logging():
     """Configure application logging"""
-    log_dir = Path.home() / ".options_scalper" / "logs"
+    log_dir = Path.home() / ".options_badger" / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
 
     # Create timestamp for a log file
