@@ -20,6 +20,7 @@ def create_enhanced_menu_bar(parent) -> Tuple[QMenuBar, Dict[str, QAction]]:
                 stop:0 #22293A,
                 stop:1 #151A26
             );
+            
             color: #C3CAD8;
             border-bottom: 1px solid #0D0F15;
             padding: 4px 8px;

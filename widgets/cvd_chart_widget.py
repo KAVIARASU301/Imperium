@@ -102,6 +102,21 @@ class CVDChartWidget(QWidget):
             }
         """)
         header.addWidget(self.title_label)
+        self.crosshair_time_label = QLabel("--:--:--")
+        self.crosshair_time_label.setStyleSheet("""
+            QLabel {
+                color: #7FD6DB;
+                font-size: 11px;
+                font-weight: 600;
+                padding: 2px 6px;
+                background-color: #1E2230;
+                border: 1px solid #3A4458;
+                border-radius: 4px;
+            }
+        """)
+        self.crosshair_time_label.setFixedHeight(20)
+        header.addWidget(self.crosshair_time_label)
+
         header.addStretch()
 
         self.toggle_btn = QPushButton("Rebased CVD")
@@ -184,6 +199,15 @@ class CVDChartWidget(QWidget):
         )
         self.crosshair_line.hide()
         self.plot.addItem(self.crosshair_line)
+        # ---- Floating X-axis time label (TradingView style) ----
+        self.x_time_label = pg.TextItem(
+            "",
+            anchor=(0.5, 0),
+            color="#E6EAF2",
+            fill=pg.mkBrush("#212635"),
+            border=pg.mkPen("#3A4458")
+        )
+        self.plot.addItem(self.x_time_label, ignoreBounds=True)
 
         # Connect mouse move event
         self.plot.scene().sigMouseMoved.connect(self._on_mouse_moved)
@@ -194,6 +218,7 @@ class CVDChartWidget(QWidget):
 
     def _on_mouse_moved(self, pos):
         """Handle mouse movement for crosshair."""
+
         if self.external_update:
             return
 
@@ -205,15 +230,17 @@ class CVDChartWidget(QWidget):
             if self.all_timestamps:
                 idx = int(round(x))
                 if 0 <= idx < len(self.all_timestamps):
-                    timestamp = self.all_timestamps[idx]
+                    ts = self.all_timestamps[idx]
 
-                    self.crosshair_line.setPos(x)
+                    self.crosshair_line.setPos(idx)
                     self.crosshair_line.show()
 
-                    # Emit signal for other charts
-                    self.crosshair_moved.emit(x, timestamp)
+                    self.crosshair_time_label.setText(ts.strftime("%H:%M:%S"))
+                    self.crosshair_moved.emit(idx, ts)
+
         else:
             self.crosshair_line.hide()
+            self.crosshair_time_label.setText("--:--:--")
 
     def update_crosshair(self, x_pos: float, timestamp: datetime):
         """Update crosshair from external signal."""
@@ -238,6 +265,10 @@ class CVDChartWidget(QWidget):
                 if local_idx is not None:
                     self.crosshair_line.setPos(local_idx)
                     self.crosshair_line.show()
+                    self.crosshair_line.setPos(local_idx)
+                    self.crosshair_line.show()
+                    self.crosshair_time_label.setText(timestamp.strftime("%H:%M:%S"))
+
             except Exception:
                 pass
 

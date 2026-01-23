@@ -79,6 +79,7 @@ class CustomTitleBar(QWidget):
             layout.insertWidget(0, menu_bar)
         menu_bar.setStyleSheet("""
             QMenuBar {
+            
                 background-color: transparent; color: #E0E0E0; border: none;
                 font-size: 13px; padding: 4px 0px;
             }
@@ -93,6 +94,7 @@ class CustomTitleBar(QWidget):
     def create_window_controls(self, layout):
         button_style = """
             QPushButton {
+                
                 background-color: transparent; border: none; color: #E0E0E0;
                 font-size: 16px; font-weight: bold; padding: 0px; margin: 0px;
                 width: 45px; height: 32px;
@@ -119,7 +121,7 @@ class CustomTitleBar(QWidget):
         minimize_btn.clicked.connect(self.parent_window.showMinimized)
         layout.addWidget(minimize_btn)
 
-        self.maximize_btn = QPushButton("□")
+        self.maximize_btn = QPushButton("⛶")
         self.maximize_btn.setStyleSheet(maximize_button_style)
         self.maximize_btn.clicked.connect(self.toggle_maximize)
         layout.addWidget(self.maximize_btn)
@@ -132,7 +134,7 @@ class CustomTitleBar(QWidget):
     def toggle_maximize(self):
         if self.parent_window.isMaximized():
             self.parent_window.showNormal()
-            self.maximize_btn.setText("□")
+            self.maximize_btn.setText("⛶")
         else:
             self.parent_window.showMaximized()
             self.maximize_btn.setText("❐")
@@ -348,17 +350,17 @@ class ScalperMainWindow(QMainWindow):
         app.setStyle('Fusion')
 
         self.setStyleSheet("""
-            QMainWindow { background-color: #0f0f0f !important; color: #ffffff; border: 1px solid #333; }
+            QMainWindow { background-image: url("assets/textures/main_window_bg.png");background-color: #0f0f0f !important; color: #ffffff; border: 1px solid #333; }
             QWidget { margin: 0px; padding: 0px; }
-            QMessageBox { background-color: #161A25 !important; color: #E0E0E0 !important; border: 1px solid #3A4458; border-radius: 8px; }
+            QMessageBox { background-image: url("assets/textures/texture.png");background-color: #161A25 !important; color: #E0E0E0 !important; border: 1px solid #3A4458; border-radius: 8px; }
             QMessageBox { border: none; margin: 0px; }
-            QMessageBox::title, QMessageBox QWidget, QMessageBox * { background-color: #161A25 !important; color: #E0E0E0 !important; }
+            QMessageBox::title, QMessageBox QWidget, QMessageBox * { background-image: url("assets/textures/texture.png"); background-color: #161A25 !important; color: #E0E0E0 !important; }
             QMessageBox QLabel { color: #E0E0E0 !important; background-color: #161A25 !important; font-size: 13px; }
             QMessageBox QPushButton { background-color: #212635 !important; color: #E0E0E0 !important; border: 1px solid #3A4458; border-radius: 5px; padding: 8px 16px; font-weight: 500; min-width: 70px; }
-            QMessageBox QPushButton:hover { background-color: #29C7C9 !important; color: #161A25 !important; border-color: #29C7C9; }
+            QMessageBox QPushButton:hover { background-color: #29C7C9 !important; color: #04b3bd !important; border-color: #29C7C9; }
             QMessageBox QPushButton:pressed { background-color: #1f8a8c !important; }
             QDialog { background-color: #161A25; color: #E0E0E0; }
-            QStatusBar { background-color: #161A25; color: #A0A0A0; border-top: 1px solid #3A4458; padding: 4px 8px; font-size: 12px; }
+            QStatusBar { background-image: url("assets/textures/texture_darker.png"); background-color: #161A25; color: #A0A0A0; border-top: 1px solid #3A4458; padding: 4px 8px; font-size: 12px; }
             QDockWidget { background-color: #1a1a1a; color: #fff; border: 1px solid #333; }
             QDockWidget::title { background-color: #2a2a2a; padding: 5px; border-bottom: 1px solid #333; }
         """)

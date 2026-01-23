@@ -94,8 +94,17 @@ class StrikeLadderWidget(QWidget):
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.scroll_area.setStyleSheet("""
+        QScrollArea {
+            background: transparent;
+        }
+        QScrollArea::viewport {
+            background: transparent;
+        }
+        """)
 
         self.strikes_container = QWidget()
+        self.strikes_container.setStyleSheet("background: transparent;")
         self.ladder_layout = QVBoxLayout(self.strikes_container)
         self.ladder_layout.setContentsMargins(0, 0, 0, 0)
         self.ladder_layout.setSpacing(1)  # Tighter rows
@@ -103,6 +112,19 @@ class StrikeLadderWidget(QWidget):
 
         self.scroll_area.setWidget(self.strikes_container)
         main_layout.addWidget(self.scroll_area)
+
+        self.background = QWidget(self)
+        self.background.setObjectName("ladderBg")
+        self.background.lower()  # push behind everything
+
+        self.background.setStyleSheet("""
+        #ladderBg {
+            background-image: url("assets/textures/strike_ladder_bg.png");            
+            background-repeat: no-repeat;
+            background-position: center;
+            background-color: #161A25;
+        }
+        """)
 
     def _create_header_row(self) -> QWidget:
         """Creates the styled header for the ladder."""
@@ -118,6 +140,7 @@ class StrikeLadderWidget(QWidget):
             label.setFixedWidth(width)
             label.setAlignment(Qt.AlignCenter)
             label.setStyleSheet(f"""
+                background-image: url("assets/textures/cross_stripes.png");            
                 background-color: {self.colors['bg_header']};
                 color: {self.colors['text_header']};
                 padding: 4px 0;
@@ -183,7 +206,7 @@ class StrikeLadderWidget(QWidget):
             label.setStyleSheet("""
                 QLabel {
                     color: #FFFFFF;
-                    background-color: #161A25;
+                    background-color: #000614;
                     border: 1px solid #444444;
                     border-radius: 3px;
                     padding: 6px 0;
@@ -488,3 +511,8 @@ class StrikeLadderWidget(QWidget):
             data.append({'strike': strike, 'call_ltp': getattr(call, 'ltp', 0.0), 'put_ltp': getattr(put, 'ltp', 0.0),
                          'call_contract': call, 'put_contract': put})
         return sorted(data, key=lambda x: x['strike'])
+
+    def resizeEvent(self, event):
+        if hasattr(self, "background"):
+            self.background.setGeometry(self.rect())
+        super().resizeEvent(event)

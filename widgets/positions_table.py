@@ -133,14 +133,14 @@ class PositionsTable(QWidget):
 
         self.setStyleSheet("""
             QTableWidget {
-                background-color: #161A25;
+                background-image: url("assets/textures/positions_table.png");
                 color: #E0E0E0;
                 border: none;
                 font-size: 13px;
             }
 
             QHeaderView::section {
-                background-color: #2A3140;
+                background-image: url("assets/textures/texture.png");                
                 color: #A9B1C3;
                 padding: 8px;
                 border: none;
@@ -180,7 +180,7 @@ class PositionsTable(QWidget):
             }
 
             #footer {
-                background-color: #212635;
+                background-image: url("assets/textures/texture.png");
                 border-top: 1px solid #3A4458;
             }
 

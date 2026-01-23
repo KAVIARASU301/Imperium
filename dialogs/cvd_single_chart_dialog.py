@@ -203,7 +203,7 @@ class CVDSingleChartDialog(QDialog):
         self.plot.addItem(self.today_curve)
 
         self.live_dot = pg.ScatterPlotItem(
-            size=10,
+            size=7,
             brush=pg.mkBrush(38, 166, 154, 200),
             pen=pg.mkPen("#FFFFFF", width=1)
         )

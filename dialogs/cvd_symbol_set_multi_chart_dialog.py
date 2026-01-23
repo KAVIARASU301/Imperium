@@ -14,6 +14,7 @@ from PySide6.QtCore import Qt, QTimer
 from core.cvd.cvd_symbol_sets import CVDSymbolSetManager
 from widgets.cvd_chart_widget import CVDChartWidget
 from dialogs.cvd_multi_chart_dialog import DateNavigator
+from dialogs.cvd_symbol_sets_dialog import ManageCVDSymbolSetsDialog
 
 logger = logging.getLogger(__name__)
 
@@ -65,11 +66,6 @@ class CVDSetMultiChartDialog(QDialog):
 
         self._setup_ui()
         self._load_sets()
-
-        # Default dates
-        cur, prev = self.navigator.get_dates()
-        self._load_charts_for_dates(cur, prev)
-
         self._pending_chart_reload = 0
 
     # ------------------------------------------------------------------
@@ -86,41 +82,99 @@ class CVDSetMultiChartDialog(QDialog):
         # Header
         # =========================
         header = QHBoxLayout()
-        header.setSpacing(6)
+        header.setSpacing(8)
 
-        header.addWidget(QLabel("Symbol Set:"))
+        # ---- Symbol Set Label ----
+        label = QLabel("Symbol Set")
+        label.setStyleSheet("color:#A9B1C3; font-size:11px;")
+        header.addWidget(label)
 
+        # ---- Symbol Set Combo ----
         self.set_combo = QComboBox()
         self.set_combo.currentIndexChanged.connect(self._on_set_changed)
-        header.addWidget(self.set_combo, 1)
+        self.set_combo.setMinimumWidth(220)
+        self.set_combo.setStyleSheet("""
+            QComboBox {
+                background-color: #1E2230;
+                border: 1px solid #3A4458;
+                border-radius: 6px;
+                padding: 4px 8px;
+                color: #E0E6F1;
+                font-size: 11px;
+            }
+            QComboBox::drop-down {
+                border: none;
+            }
+        """)
+        header.addWidget(self.set_combo)
 
-        reload_btn = QPushButton("Reload")
-        reload_btn.clicked.connect(self._reload_current_set)
-        header.addWidget(reload_btn)
-
-        self.aggregate_toggle = QPushButton("Aggregate CVD")
-        self.aggregate_toggle.setCheckable(True)
-        self.aggregate_toggle.setStyleSheet("""
+        # ---- Manage Sets (secondary action) ----
+        manage_btn = QPushButton("Manage")
+        manage_btn.clicked.connect(self._open_manage_sets_dialog)
+        manage_btn.setToolTip("Create / Edit Symbol Sets")
+        manage_btn.setStyleSheet("""
             QPushButton {
-                background-color: #212635;
+                background-color: transparent;
                 border: 1px solid #3A4458;
                 border-radius: 6px;
                 padding: 4px 10px;
                 color: #A9B1C3;
                 font-size: 11px;
             }
+            QPushButton:hover {
+                background-color: #2A2F44;
+                color: #FFFFFF;
+            }
+        """)
+        header.addWidget(manage_btn)
+
+        # ---- Reload (utility action) ----
+        reload_btn = QPushButton("↻")
+        reload_btn.clicked.connect(self._reload_current_set)
+        reload_btn.setToolTip("Reload current symbol set")
+        reload_btn.setFixedWidth(28)
+        reload_btn.setStyleSheet("""
+            QPushButton {
+                background-color: transparent;
+                border: 1px solid #3A4458;
+                border-radius: 6px;
+                color: #A9B1C3;
+                font-size: 13px;
+            }
+            QPushButton:hover {
+                background-color: #2A2F44;
+                color: #FFFFFF;
+            }
+        """)
+        header.addWidget(reload_btn)
+
+        header.addStretch()
+
+        # ---- Aggregate toggle (view mode) ----
+        self.aggregate_toggle = QPushButton("Aggregate CVD")
+        self.aggregate_toggle.setCheckable(True)
+        self.aggregate_toggle.setToolTip("Toggle aggregate CVD view")
+        self.aggregate_toggle.setStyleSheet("""
+            QPushButton {
+                background-color: #1E2230;
+                border: 1px solid #3A4458;
+                border-radius: 14px;
+                padding: 5px 14px;
+                color: #A9B1C3;
+                font-size: 11px;
+            }
             QPushButton:checked {
                 background-color: #2A3B5C;
+                border-color: #4C6FFF;
                 color: #FFFFFF;
             }
             QPushButton:hover {
-                border-color: #4A5468;
+                border-color: #4C6FFF;
             }
         """)
         self.aggregate_toggle.toggled.connect(self._toggle_aggregate_mode)
         header.addWidget(self.aggregate_toggle)
 
-        header.addStretch()
         root.addLayout(header)
 
         # =========================
@@ -146,6 +200,7 @@ class CVDSetMultiChartDialog(QDialog):
                 symbol="",
                 parent=self
             )
+            widget.crosshair_moved.connect(self._on_crosshair_sync)
             widget.stop_updates()  # ensure no timers
             widget.hide()
 
@@ -175,7 +230,29 @@ class CVDSetMultiChartDialog(QDialog):
         self.status.setStyleSheet("color:#888; font-size:10px;")
         root.addWidget(self.status)
 
+    def _on_crosshair_sync(self, x_index: int, timestamp: datetime):
+        """
+        Synchronize crosshair across all visible charts.
+        """
+        for w in self.chart_widgets:
+            if w.isVisible():
+                w.update_crosshair(x_index, timestamp)
+
+        # Aggregate chart should follow, never lead
+        if self.aggregate_chart.isVisible():
+            self.aggregate_chart.update_crosshair(x_index, timestamp)
+
     # ------------------------------------------------------------------
+    def _open_manage_sets_dialog(self):
+
+        dlg = ManageCVDSymbolSetsDialog(
+            symbol_set_manager=self.symbol_set_manager,
+            parent=self
+        )
+
+        dlg.symbol_sets_updated.connect(self._on_symbol_sets_updated)
+
+        dlg.exec()
 
     def _load_sets(self):
         self.set_combo.blockSignals(True)
@@ -187,11 +264,25 @@ class CVDSetMultiChartDialog(QDialog):
         for s in self.symbol_sets:
             self.set_combo.addItem(s.get("name", "Unnamed"))
 
-        # Auto-select first set if available
+        self.set_combo.blockSignals(False)
+
+        # Auto-select first set AND trigger load
         if self.symbol_sets:
             self.set_combo.setCurrentIndex(1)
+            self._on_set_changed(1)
 
-        self.set_combo.blockSignals(False)
+    def _on_symbol_sets_updated(self):
+        """
+        Reload symbol sets after save/delete without reopening dialog.
+        """
+        current_text = self.set_combo.currentText()
+
+        self._load_sets()
+
+        # Try to restore previous selection
+        index = self.set_combo.findText(current_text)
+        if index >= 0:
+            self.set_combo.setCurrentIndex(index)
 
     # ------------------------------------------------------------------
     def _toggle_aggregate_mode(self, enabled: bool):

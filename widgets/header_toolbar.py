@@ -221,6 +221,7 @@ class HeaderToolbar(QFrame):
                     stop:0 #1F2533,
                     stop:1 #141925
                 );
+                background-image: url("assets/textures/texture_darker.png");
                 border-top: 1px solid #0D0F15;      /* visually connects to menu bar */
                 border-bottom: 1px solid #0B0E14;   /* anchors content below */
                 font-family: "Segoe UI";

@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QThread, Signal, QTimer
 from kiteconnect import KiteConnect
 from core.token_manager import TokenManager
+from utils.styled_message_box import show_message
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +69,7 @@ class RequestTokenServer(QThread):
                     self.wfile.write(
                         b"<html><body style='font-family:Segoe UI,sans-serif;background:#111;color:#eee;text-align:center;padding-top:40px;'>"
                         b"<h2>Login successful</h2>"
-                        b"<p>You can now return to Options Scalper Pro.</p>"
+                        b"<p>You can now return to Options Badger Pro.</p>"
                         b"</body></html>"
                     )
 
@@ -103,17 +104,13 @@ class LoginManager(QDialog):
 
         self.token_server: Optional[RequestTokenServer] = None
 
-        self.setWindowTitle("Options Scalper Pro - Authentication")
+        self.setWindowTitle("Options Badger Pro - Authentication")
         self.setMinimumSize(420, 450)
         self.setModal(True)
         # --- Make window frameless for custom styling ---
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self._drag_pos = None
-
-        self.countdown_timer = QTimer(self)
-        self.countdown_timer.timeout.connect(self._update_countdown)
-        self.countdown_value = 5
 
         self._setup_ui()
         self._apply_styles()
@@ -137,7 +134,7 @@ class LoginManager(QDialog):
         container_layout.setSpacing(15)
 
         # App Title
-        app_title = QLabel("Options Scalper Pro")
+        app_title = QLabel(" 🦡 Options Badger Pro")
         app_title.setObjectName("appTitle")
         container_layout.addWidget(app_title, 0, Qt.AlignmentFlag.AlignCenter)
 
@@ -160,10 +157,14 @@ class LoginManager(QDialog):
         layout.setContentsMargins(0, 10, 0, 0)
         layout.setSpacing(10)
 
-        status_label = QLabel("Valid Session Found")
+        status_label = QLabel("Active Trading Session Found")
         status_label.setObjectName("dialogTitle")
-        self.countdown_label = QLabel(f"Starting in {self.countdown_value} seconds...")
-        self.countdown_label.setObjectName("infoLabel")
+        self.info_label = QLabel(
+            "An active access session for today was detected.\n"
+            "Please choose how you want to continue."
+        )
+        self.info_label.setObjectName("infoLabel")
+        self.info_label.setAlignment(Qt.AlignCenter)
 
         live_button = QPushButton("Start Live Trading")
         live_button.setObjectName("primaryButton")
@@ -173,13 +174,13 @@ class LoginManager(QDialog):
         paper_button.setObjectName("secondaryButton")
         paper_button.clicked.connect(lambda: self._select_mode_and_accept('paper'))
 
-        cancel_button = QPushButton("Logout & Enter Credentials")
+        cancel_button = QPushButton("Change API Credentials")
         cancel_button.setObjectName("linkButton")
         cancel_button.setCursor(Qt.PointingHandCursor)
         cancel_button.clicked.connect(self._cancel_auto_login)
 
         layout.addWidget(status_label, 0, Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self.countdown_label, 0, Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.info_label, 0, Qt.AlignmentFlag.AlignCenter)
         layout.addStretch(1)
         layout.addWidget(live_button)
         layout.addWidget(paper_button)
@@ -231,30 +232,83 @@ class LoginManager(QDialog):
     def _create_token_input_page(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(0, 10, 0, 0)
+        layout.setContentsMargins(0, 15, 0, 0)
+        layout.setSpacing(14)
 
-        token_title = QLabel("Complete Authentication")
+        # ---- Title ----
+        token_title = QLabel("Finalize Trading Session")
         token_title.setObjectName("dialogTitle")
+        token_title.setAlignment(Qt.AlignCenter)
 
+        # ---- Info text ----
         token_info = QLabel(
-            "Your browser will redirect back to this app.\n"
-            "If auto-detection fails, copy the 'request_token' from the URL and paste it below."
+            "Completing your secure session.\n\n"
+            "If the browser redirect doesn’t return automatically,\n"
+            "paste the token shown in the address bar below."
         )
         token_info.setWordWrap(True)
+        token_info.setAlignment(Qt.AlignCenter)
+        token_info.setObjectName("infoLabel")
+
+        # ---- Input container (visual grouping) ----
+        input_container = QWidget()
+        input_layout = QVBoxLayout(input_container)
+        input_layout.setContentsMargins(20, 16, 20, 16)
+        input_layout.setSpacing(8)
+
+        input_label = QLabel("Session Token")
+        input_label.setObjectName("inputLabel")
 
         self.request_token_input = QLineEdit()
-        self.request_token_input.setPlaceholderText("Paste request_token here (fallback)...")
+        self.request_token_input.setPlaceholderText("Paste token here")
+        self.request_token_input.setMinimumHeight(42)
+        self.request_token_input.setFocus()
+        self.request_token_input.returnPressed.connect(self._on_complete_login)
 
-        self.generate_button = QPushButton("Generate Session")
+        input_layout.addWidget(input_label)
+        input_layout.addWidget(self.request_token_input)
+
+        input_container.setObjectName("inputContainer")
+
+        # ---- Action button ----
+        self.generate_button = QPushButton("Start Trading")
         self.generate_button.setObjectName("primaryButton")
+        self.generate_button.setFixedHeight(42)
         self.generate_button.clicked.connect(self._on_complete_login)
+        self.generate_button.setEnabled(False)
+        self.request_token_input.textChanged.connect(
+            lambda text: self.generate_button.setEnabled(bool(text.strip()))
+        )
+        back_button = QPushButton("Change API Credentials")
+        back_button.setObjectName("linkButton")
+        back_button.clicked.connect(self._go_back_to_credentials)
 
-        layout.addWidget(token_title, 0, Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(token_title)
         layout.addWidget(token_info)
-        layout.addWidget(self.request_token_input)
-        layout.addStretch()
-        layout.addWidget(self.generate_button)
+        layout.addSpacing(10)
+        layout.addWidget(input_container)
+        layout.addSpacing(12)
+        layout.addWidget(self.generate_button, 0, Qt.AlignCenter)
+        layout.addSpacing(6)
+        layout.addWidget(back_button, 0, Qt.AlignCenter)
+
         return page
+
+    def _go_back_to_credentials(self):
+        # Stop token server if running
+        if self.token_server:
+            self.token_server.quit()
+            self.token_server = None
+
+        if hasattr(self, "_token_timeout_timer") and self._token_timeout_timer.isActive():
+            self._token_timeout_timer.stop()
+
+        self._login_in_progress = False
+        self.request_token_input.clear()
+        self.generate_button.setText("Start Trading")
+        self.generate_button.setEnabled(False)
+
+        self.stacked_widget.setCurrentIndex(1)  # Credentials page
 
     # ---------------- DRAGGABLE WINDOW ---------------- #
 
@@ -287,20 +341,11 @@ class LoginManager(QDialog):
             self.access_token = token_data['access_token']
             self.trading_mode = token_data.get('trading_mode', 'live')
             self.stacked_widget.setCurrentIndex(0)
-            self.countdown_timer.start(1000)
         else:
             self.stacked_widget.setCurrentIndex(1)
 
-    def _update_countdown(self):
-        if self.countdown_value > 0:
-            self.countdown_label.setText(f"Starting in {self.countdown_value} seconds...")
-            self.countdown_value -= 1
-        else:
-            self.countdown_timer.stop()
-            self.accept()
 
     def _cancel_auto_login(self):
-        self.countdown_timer.stop()
         self.token_manager.clear_token_data()
         self.access_token = None
         self.stacked_widget.setCurrentIndex(1)
@@ -315,63 +360,127 @@ class LoginManager(QDialog):
         self.api_secret = self.api_secret_input.text().strip()
 
         if not (self.api_key and self.api_secret):
-            QMessageBox.warning(self, "Input Error", "API Key and Secret cannot be empty.")
+            show_message(
+                self,
+                "Input Error",
+                "Please enter both the API key and API secret.",
+                icon=QMessageBox.Warning
+            )
             return
 
         if self.save_creds_checkbox.isChecked():
             self.token_manager.save_credentials(self.api_key, self.api_secret)
 
-        # Start local server to capture request_token
+        # ---- Start local server to capture request_token ----
         try:
             self.token_server = RequestTokenServer(parent=self)
             self.token_server.token_received.connect(self._on_request_token_auto)
             self.token_server.error.connect(self._on_token_server_error)
             self.token_server.start()
             logger.info("Started local RequestTokenServer on 127.0.0.1:5678")
+
+            # 5 minutes timeout (300 seconds)
+            self._token_timeout_timer = QTimer(self)
+            self._token_timeout_timer.setSingleShot(True)
+            self._token_timeout_timer.timeout.connect(self._token_timeout_check)
+            self._token_timeout_timer.start(5 * 60 * 1000)
+
         except Exception as e:
             logger.error(f"Failed to start RequestTokenServer: {e}")
-            QMessageBox.warning(
+            show_message(
                 self,
                 "Callback Server Error",
-                "Could not start local callback server.\n"
-                "You may need to paste the request_token manually."
+                "The local callback server could not be started.\n\n"
+                "This can happen if the port is blocked or already in use.\n"
+                "You can continue by pasting the session token manually.",
+                icon=QMessageBox.Warning
             )
 
+        # ---- Validate API key before opening browser ----
         try:
             kite = KiteConnect(api_key=self.api_key)
-            webbrowser.open_new(kite.login_url())
-            self.stacked_widget.setCurrentIndex(2)
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Could not initiate login: {e}")
+            login_url = kite.login_url()
+        except Exception:
+            show_message(
+                self,
+                "Invalid API Key",
+                "The API key entered is invalid.\n\n"
+                "Please verify and try again.",
+                icon=QMessageBox.Critical
+            )
+
+            self._go_back_to_credentials()
+            return
+
+        webbrowser.open_new(login_url)
+        self.stacked_widget.setCurrentIndex(2)
+
+    def _token_timeout_check(self):
+        if not self.request_token_input.text().strip():
+            show_message(
+                self,
+                "Authentication Incomplete",
+                "No session token was received.\n\n"
+                "This may happen if the API key is incorrect, "
+                "login was cancelled, or authentication timed out.",
+                icon=QMessageBox.Information
+            )
+
+            self._go_back_to_credentials()
 
     def _on_token_server_error(self, msg: str):
         logger.error(f"RequestTokenServer error: {msg}")
 
     def _on_request_token_auto(self, token: str):
-        """
-        Called when the local HTTP server captures the request_token
-        from the browser redirect.
-        """
         if not token:
             return
 
         logger.info("Automatically captured request_token from browser redirect.")
+
+        # Cancel timeout timer
+        if hasattr(self, "_token_timeout_timer") and self._token_timeout_timer.isActive():
+            self._token_timeout_timer.stop()
+
         self.request_token_input.setText(token)
-        # Directly proceed to generate the session
         self._on_complete_login()
 
     def _on_complete_login(self):
-        request_token = self.request_token_input.text().strip()
+        if hasattr(self, "_token_timeout_timer") and self._token_timeout_timer.isActive():
+            self._token_timeout_timer.stop()
+
+        # Prevent double submission / race condition
+        if getattr(self, "_login_in_progress", False):
+            return
+        self._login_in_progress = True
+
+        # ---- Extract token safely (handles full URL paste) ----
+        text = self.request_token_input.text().strip()
+
+        if "request_token=" in text:
+            text = text.split("request_token=")[-1].split("&")[0]
+
+        request_token = text.strip()
+
         if not request_token:
-            QMessageBox.warning(self, "Input Error", "Request token is empty.")
+            self._login_in_progress = False
+            show_message(
+                self,
+                "Input Error",
+                "Session token is empty.",
+                icon=QMessageBox.Warning
+            )
             return
 
+        # ---- UI feedback ----
+        self.generate_button.setText("Starting Session…")
+        self.generate_button.setEnabled(False)
+        self.setCursor(Qt.BusyCursor)
+
+        # ---- Start background login worker ----
         self.worker = LoginWorker(self.api_key, self.api_secret, request_token)
         self.worker.success.connect(self._on_login_success)
         self.worker.error.connect(self._on_login_error)
         self.worker.start()
-        self.generate_button.setText("Generating...")
-        self.generate_button.setEnabled(False)
 
     def _on_login_success(self, access_token: str):
         self.access_token = access_token
@@ -379,16 +488,25 @@ class LoginManager(QDialog):
             'access_token': access_token,
             'trading_mode': self.trading_mode
         })
+        self.setCursor(Qt.ArrowCursor)
         self.accept()
 
     def _on_login_error(self, error_msg: str):
-        QMessageBox.critical(self, "Login Failed", f"Failed to generate session:\n{error_msg}")
-        self.stacked_widget.setCurrentIndex(1)
-        self.generate_button.setText("Generate Session")
+        self._login_in_progress = False
+
+        show_message(
+            self,
+            title="Login Failed",
+            message=f"Failed to generate session:\n\n{error_msg}",
+            icon=QMessageBox.Critical,
+            align=Qt.AlignLeft | Qt.AlignVCenter
+        )
+
+        self.generate_button.setText("Start Trading")
         self.generate_button.setEnabled(True)
+        self.setCursor(Qt.ArrowCursor)
 
     def _select_mode_and_accept(self, mode: str):
-        self.countdown_timer.stop()
         self.trading_mode = mode
         logger.info(f"User selected {mode.upper()} mode during auto-login.")
         self.accept()
@@ -410,6 +528,7 @@ class LoginManager(QDialog):
         """Applies a premium, modern dark theme."""
         self.setStyleSheet("""
             #mainContainer {
+                background-image: url("assets/textures/main_window_bg.png");
                 background-color: #161A25;
                 border: 1px solid #3A4458;
                 border-radius: 12px;
@@ -486,4 +605,6 @@ class LoginManager(QDialog):
             #linkButton:hover {
                 color: #FFFFFF;
             }
+         
+
         """)

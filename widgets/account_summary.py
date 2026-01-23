@@ -145,7 +145,6 @@ class AccountSummaryWidget(QWidget):
             }
 
             #metricFrame {
-                background: #161A25;
                 border: 1px solid rgba(13, 115, 119, 0.5);
                 border-radius: 6px;
             }
