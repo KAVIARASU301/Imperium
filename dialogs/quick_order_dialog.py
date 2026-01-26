@@ -19,6 +19,11 @@ except locale.Error:
 
 logger = logging.getLogger(__name__)
 
+from enum import Enum
+
+class QuickOrderMode(Enum):
+    ENTRY = "entry"
+    MODIFY_RISK = "modify_risk"
 
 class QuickOrderDialog(QDialog):
     """
@@ -27,9 +32,11 @@ class QuickOrderDialog(QDialog):
     """
     order_placed = Signal(dict)
     refresh_requested = Signal(str)
+    risk_confirmed = Signal(dict)
 
-    def __init__(self, parent, contract: Contract, default_lots: int):
+    def __init__(self, parent, contract, default_lots, mode=QuickOrderMode.ENTRY):
         super().__init__(parent)
+        self.mode = mode
         self.contract = contract
         self._drag_pos = None
         self._last_ltp = None
@@ -235,15 +242,22 @@ class QuickOrderDialog(QDialog):
 
     def _create_action_buttons(self, parent_layout):
         action_layout = QHBoxLayout()
+
         self.refresh_btn = QPushButton("Refresh Price")
         self.refresh_btn.setObjectName("refreshButton")
-        self.refresh_btn.clicked.connect(lambda: self.refresh_requested.emit(self.contract.tradingsymbol))
+        self.refresh_btn.clicked.connect(
+            lambda: self.refresh_requested.emit(self.contract.tradingsymbol)
+        )
 
-        self.place_order_btn = QPushButton("PLACE ORDER")
+        if self.mode == QuickOrderMode.ENTRY:
+            btn_text = "PLACE ORDER"
+        else:
+            btn_text = "CONFIRM SL / TP"
+
+        self.place_order_btn = QPushButton(btn_text)
         self.place_order_btn.setObjectName("confirmButton")
-        self.place_order_btn.clicked.connect(self._accept_dialog)
+        self.place_order_btn.clicked.connect(self._on_confirm_clicked)
 
-        # ✅ ENTER key will trigger this button
         self.place_order_btn.setDefault(True)
         self.place_order_btn.setAutoDefault(True)
 
@@ -251,11 +265,17 @@ class QuickOrderDialog(QDialog):
         action_layout.addWidget(self.place_order_btn)
         parent_layout.addLayout(action_layout)
 
-    def _accept_dialog(self):
-        """
-        Gathers order parameters, closes the dialog immediately, and then
-        emits the signal for the main window to process the order.
-        """
+    def _on_confirm_clicked(self):
+        params = self._collect_order_params()
+
+        if self.mode == QuickOrderMode.ENTRY:
+            self.accept()
+            self.order_placed.emit(params)
+        else:
+            self.accept()
+            self.risk_confirmed.emit(params)
+
+    def _collect_order_params(self):
         from kiteconnect import KiteConnect
 
         avg_price = self.price_spinbox.value()
@@ -264,23 +284,32 @@ class QuickOrderDialog(QDialog):
         stop_loss_value = self.sl_spinbox.value() if self.sl_checkbox.isChecked() else 0
         take_profit_value = self.tp_spinbox.value() if self.tp_checkbox.isChecked() else 0
 
-        stop_loss_price = avg_price - (stop_loss_value / quantity) if stop_loss_value > 0 else None
-        take_profit_price = avg_price + (take_profit_value / quantity) if take_profit_value > 0 else None
+        stop_loss_price = (
+            avg_price - (stop_loss_value / quantity)
+            if stop_loss_value > 0 else None
+        )
+        take_profit_price = (
+            avg_price + (take_profit_value / quantity)
+            if take_profit_value > 0 else None
+        )
 
-        order_parameters = {
+        return {
             'contract': self.contract,
             'quantity': quantity,
             'price': avg_price,
             'order_type': 'LIMIT',
-            'transaction_type': KiteConnect.TRANSACTION_TYPE_BUY if self.buy_radio.isChecked() else KiteConnect.TRANSACTION_TYPE_SELL,
+            'transaction_type': (
+                KiteConnect.TRANSACTION_TYPE_BUY
+                if self.buy_radio.isChecked()
+                else KiteConnect.TRANSACTION_TYPE_SELL
+            ),
             'stop_loss_price': stop_loss_price,
             'target_price': take_profit_price,
-            'trailing_stop_loss': self.tsl_spinbox.value() if self.tsl_checkbox.isChecked() else 0,
+            'trailing_stop_loss': (
+                self.tsl_spinbox.value()
+                if self.tsl_checkbox.isChecked() else 0
+            ),
         }
-        # FIX: Close the dialog *before* emitting the signal
-        self.accept()
-        # Now emit the signal for the main window to handle the order execution
-        self.order_placed.emit(order_parameters)
 
     def _apply_styles(self):
         self.setStyleSheet("""
@@ -647,7 +676,7 @@ class QuickOrderDialog(QDialog):
 
     def keyPressEvent(self, event):
         if event.key() in (Qt.Key_Return, Qt.Key_Enter):
-            self._accept_dialog()
+            self._on_confirm_clicked()
             event.accept()
             return
         elif event.key() == Qt.Key_Escape:

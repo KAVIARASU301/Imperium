@@ -26,7 +26,7 @@ from widgets.account_summary import AccountSummaryWidget
 from dialogs.settings_dialog import SettingsDialog
 from dialogs.open_positions_dialog import OpenPositionsDialog
 from dialogs.performance_dialog import PerformanceDialog
-from dialogs.quick_order_dialog import QuickOrderDialog
+from dialogs.quick_order_dialog import QuickOrderDialog, QuickOrderMode
 from core.position_manager import PositionManager
 from widgets.positions_table import PositionsTable
 from core.config import REFRESH_INTERVAL_MS
@@ -272,6 +272,10 @@ class ScalperMainWindow(QMainWindow):
         num_lots = order_details_for_dialog.get('lot_size', 1)
         order_details_for_dialog['total_quantity_per_strike'] = num_lots * instrument_lot_quantity
         order_details_for_dialog['product'] = self.settings.get('default_product', 'MIS')
+        # 🔑 PASS RISK PARAMS FOR POSITION CREATION
+        order_details_for_dialog["stop_loss_price"] = order_details_from_panel.get("stop_loss_price")
+        order_details_for_dialog["target_price"] = order_details_from_panel.get("target_price")
+        order_details_for_dialog["trailing_stop_loss"] = order_details_from_panel.get("trailing_stop_loss")
 
         dialog = OrderConfirmationDialog(self, order_details_for_dialog)
 
@@ -1024,9 +1028,14 @@ class ScalperMainWindow(QMainWindow):
             return
 
         lots = abs(position.quantity) / position.contract.lot_size if position.contract.lot_size > 0 else 1
-        dialog = QuickOrderDialog(self, position.contract, lots)
+        dialog = QuickOrderDialog(
+            self,
+            position.contract,
+            lots,
+            mode=QuickOrderMode.MODIFY_RISK
+        )
         dialog.populate_from_order(position)
-        dialog.order_placed.connect(self._modify_sl_tp_for_position)
+        dialog.risk_confirmed.connect(self._modify_sl_tp_for_position)
 
     def _modify_sl_tp_for_position(self, order_params: dict):
         contract = order_params.get('contract')
@@ -1698,8 +1707,18 @@ class ScalperMainWindow(QMainWindow):
                                 contract=contract_to_trade,
                                 order_id=order_id,
                                 exchange=self.trader.EXCHANGE_NFO,
-                                product=order_product
+                                product=order_product,
+
+                                # 🔑 ADD THESE THREE
+                                stop_loss_price=confirmed_order_details.get("stop_loss_price"),
+                                target_price=confirmed_order_details.get("target_price"),
+                                trailing_stop_loss=(
+                                    confirmed_order_details.get("trailing_stop_loss")
+                                    if confirmed_order_details.get("trailing_stop_loss", 0) > 0
+                                    else None
+                                )
                             )
+
                             self.position_manager.add_position(new_position)
                             self.trade_logger.log_trade(confirmed_order_api_data)
                             successful_orders_info.append(

@@ -1,11 +1,14 @@
 # core/buy_exit_panel.py
 import logging
 from typing import List, Dict
+from typing import Optional
+from typing import cast
+from PySide6.QtWidgets import QGraphicsEffect
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
-    QSpinBox, QGroupBox, QRadioButton, QButtonGroup, QFrame, QAbstractSpinBox
+    QGroupBox, QRadioButton, QButtonGroup, QFrame, QAbstractSpinBox
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Signal
 from PySide6.QtGui import QCursor, QFont
 from kiteconnect import KiteConnect
 
@@ -18,10 +21,10 @@ logger = logging.getLogger(__name__)
 # Unified UI fonts
 # -------------------------------------------------
 UI_INFO_FONT = QFont("Segoe UI", 12)
-UI_INFO_FONT.setWeight(QFont.Normal)
+UI_INFO_FONT.setWeight(QFont.Weight.Normal)
 
 UI_SPIN_FONT = QFont("Segoe UI", 10)
-UI_SPIN_FONT.setWeight(QFont.Normal)
+UI_SPIN_FONT.setWeight(QFont.Weight.Normal)
 
 
 class ClickableLabel(QLabel):
@@ -86,6 +89,7 @@ class BuyExitPanel(QWidget):
         self.strike_interval = 50.0
         self.strike_ladder_data = []
         self.radio_history = []
+        self._margin_effect: Optional[QGraphicsEffect] = None
 
         self._setup_ui()
         self._apply_styles()
@@ -102,8 +106,8 @@ class BuyExitPanel(QWidget):
         main_layout.setSpacing(10)
 
         self.title_label = ClickableLabel(self.option_type.name)
-        self.title_label.setAlignment(Qt.AlignCenter)
-        self.title_label.setCursor(QCursor(Qt.PointingHandCursor))
+        self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.title_label.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.title_label.setToolTip("Double-click to toggle between CALL and PUT")
         self.title_label.doubleClicked.connect(self.toggle_option_type)
         main_layout.addWidget(self.title_label)
@@ -144,9 +148,9 @@ class BuyExitPanel(QWidget):
         spinbox = NoSelectSpinBox()
         spinbox.setRange(0, 10)
         spinbox.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
-        spinbox.setAlignment(Qt.AlignCenter)
+        spinbox.setAlignment(Qt.AlignmentFlag.AlignCenter)
         spinbox.setFont(UI_SPIN_FONT)
-        spinbox.setFocusPolicy(Qt.StrongFocus)
+        spinbox.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
         spinbox.valueChanged.connect(self._update_margin)
 
@@ -208,9 +212,9 @@ class BuyExitPanel(QWidget):
         layout.addWidget(QLabel("Estimated Premium"), 3, 0, 1, 2, Qt.AlignmentFlag.AlignCenter)
         self.margin_label = QLabel()
         self.margin_label.setObjectName("marginValue")
-        self.margin_label.setTextFormat(Qt.RichText)
-        self.margin_label.setAlignment(Qt.AlignCenter)
-        self.margin_label.setGraphicsEffect(None)
+        self.margin_label.setTextFormat(Qt.TextFormat.RichText)
+        self.margin_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.margin_label.setGraphicsEffect(cast(QGraphicsEffect, None))
         self.margin_label.setMinimumWidth(140)
         layout.addWidget(self.margin_label, 4, 0, 1, 2, Qt.AlignmentFlag.AlignCenter)
         # --- Margin animation setup (safe: margin_label exists here) ---
@@ -224,10 +228,12 @@ class BuyExitPanel(QWidget):
 
         self.buy_button = QPushButton("BUY")
         self.buy_button.setObjectName("primaryButton")
+        self.buy_button.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.buy_button.clicked.connect(self._on_buy_clicked)
 
         self.exit_button = QPushButton("EXIT")
         self.exit_button.setObjectName("dangerButton")
+        self.exit_button.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.exit_button.clicked.connect(lambda: self.exit_clicked.emit(self.option_type))
 
         layout.addWidget(self.exit_button)
@@ -370,17 +376,19 @@ class BuyExitPanel(QWidget):
                 border: 1px solid #12291F; 
             }
             #primaryButton:hover {
-                background-color: #126F17; /* Green background on hover */
+                background: #35503A;
                 color: white; /* White text on hover for better contrast */
             }
+            
             #dangerButton { /* EXIT button */
                 color: #dc3545; /* Red text */
                 border: 1px solid #12291F;
             }
             #dangerButton:hover {
-                background-color: #982B15; /* Red background on hover */
+                background: #D14A45;                
                 color: white; /* White text on hover for better contrast */
             }
+            
         """)
 
     def toggle_option_type(self):
