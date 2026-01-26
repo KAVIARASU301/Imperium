@@ -51,6 +51,9 @@ class PositionsTable(QWidget):
 
         self._portfolio_sl = None
         self._portfolio_tp = None
+        self._drag_active = False
+        self.visual_order: List[str] = []
+        self.visual_order = self._load_visual_order()
 
     # ------------------------------------------------------------------
     # UI
@@ -65,213 +68,88 @@ class PositionsTable(QWidget):
         self.table.headers = ["Symbol", "Qty", "Avg", "LTP", "P&L"]
         self.table.setColumnCount(len(self.table.headers))
         self.table.setHorizontalHeaderLabels(self.table.headers)
+        self.table.setDragEnabled(True)
+        self.table.setAcceptDrops(True)
+        self.table.setDropIndicatorShown(True)
+        self.table.setDragDropMode(QAbstractItemView.DragDrop)
 
         self.table.setMouseTracking(True)
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
 
         main_layout.addWidget(self.table, 1)
 
+        # 🔥 REDESIGNED FOOTER
         self.footer = QWidget()
+        self.footer.setFixedHeight(32)
         self.footer.setObjectName("footer")
         footer_layout = QHBoxLayout(self.footer)
-        footer_layout.setContentsMargins(10, 5, 10, 5)
+        footer_layout.setContentsMargins(10, 0, 10, 0)
+        footer_layout.setSpacing(12)
         self.footer.setContextMenuPolicy(Qt.CustomContextMenu)
         self.footer.customContextMenuRequested.connect(
             self._show_footer_context_menu
         )
 
-        # --- Refresh (icon only, static) ---
+        # --- LEFT: Refresh button ---
         self.refresh_button = QPushButton("⟳")
         self.refresh_button.setObjectName("footerIconButton")
-        self.refresh_button.setFixedWidth(28)
+        self.refresh_button.setFixedSize(24, 24)
         self.refresh_button.setToolTip("Refresh Positions")
 
-        # --- Portfolio SL / TP (static text) ---
+        # --- CENTER: Portfolio SL/TP ---
         self.portfolio_sl_tp_label = QLabel("SL/TP: —")
         self.portfolio_sl_tp_label.setObjectName("portfolioSLTPLabel")
+        self.portfolio_sl_tp_label.setAlignment(Qt.AlignCenter)
 
-        # --- Total P&L (static title) ---
-        self.total_pnl_title = QLabel("Total P&L: ₹")
+        # --- RIGHT: Total P&L ---
+        pnl_container = QWidget()
+        pnl_layout = QHBoxLayout(pnl_container)
+        pnl_layout.setContentsMargins(0, 0, 0, 0)
+        pnl_layout.setSpacing(6)
+
+        self.total_pnl_title = QLabel("Total P&L")
         self.total_pnl_title.setObjectName("footerTitleLabel")
 
-        # --- Total P&L value (fixed-width numeric lane) ---
-        self.total_pnl_value = QLabel("0")
+        self.total_pnl_value = QLabel("₹ 0")
         self.total_pnl_value.setObjectName("footerValueLabel")
         self.total_pnl_value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
-        # Reserve space for ~6-digit P&L (₹ -9,99,999)
+        # Reserve width for larger numbers
         fm = QFontMetrics(self.total_pnl_value.font())
         reserved_width = fm.horizontalAdvance("₹ -9,99,999")
-        self.total_pnl_value.setFixedWidth(reserved_width + 6)
+        self.total_pnl_value.setFixedWidth(reserved_width + 8)
 
-        # ---- Layout order ----
+        pnl_layout.addWidget(self.total_pnl_title)
+        pnl_layout.addWidget(self.total_pnl_value)
+
+        # --- ASSEMBLE ---
         footer_layout.addWidget(self.refresh_button)
-        footer_layout.addSpacing(10)
-        footer_layout.addWidget(self.portfolio_sl_tp_label)
-        footer_layout.addStretch()  # ⬅️ everything after this sticks to right
-        footer_layout.addWidget(self.total_pnl_title)
-        footer_layout.addSpacing(6)
-        footer_layout.addWidget(self.total_pnl_value)
+        footer_layout.addWidget(self._footer_separator())
+        footer_layout.addWidget(self.portfolio_sl_tp_label, 1)  # takes available space
+        footer_layout.addWidget(self._footer_separator())
+        footer_layout.addWidget(pnl_container)
 
         main_layout.addWidget(self.footer)
 
-    def _apply_styles(self):
-        self.table.verticalHeader().hide()
-        self.table.setShowGrid(False)
-        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.table.setFocusPolicy(Qt.NoFocus)
+    def _footer_separator(self):
+        """Visual separator line."""
+        sep = QWidget()
+        sep.setFixedWidth(1)
+        sep.setStyleSheet("background: #3A4458;")
+        return sep
 
-        # IMPORTANT: enable row selection (used for hover)
-        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.table.setCurrentCell(-1, -1)
+    def _update_footer(self):
+        total_pnl = sum(pos.get('pnl', 0.0) for pos in self.positions.values())
 
-        header = self.table.horizontalHeader()
-        header.setSectionResizeMode(self.SYMBOL_COL, QHeaderView.Stretch)
-        for col in (self.QUANTITY_COL, self.AVG_PRICE_COL, self.LTP_COL, self.PNL_COL):
-            header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
+        # Format with proper Indian notation
+        sign = "" if total_pnl >= 0 else "-"
+        formatted = f"₹ {sign}{abs(total_pnl):,.0f}"
+        self.total_pnl_value.setText(formatted)
 
-        self.setStyleSheet("""
-            QTableWidget {
-                background-image: url("assets/textures/positions_table.png");
-                color: #E0E0E0;
-                border: none;
-                font-size: 13px;
-            }
-
-            QHeaderView::section {
-                background-image: url("assets/textures/texture.png");                
-                color: #A9B1C3;
-                padding: 8px;
-                border: none;
-                font-weight: 600;
-                font-size: 12px;
-            }
-
-            /* MAIN ROW SEPARATOR */
-            QTableWidget::item {
-                padding: 6px 8px;
-                border-bottom: 1px solid #1E2430;
-            }
-
-            /* ROW HOVER (via selection) */
-            /* ROW SELECTION — uniform, no cell emphasis */
-            QTableWidget::item:selected,
-            QTableWidget::item:selected:active,
-            QTableWidget::item:selected:!active {
-                background-color: #202742;
-                color: #E0E0E0;
-            }
-            
-            /* REMOVE current-cell focus rectangle */
-            QTableWidget::item:selected:!active {
-                outline: 0;
-            }
-            
-            /* KILL any per-cell hover completely */
-            QTableWidget::item:hover {
-                background-color: transparent;
-            }
-
-
-            /* REMOVE CELL HOVER COMPLETELY */
-            QTableWidget::item:hover {
-                background-color: transparent;
-            }
-
-            #footer {
-                background-image: url("assets/textures/texture.png");
-                border-top: 1px solid #3A4458;
-            }
-
-            #footerLabel {
-                color: #E0E0E0;
-                font-size: 13px;
-                font-weight: 600;
-            }
-
-            #footerButton {
-                background-color: transparent;
-                color: #A9B1C3;
-                border: 1px solid #3A4458;
-                border-radius: 4px;
-                padding: 6px 12px;
-                font-size: 12px;
-            }
-
-            #footerButton:hover {
-                background-color: #29C7C9;
-                color: #161A25;
-                border-color: #29C7C9;
-            }
-            #portfolioSLTPLabel {
-                color: #A9B1C3;
-                font-size: 12px;
-                font-weight: 500;
-            }
-            
-            #footerIconButton {
-                background-color: transparent;
-                color: #A9B1C3;
-                border: 1px solid #3A4458;
-                border-radius: 4px;
-                padding: 4px;
-                font-size: 14px;
-            }
-            
-            #footerIconButton:hover {
-                background-color: #29C7C9;
-                color: #161A25;
-                border-color: #29C7C9;
-            }
-            #footerTitleLabel {
-                color: #A9B1C3;
-                font-size: 13px;
-                font-weight: 600;
-            }
-            
-            #footerValueLabel {
-                font-size: 14px;
-                font-weight: 700;
-            }
-
-            
-            /* ===== CONTEXT MENU ===== */
-QMenu {
-    background-color: #1B2030;
-    border: 1px solid #3A4458;
-    border-radius: 6px;
-    padding: 6px;
-}
-
-QMenu::item {
-    padding: 8px 22px 8px 18px;
-    color: #E0E0E0;
-    font-size: 13px;
-    border-radius: 4px;
-}
-
-QMenu::item:selected {
-    background-color: #2A3350;
-}
-
-QMenu::separator {
-    height: 1px;
-    background: #3A4458;
-    margin: 6px 4px;
-}
-
-/* Exit action — danger semantics */
-QMenu::item#exitAction {
-    color: #F85149;
-    font-weight: 600;
-}
-
-QMenu::item#exitAction:selected {
-    background-color: rgba(248, 81, 73, 0.15);
-}
-        """)
-
+        color = "#1DE9B6" if total_pnl >= 0 else "#F85149"
+        self.total_pnl_value.setStyleSheet(
+            f"color: {color}; font-weight: 700; font-size: 13px;"
+        )
     # ------------------------------------------------------------------
     # Signals
     # ------------------------------------------------------------------
@@ -281,6 +159,7 @@ QMenu::item#exitAction:selected {
         self.table.customContextMenuRequested.connect(self._show_context_menu)
         self.table.horizontalHeader().sectionResized.connect(self._on_column_resized)
         self.table.viewport().installEventFilter(self)
+        self.table.itemPressed.connect(self._on_item_pressed)
 
     # ------------------------------------------------------------------
     # Row-hover handling (THIS IS THE KEY FIX)
@@ -288,19 +167,32 @@ QMenu::item#exitAction:selected {
 
     def eventFilter(self, obj, event):
         if obj == self.table.viewport():
+
+            if event.type() == QEvent.Type.Drop:
+                self._handle_drop(event)
+                return True
+
             if event.type() == QEvent.Type.MouseMove:
+                if self._drag_active:
+                    return False
+
                 row = self.table.rowAt(event.position().toPoint().y())
-                if row != self._hovered_row:
+                if row != self._hovered_row and row >= 0:
                     self._hovered_row = row
-                    if row >= 0:
-                        self.table.selectRow(row)
+                    self.table.setCurrentCell(row, self.SYMBOL_COL)
 
             elif event.type() == QEvent.Type.Leave:
+                # Only clear hover if NOT dragging
+                if not self._drag_active:
+                    self._hovered_row = -1
+                    self.table.setCurrentCell(-1, -1)
+
+            elif event.type() == QEvent.Type.DragLeave:
                 self._hovered_row = -1
-                self.table.clearSelection()
+                self._drag_active = False
+                # Don't clear selection here - drag might still be in progress
 
         return super().eventFilter(obj, event)
-
     # ------------------------------------------------------------------
     # Context menu (UNCHANGED)
     # ------------------------------------------------------------------
@@ -405,19 +297,38 @@ QMenu::item#exitAction:selected {
     # ------------------------------------------------------------------
 
     def update_positions(self, positions_data: List[dict]):
+        self.positions = {p['tradingsymbol']: p for p in positions_data}
+
+        if not self.visual_order:
+            # First run, no saved order
+            self.visual_order = list(self.positions.keys())
+        else:
+            # Merge saved order with live positions
+            live = list(self.positions.keys())
+
+            # Keep existing order for still-open positions
+            self.visual_order = [s for s in self.visual_order if s in live]
+
+            # Append any new positions at the end
+            for s in live:
+                if s not in self.visual_order:
+                    self.visual_order.append(s)
+
+        self._rebuild_table_from_order()
+
+    def _rebuild_table_from_order(self):
         self.table.setRowCount(0)
-        self.positions.clear()
         self.position_row_map.clear()
 
-        for pos in positions_data:
-            self.add_position(pos)
+        for symbol in self.visual_order:
+            pos = self.positions.get(symbol)
+            if not pos:
+                continue
+            self._add_position_rows(pos)
 
         self._update_footer()
 
-        if not positions_data:
-            self._clear_portfolio_sl_tp()
-
-    def add_position(self, pos_data: dict):
+    def _add_position_rows(self, pos_data: dict):
         symbol = pos_data['tradingsymbol']
         self.positions[symbol] = pos_data
 
@@ -425,6 +336,8 @@ QMenu::item#exitAction:selected {
         self.table.insertRow(main_row)
         self.position_row_map[symbol] = main_row
         self.table.setRowHeight(main_row, 32)
+        self.table.setProperty(f"row_pid_{main_row}", symbol)
+        self.table.setProperty(f"row_role_{main_row}", "MAIN")
 
         self._set_symbol_item(main_row, pos_data)
         self._set_item(main_row, self.QUANTITY_COL, pos_data.get('quantity', 0))
@@ -440,7 +353,10 @@ QMenu::item#exitAction:selected {
             sltp_row = self.table.rowCount()
             self.table.insertRow(sltp_row)
             self.table.setRowHeight(sltp_row, 32)
+            self.table.setProperty(f"row_type_{sltp_row}", "SLTP")
             self._set_sltp_row(sltp_row, pos_data)
+            self.table.setProperty(f"row_pid_{sltp_row}", symbol)
+            self.table.setProperty(f"row_role_{sltp_row}", "SLTP")
 
     # ------------------------------------------------------------------
     # Helpers (UNCHANGED)
@@ -532,6 +448,31 @@ QMenu::item#exitAction:selected {
     # ------------------------------------------------------------------
     # Column persistence (UNCHANGED)
     # ------------------------------------------------------------------
+    def _load_visual_order(self):
+        try:
+            path = os.path.expanduser("~/.options_scalper/positions_table_order.json")
+            if not os.path.exists(path):
+                return []
+
+            with open(path, "r") as f:
+                order = json.load(f)
+
+            if isinstance(order, list):
+                return order
+        except Exception as e:
+            logger.warning(f"Failed to load position order: {e}")
+
+        return []
+
+    def _save_visual_order(self):
+        try:
+            path = os.path.expanduser("~/.options_scalper/positions_table_order.json")
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+
+            with open(path, "w") as f:
+                json.dump(self.visual_order, f, indent=2)
+        except Exception as e:
+            logger.warning(f"Failed to save position order: {e}")
 
     def _load_column_widths(self):
         try:
@@ -723,9 +664,345 @@ QMenu::item#exitAction:selected {
 
         dialog.move(x, y)
 
-    def closeEvent(self, event):
-        self._save_column_widths()
-        super().closeEvent(event)
+    def _is_main_position_row(self, row: int) -> bool:
+        return row in self.position_row_map.values()
+
+    def _is_sltp_row(self, row):
+        return self.table.property(f"row_type_{row}") == "SLTP"
+
+
+    def _on_item_pressed(self, item: QTableWidgetItem):
+        row = item.row()
+
+        # ❌ Prevent dragging SL/TP rows
+        if self._is_sltp_row(row):
+            return
+
+        self._drag_active = True
+
+    def _handle_drop(self, event):
+        self._drag_active = False
+
+        source_row = self.table.currentRow()
+        if source_row < 0:
+            self.table.setCurrentCell(-1, -1)  # 🔥 Clear here
+            return
+
+        source_item = self.table.item(source_row, self.SYMBOL_COL)
+        if not source_item:
+            self.table.setCurrentCell(-1, -1)  # 🔥 Clear here
+            return
+
+        symbol = source_item.text().split()[0]
+
+        pos = event.position().toPoint()
+        target_row = self.table.rowAt(pos.y())
+        if target_row < 0:
+            self.table.setCurrentCell(-1, -1)  # 🔥 Clear here
+            return
+
+        target_item = self.table.item(target_row, self.SYMBOL_COL)
+        if not target_item:
+            self.table.setCurrentCell(-1, -1)  # 🔥 Clear here
+            return
+
+        target_symbol = target_item.text().split()[0]
+
+        if symbol == target_symbol:
+            self.table.setCurrentCell(-1, -1)  # 🔥 Clear here
+            return
+
+        if symbol not in self.visual_order or target_symbol not in self.visual_order:
+            self.table.setCurrentCell(-1, -1)  # 🔥 Clear here
+            return
+
+        src_idx = self.visual_order.index(symbol)
+        tgt_idx = self.visual_order.index(target_symbol)
+
+        self.visual_order.remove(symbol)
+
+        if src_idx < tgt_idx:
+            insert_at = self.visual_order.index(target_symbol) + 1
+        else:
+            insert_at = self.visual_order.index(target_symbol)
+
+        self.visual_order.insert(insert_at, symbol)
+
+        self._rebuild_table_from_order()
+        self._save_visual_order()
+
+        self.table.setCurrentCell(-1, -1)  # 🔥 Clear selection after successful drop
 
     def save_state(self):
         self._save_column_widths()
+
+    def closeEvent(self, event):
+        self._save_column_widths()
+        self._save_visual_order()
+        super().closeEvent(event)
+
+    def _apply_styles(self):
+        self.table.verticalHeader().hide()
+        self.table.setShowGrid(False)
+        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table.setFocusPolicy(Qt.StrongFocus)
+
+        # IMPORTANT: enable row selection (used for hover)
+        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setCurrentCell(-1, -1)
+
+        header = self.table.horizontalHeader()
+        header.setFixedHeight(30)
+        header.setMinimumHeight(30)
+        header.setMaximumHeight(30)
+
+        self.table.setStyleSheet("""
+        QHeaderView::section {
+            padding: 4px 8px;
+            height: 28px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        """)
+        header.setSectionResizeMode(self.SYMBOL_COL, QHeaderView.Stretch)
+        for col in (self.QUANTITY_COL, self.AVG_PRICE_COL, self.LTP_COL, self.PNL_COL):
+            header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
+
+        self.setStyleSheet("""
+            QTableWidget {
+                background-image: url("assets/textures/main_window_bg.png");
+                color: #E0E0E0;
+                border: none;
+                font-size: 13px;
+            }
+
+            QHeaderView::section {
+                background: #041D27;               
+                color: #A9B1C3;
+                padding: 8px;
+                border: none;
+                font-weight: 600;
+                font-size: 12px;
+            }
+
+            /* ===== PREMIUM SCROLLBAR ===== */
+            QScrollBar:vertical {
+                background: transparent;
+                width: 8px;
+                margin: 0;
+                border: none;
+            }
+
+            QScrollBar::handle:vertical {
+                background: rgba(169, 177, 195, 0.25);
+                border-radius: 4px;
+                min-height: 30px;
+            }
+
+            QScrollBar::handle:vertical:hover {
+                background: rgba(169, 177, 195, 0.4);
+            }
+
+            QScrollBar::handle:vertical:pressed {
+                background: rgba(41, 199, 201, 0.5);
+            }
+
+            QScrollBar::add-line:vertical,
+            QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+
+            QScrollBar::add-page:vertical,
+            QScrollBar::sub-page:vertical {
+                background: none;
+            }
+
+            /* Horizontal scrollbar (if needed) */
+            QScrollBar:horizontal {
+                background: transparent;
+                height: 8px;
+                margin: 0;
+                border: none;
+            }
+
+            QScrollBar::handle:horizontal {
+                background: rgba(169, 177, 195, 0.25);
+                border-radius: 4px;
+                min-width: 30px;
+            }
+
+            QScrollBar::handle:horizontal:hover {
+                background: rgba(169, 177, 195, 0.4);
+            }
+
+            QScrollBar::handle:horizontal:pressed {
+                background: rgba(41, 199, 201, 0.5);
+            }
+
+            QScrollBar::add-line:horizontal,
+            QScrollBar::sub-line:horizontal {
+                width: 0px;
+            }
+
+            QScrollBar::add-page:horizontal,
+            QScrollBar::sub-page:horizontal {
+                background: none;
+            }
+
+            /* 🔥 REMOVE focus & current-cell outlines completely */
+            QTableWidget::item {
+                outline: 0;
+            }
+
+            QTableWidget::item:selected {
+                outline: 0;
+            }
+
+            QTableWidget::item:selected:!active {
+                outline: 0;
+            }
+
+            /* MAIN ROW SEPARATOR */
+            QTableWidget::item {
+                padding: 6px 8px;
+                border-bottom: 1px solid #1E2430;
+            }
+
+            /* ROW HOVER (via selection) */
+            /* ===== PREMIUM ROW HIGHLIGHT ===== */
+            QTableWidget::item:selected,
+            QTableWidget::item:selected:active,
+            QTableWidget::item:selected:!active {
+                background-color: #184540; 
+                color: #E6E9F2;
+                border: none;
+            }
+
+            /* Subtle depth: top/bottom light */
+            QTableWidget::item:selected {
+                border-top: 1px solid rgba(120, 150, 255, 0.12);
+                border-bottom: 1px solid rgba(20, 30, 80, 0.45);
+            }
+
+            /* Hovered row (current cell, not selected) */
+            QTableWidget::item:!selected:current {
+                background-color: rgba(4, 29, 39, 0.6);
+            }
+
+            /* REMOVE current-cell focus rectangle */
+            QTableWidget::item:selected:!active {
+                outline: 0;
+            }
+
+            /* Ensure spanned SL/TP rows also glow */
+            QTableWidget::item:selected,
+            QTableWidget::item:selected:active {
+                background-clip: padding;
+            }
+
+            /* REMOVE CELL HOVER COMPLETELY */
+            QTableWidget::item:hover {
+                background-color: transparent;
+            }
+
+            #footer {
+                background: #041D27;
+                border-top: 1px solid #3A4458;
+            }
+
+            #footerLabel {
+                color: #E0E0E0;
+                font-size: 13px;
+                font-weight: 600;
+            }
+
+            #footerButton {
+                background-color: transparent;
+                color: #A9B1C3;
+                border: 1px solid #3A4458;
+                border-radius: 4px;
+                padding: 6px 12px;
+                font-size: 12px;
+            }
+
+            #footerButton:hover {
+                background-color: #29C7C9;
+                color: #161A25;
+                border-color: #29C7C9;
+            }
+
+            #portfolioSLTPLabel {
+                color: #A9B1C3;
+                font-size: 12px;
+                font-weight: 500;
+            }
+
+            #footerIconButton {
+                background-color: transparent;
+                color: #A9B1C3;
+                border: 1px solid #3A4458;
+                border-radius: 4px;
+                padding: 0px;
+                font-size: 15px;
+                font-weight: 600;
+            }
+
+            #footerIconButton:hover {
+                background-color: #29C7C9;
+                color: #161A25;
+                border-color: #29C7C9;
+            }
+            #portfolioSLTPLabel {
+                color: #A9B1C3;
+                font-size: 11.5px;
+                font-weight: 500;
+                padding: 0px 8px;
+            }
+            #footerTitleLabel {
+                color: #A9B1C3;
+                font-size: 11.5px;
+                font-weight: 600;
+                letter-spacing: 0.3px;
+            }
+
+            #footerValueLabel {
+                font-size: 13px;
+                font-weight: 700;
+            }
+
+            /* ===== CONTEXT MENU ===== */
+            QMenu {
+                background-color: #1B2030;
+                border: 1px solid #3A4458;
+                border-radius: 6px;
+                padding: 6px;
+            }
+
+            QMenu::item {
+                padding: 8px 22px 8px 18px;
+                color: #E0E0E0;
+                font-size: 13px;
+                border-radius: 4px;
+            }
+
+            QMenu::item:selected {
+                background-color: #2A3350;
+            }
+
+            QMenu::separator {
+                height: 1px;
+                background: #3A4458;
+                margin: 6px 4px;
+            }
+
+            /* Exit action – danger semantics */
+            QMenu::item#exitAction {
+                color: #F85149;
+                font-weight: 600;
+            }
+
+            QMenu::item#exitAction:selected {
+                background-color: rgba(248, 81, 73, 0.15);
+            }
+        """)

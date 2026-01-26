@@ -5,7 +5,7 @@ from PySide6.QtGui import QAction
 from typing import Dict, Tuple
 
 
-def create_enhanced_menu_bar(parent) -> Tuple[QMenuBar, Dict[str, QAction]]:
+def create_menu_bar(parent) -> Tuple[QMenuBar, Dict[str, QAction]]:
     """
     Premium, strong menu bar designed to anchor the application visually
     and align with the header toolbar.
@@ -115,6 +115,7 @@ def create_enhanced_menu_bar(parent) -> Tuple[QMenuBar, Dict[str, QAction]]:
 
     menu_actions["option_chain"] = QAction("Option Chain", parent)
     menu_actions["option_chain"].setShortcut("Ctrl+O")
+
     tools_menu.addAction(menu_actions["option_chain"])
 
     tools_menu.addSeparator()

@@ -10,7 +10,6 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QGridLayout
 )
 
-from utils.pnl_logger import PnlLogger
 
 logger = logging.getLogger(__name__)
 
@@ -45,12 +44,12 @@ class PerformanceDialog(QDialog):
 
     # ------------------------------------------------------------------
 
-    def __init__(self, mode="live", parent=None):
+    def __init__(self, trade_ledger, mode="live", parent=None):
         super().__init__(parent)
 
         self.mode = mode.lower()
-        self.pnl_logger = PnlLogger(mode=self.mode)
         self._drag_pos: QPoint | None = None
+        self.trade_ledger = trade_ledger
 
         self.setWindowTitle("Performance Dashboard")
         self.setMinimumSize(1000, 720)
@@ -185,39 +184,105 @@ class PerformanceDialog(QDialog):
     # ------------------------------------------------------------------
     # DATA
     # ------------------------------------------------------------------
+    def _get_trades_from_ledger(self) -> list[dict]:
+        cur = self.trade_ledger.conn.cursor()
+        cur.execute("""
+            SELECT
+                tradingsymbol,
+                net_pnl,
+                quantity,
+                session_date
+            FROM trades
+            WHERE trading_mode = ?
+            ORDER BY session_date ASC
+        """, (self.mode.upper(),))
+
+        rows = cur.fetchall()
+
+        return [
+            {
+                "symbol": r[0],
+                "pnl": r[1],
+                "qty": r[2],
+                "date": r[3],
+            }
+            for r in rows
+        ]
+
+    def update_metrics(self, _metrics: dict | None = None):
+        """
+        Public API — ignores external metrics.
+        Always reads from TradeLedger.
+        """
+        self.refresh()
 
     def refresh(self):
-        pnl = self.pnl_logger.get_all_pnl()
-        self._update_metrics(pnl)
-        self._plot_equity(pnl)
+        """
+        Refresh performance metrics directly from TradeLedger.
+        """
+        pnl_by_day = self._get_pnl_by_day_from_ledger()
 
-    def _update_metrics(self, pnl: dict):
-        if not pnl:
+        self._update_metrics(pnl_by_day)
+        self._plot_equity(pnl_by_day)
+
+    def _get_pnl_by_day_from_ledger(self) -> dict:
+        cur = self.trade_ledger.conn.cursor()
+        cur.execute("""
+            SELECT session_date, COALESCE(SUM(net_pnl), 0)
+            FROM trades
+            WHERE trading_mode = ?
+            GROUP BY session_date
+            ORDER BY session_date ASC
+        """, (self.mode.upper(),))
+
+        rows = cur.fetchall()
+        return {row[0]: row[1] for row in rows}
+
+    def _update_metrics(self, pnl_by_day: dict):
+        trades = self._get_trades_from_ledger()
+        if not trades:
             return
 
-        values = list(pnl.values())
-        wins = [v for v in values if v > 0]
-        losses = [v for v in values if v < 0]
+        trade_pnls = [t["pnl"] for t in trades]
 
-        total = len(values)
-        total_pnl = sum(values)
-        win_rate = (len(wins) / total) * 100 if total else 0
+        wins = [p for p in trade_pnls if p > 0]
+        losses = [p for p in trade_pnls if p < 0]
 
+        total_trades = len(trade_pnls)
+        total_pnl = sum(trade_pnls)
+
+        win_rate = (len(wins) / total_trades) * 100 if total_trades else 0
         avg_win = sum(wins) / len(wins) if wins else 0
         avg_loss = abs(sum(losses) / len(losses)) if losses else 0
 
-        rr = avg_win / avg_loss if avg_loss else 0
-        expectancy = (win_rate / 100) * avg_win - ((100 - win_rate) / 100) * avg_loss
+        expectancy = (
+                (win_rate / 100) * avg_win -
+                ((100 - win_rate) / 100) * avg_loss
+        )
+
         profit_factor = sum(wins) / abs(sum(losses)) if losses else float("inf")
-        consistency = (len(wins) / total) * 100 if total else 0
+        rr_ratio = avg_win / avg_loss if avg_loss else 0
 
         rr_quality = (
-            "Poor" if rr < 1 else
-            "Not Bad" if rr < 1.5 else
-            "Good" if rr < 2 else
+            "Poor" if rr_ratio < 1 else
+            "Not Bad" if rr_ratio < 1.5 else
+            "Good" if rr_ratio < 2 else
             "Very Good"
         )
 
+        # --- Day-based metrics ---
+        daily_values = list(pnl_by_day.values())
+        green_days = [v for v in daily_values if v > 0]
+
+        consistency = (
+            (len(green_days) / len(daily_values)) * 100
+            if daily_values else 0
+        )
+
+        best_day = max(daily_values) if daily_values else 0
+        worst_day = min(daily_values) if daily_values else 0
+
+        # --- UI setter ---
         def setv(key, text, color):
             lbl = self.labels[key]
             lbl.setText(text)
@@ -230,14 +295,14 @@ class PerformanceDialog(QDialog):
 
         setv("avg_win", f"₹{avg_win:,.0f}", "#4CAF50")
         setv("avg_loss", f"₹{avg_loss:,.0f}", "#F85149")
-        setv("rr_ratio", f"{rr:.2f}", "#29C7C9")
+        setv("rr_ratio", f"{rr_ratio:.2f}", "#29C7C9")
         setv("rr_quality", rr_quality,
-             "#00D1B2" if rr >= 2 else "#29C7C9" if rr >= 1.5 else "#F39C12")
+             "#00D1B2" if rr_ratio >= 2 else "#29C7C9" if rr_ratio >= 1.5 else "#F39C12")
 
-        setv("total_trades", str(total), "#E0E0E0")
+        setv("total_trades", str(total_trades), "#E0E0E0")
         setv("consistency", f"{consistency:.1f}%", "#4CAF50" if consistency >= 50 else "#F39C12")
-        setv("best_day", f"₹{max(values):,.0f}", "#4CAF50")
-        setv("worst_day", f"₹{min(values):,.0f}", "#F85149")
+        setv("best_day", f"₹{best_day:,.0f}", "#4CAF50")
+        setv("worst_day", f"₹{worst_day:,.0f}", "#F85149")
 
     def _plot_equity(self, pnl: dict):
         self.chart.clear()
@@ -247,7 +312,12 @@ class PerformanceDialog(QDialog):
 
         for d, p in sorted(pnl.items()):
             running += p
-            xs.append(datetime.strptime(d, "%Y-%m-%d").timestamp())
+            if isinstance(d, str):
+                dt = datetime.strptime(d, "%Y-%m-%d")
+            else:
+                dt = datetime.combine(d, datetime.min.time())
+
+            xs.append(dt.timestamp())
             ys.append(running)
 
         if not xs:

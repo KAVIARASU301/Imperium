@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
     QAbstractSpinBox
 )
 from PySide6.QtCore import Qt, Signal
-
+from widgets.symbol_picker import SymbolPickerPopup
 logger = logging.getLogger(__name__)
 
 
@@ -66,7 +66,6 @@ class HeaderToolbar(QFrame):
         self.exit_all_button.setToolTip("Exit all open positions")
         main_layout.addWidget(self.exit_all_button)
 
-        self.symbol_combo.currentTextChanged.connect(self._on_major_setting_changed)
         self.expiry_combo.currentTextChanged.connect(self._on_major_setting_changed)
         self.lot_size_spin.valueChanged.connect(self._on_major_setting_changed)
         self.lot_size_spin.valueChanged.connect(self.lot_size_changed.emit)
@@ -85,14 +84,10 @@ class HeaderToolbar(QFrame):
         return status_layout
 
     def _on_major_setting_changed(self):
-        """
-        Handles internal UI updates and emits a signal about the new state.
-        This method does not save settings.
-        """
         if self._suppress_signals:
             return
 
-        symbol = self.symbol_combo.currentText()
+        symbol = self.symbol_button.text()  # Changed from symbol_combo
         if not symbol:
             return
 
@@ -125,9 +120,27 @@ class HeaderToolbar(QFrame):
         return group
 
     def _create_symbol_combo(self):
-        self.symbol_combo = QComboBox()
-        self.symbol_combo.setFixedWidth(130)
-        return self.symbol_combo
+        """Create custom symbol picker button instead of QComboBox."""
+        self.symbol_button = QPushButton("Select Symbol")
+        self.symbol_button.setFixedWidth(130)
+        self.symbol_button.setObjectName("symbolPickerButton")
+        self.symbol_button.clicked.connect(self._show_symbol_picker)
+
+        # Create popup (hidden initially)
+        self.symbol_picker = SymbolPickerPopup(self)
+        self.symbol_picker.symbol_selected.connect(self._on_symbol_picked)
+
+        return self.symbol_button
+
+    def _show_symbol_picker(self):
+        """Show the custom symbol picker popup."""
+        self.symbol_picker.show_below(self.symbol_button)
+
+    def _on_symbol_picked(self, symbol: str):
+        """Handle symbol selection from picker."""
+        self.symbol_button.setText(symbol)
+        self._suppress_signals = False
+        self._on_major_setting_changed()
 
     def _create_expiry_combo(self):
         self.expiry_combo = QComboBox()
@@ -144,23 +157,28 @@ class HeaderToolbar(QFrame):
         return self.lot_size_spin
 
     def _on_quick_symbol_selected(self, symbol: str):
-        if self.symbol_combo.currentText() != symbol:
-            self.symbol_combo.setCurrentText(symbol)
+        if self.symbol_button.text() != symbol:
+            self.symbol_button.setText(symbol)
+            self._on_major_setting_changed()
 
     def set_symbols(self, symbols: List[str]):
-        """Populates the symbol dropdown. Called externally by the main window."""
+        """Populates the symbol picker. Called externally by the main window."""
         self._suppress_signals = True
-        current_selection = self.symbol_combo.currentText()
-        self.symbol_combo.clear()
-        self.symbol_combo.addItems(symbols)
+        current_selection = self.symbol_button.text()
+
+        self.symbol_picker.set_symbols(symbols)
+
         if current_selection in symbols:
-            self.symbol_combo.setCurrentText(current_selection)
+            self.symbol_button.setText(current_selection)
+        elif symbols:
+            self.symbol_button.setText(symbols[0])
+
         self._suppress_signals = False
 
     def set_active_symbol(self, symbol: str):
-        """Sets the currently displayed symbol. Called externally by the main window."""
+        """Sets the currently displayed symbol."""
         self._suppress_signals = True
-        self.symbol_combo.setCurrentText(symbol)
+        self.symbol_button.setText(symbol)
         for btn_symbol, btn in self.index_buttons.items():
             btn.setChecked(btn_symbol == symbol)
         self._suppress_signals = False
@@ -189,7 +207,7 @@ class HeaderToolbar(QFrame):
     def get_current_settings(self) -> Dict[str, any]:
         """Returns the current state of the UI controls."""
         return {
-            'symbol': self.symbol_combo.currentText(),
+            'symbol': self.symbol_button.text(),
             'expiry': self.expiry_combo.currentText(),
             'lot_size': self.lot_size_spin.value()
         }
@@ -293,5 +311,17 @@ class HeaderToolbar(QFrame):
             color: #161A25;
         }
         
-        
+        #symbolPickerButton {
+            background-color: #212635;
+            color: #E0E0E0;
+            border: 1px solid #3A4458;
+            border-radius: 5px;
+            padding: 4px 8px;
+            font-size: 13px;
+            font-weight: 500;
+            text-align: left;
+        }
+        #symbolPickerButton:hover {
+            border-color: #29C7C9;
+        }
                 """)

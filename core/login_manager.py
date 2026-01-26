@@ -2,7 +2,7 @@
 import logging
 import webbrowser
 from typing import Optional, Dict
-
+from datetime import datetime, timedelta
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
@@ -310,6 +310,17 @@ class LoginManager(QDialog):
 
         self.stacked_widget.setCurrentIndex(1)  # Credentials page
 
+    def _is_token_expired(self, token_data: dict) -> bool:
+        """Check if access token is older than 12 hours."""
+        if not token_data or 'created_at' not in token_data:
+            return True
+
+        try:
+            created_at = datetime.fromisoformat(token_data['created_at'])
+            expiry_time = created_at + timedelta(hours=12)
+            return datetime.now() >= expiry_time
+        except (ValueError, TypeError):
+            return True
     # ---------------- DRAGGABLE WINDOW ---------------- #
 
     def mousePressEvent(self, event):
@@ -337,11 +348,23 @@ class LoginManager(QDialog):
             self.api_secret_input.setText(self.api_secret)
 
         token_data = self.token_manager.load_token_data()
-        if token_data and token_data.get('access_token') and self.api_key:
+
+        # Check if token exists AND is not expired
+        if (token_data and
+                token_data.get('access_token') and
+                self.api_key and
+                not self._is_token_expired(token_data)):
+
             self.access_token = token_data['access_token']
             self.trading_mode = token_data.get('trading_mode', 'live')
             self.stacked_widget.setCurrentIndex(0)
         else:
+            # Token expired or doesn't exist - clear it and force re-login
+            if token_data and self._is_token_expired(token_data):
+                logger.info("Access token expired (>12 hours). Clearing session.")
+                self.token_manager.clear_token_data()
+
+            self.access_token = None
             self.stacked_widget.setCurrentIndex(1)
 
 
@@ -486,7 +509,8 @@ class LoginManager(QDialog):
         self.access_token = access_token
         self.token_manager.save_token_data({
             'access_token': access_token,
-            'trading_mode': self.trading_mode
+            'trading_mode': self.trading_mode,
+            'created_at': datetime.now().isoformat()  # Add timestamp
         })
         self.setCursor(Qt.ArrowCursor)
         self.accept()

@@ -9,7 +9,6 @@ from kiteconnect import KiteConnect
 
 from utils.trade_logger import TradeLogger
 from utils.data_models import Position, Contract
-from utils.pnl_logger import PnlLogger
 from core.paper_trading_manager import PaperTradingManager
 
 logger = logging.getLogger(__name__)
@@ -40,9 +39,6 @@ class PositionManager(QObject):
         self._exit_in_progress: set[str] = set()
 
         mode = 'paper' if isinstance(self.trader, PaperTradingManager) else 'live'
-        self.pnl_logger = PnlLogger(mode=mode)
-        self.realized_day_pnl = 0.0
-        self.trade_log: List[float] = []
         self.instrument_data: Dict = {}
         self.tradingsymbol_map: Dict[str, Dict] = {}
 
@@ -179,9 +175,7 @@ class PositionManager(QObject):
             exited_pos = self._positions.pop(symbol, None)
             if not exited_pos:
                 continue
-            if exited_pos.pnl is not None:
-                self.realized_day_pnl += exited_pos.pnl
-                self.pnl_logger.log_pnl(datetime.now(), exited_pos.pnl)
+
             self._exit_in_progress.discard(symbol)
             self.position_removed.emit(symbol)
 
@@ -262,7 +256,17 @@ class PositionManager(QObject):
 
         self._exit_in_progress.add(symbol)
         position.is_exiting = True
+        # 🔒 FIX: paper trading must NOT place orders here
+        if isinstance(self.trader, PaperTradingManager):
+            # UI already placed the exit order
+            exited_pos = self._positions.pop(symbol, None)
+            if exited_pos:
+                self.position_removed.emit(symbol)
+                self.positions_updated.emit(self.get_all_positions())
+                self.refresh_completed.emit(True)
 
+            self._exit_in_progress.discard(symbol)
+            return
         try:
             self.trader.place_order(
                 variety=self.trader.VARIETY_REGULAR,
@@ -278,10 +282,6 @@ class PositionManager(QObject):
             # ✅ IMMEDIATE LOCAL CLEANUP (THIS FIXES FREEZE)
             exited_pos = self._positions.pop(symbol, None)
             if exited_pos:
-                if exited_pos.pnl is not None:
-                    self.realized_day_pnl += exited_pos.pnl
-                    self.pnl_logger.log_pnl(datetime.now(), exited_pos.pnl)
-
                 self.position_removed.emit(symbol)
                 self.positions_updated.emit(self.get_all_positions())
                 self.refresh_completed.emit(True)
@@ -348,8 +348,7 @@ class PositionManager(QObject):
     def get_position(self, tradingsymbol: str) -> Optional[Position]:
         return self._positions.get(tradingsymbol)
 
-    def get_realized_day_pnl(self) -> float:
-        return self.realized_day_pnl
+
 
     def has_positions(self) -> bool:
         """Checks if there are any open positions with non-zero quantity."""

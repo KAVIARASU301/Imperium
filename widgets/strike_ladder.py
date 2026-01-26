@@ -2,9 +2,13 @@ import logging
 from typing import Dict, List, Optional, Union
 from datetime import date
 
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout,
-                               QLabel, QPushButton, QScrollArea, QProgressBar)
-from PySide6.QtCore import Qt, Signal, QTimer, QPropertyAnimation, QEasingCurve, QByteArray, QAbstractAnimation
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+    QMenu, QDialog, QFormLayout, QSpinBox, QCheckBox,
+    QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QProgressBar, QStyle
+)
+from PySide6.QtCore import Qt, Signal, QTimer, QPoint, QEvent
+from PySide6.QtGui import QColor, QFont
 from kiteconnect import KiteConnect
 
 from utils.data_models import Contract
@@ -12,486 +16,852 @@ from utils.data_models import Contract
 logger = logging.getLogger(__name__)
 
 
-# --- Helper Function for Indian Number Formatting (from your original file) ---
 def format_indian(number: int) -> str:
-    """Formats a number into the Indian numbering system (lakhs, crores)."""
     if not isinstance(number, int) or number == 0:
-        return "-"
+        return "—"
     s = str(number)
     if len(s) <= 3:
         return s
-    last_three = s[-3:]
-    other_digits = s[:-3]
-    res = "".join(f",{c}" if i % 2 == 0 and i > 0 else c for i, c in enumerate(reversed(other_digits)))
+    last_three, other = s[-3:], s[:-3]
+    res = "".join(f",{c}" if i % 2 == 0 and i > 0 else c
+                  for i, c in enumerate(reversed(other)))
     return res[::-1] + "," + last_three
 
 
 class StrikeLadderWidget(QWidget):
-    """Strike ladder with dynamic interval calculation and a premium UI."""
+    """Premium compact strike ladder with table design."""
 
     strike_selected = Signal(Contract)
     interval_calculated = Signal(str, float)
     interval_changed = Signal(str, float)
-    COLUMN_WIDTHS = [35, 100, 60, 80, 75, 80, 60, 100, 35]  # Adjusted for new layout
+
+    CE_BTN, CE_BID, CE_ASK, CE_LTP, CE_OI, STRIKE, PE_OI, PE_LTP, PE_BID, PE_ASK, PE_BTN = 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10
+    COLUMN_WEIGHTS = {
+        CE_BID: 1.0,
+        CE_ASK: 1.0,
+        CE_LTP: 1.1,
+        CE_OI: 1.2,
+        PE_OI: 1.2,
+        PE_LTP: 1.1,
+        PE_BID: 1.0,
+        PE_ASK: 1.0,
+    }
 
     def __init__(self, kite_client: KiteConnect):
         super().__init__()
-        # --- All original attributes are preserved ---
+
         self.kite = kite_client
-        self.symbol = ""
-        self.expiry = None
-        self.current_price = 0.0
-        self.base_strike_interval = 75.0
-        self.user_strike_interval = 0.0
-        self.num_strikes_above = 15
-        self.num_strikes_below = 15
+        self.symbol, self.expiry, self.current_price = "", None, 0.0
+        self.base_strike_interval, self.user_strike_interval = 75.0, 0.0
+        self.num_strikes_above, self.num_strikes_below = 15, 15
         self.atm_strike = 0.0
         self.contracts: Dict[float, Dict[str, Contract]] = {}
-        self.instrument_data = {}
+        self.instrument_data, self.available_strikes = {}, []
         self.auto_adjust_enabled = True
-        self.available_strikes = []
-        self.atm_row_widget = None
         self._max_oi = 1.0
-        self.scroll_animation = None
-        self.row_widgets: Dict[float, QWidget] = {}
 
         self.update_timer = QTimer(self)
         self.update_timer.timeout.connect(self._check_price_movement)
         self.update_timer.start(5000)
-
-        # --- UI Setup ---
-        self._setup_styles()
-        self._setup_ui()
-
-    def _setup_styles(self):
-        """Defines the color palette for the widget for a consistent look."""
-        self.colors = {
-            'bg': '#161A25',
-            'bg_header': '#212635',
-            'bg_itm_call': 'rgba(41, 199, 201, 0.05)',
-            'bg_itm_put': 'rgba(248, 81, 73, 0.05)',
-            'bg_atm_strike': '#2A3140',
-            'text_header': '#A9B1C3',
-            'text_primary': '#E0E0E0',
-            'text_secondary': '#8A9BA8',
-            'border': '#2A3140',
-            'call': '#29C7C9',
-            'put': '#F85149',
-            'oi_call_bar': '#29C7C9',
-            'oi_put_bar': '#F85149',
-            'accent': '#3A4458'
+        self._last_centered_atm: Optional[float] = None
+        self._user_scrolling = False
+        self._last_atm_strike: Optional[float] = None
+        self.underlying_data = {
+            'ltp': 0.0,
+            'prev_close': 0.0,
+            'change_pct': 0.0,
+            'day_high': 0.0,
+            'day_low': 0.0,
+            'volume': 0,
+            'vix': 0.0
         }
+        self.vix_value = 0.0
+        self._init_ui()
+        self._apply_styles()
+        self._connect_signals()
 
-    def _setup_ui(self):
-        """Initialize UI with the new premium styling."""
-        self.setStyleSheet(f"background-color: {self.colors['bg']}; border: none;")
-        main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.setSpacing(0)
-        main_layout.addWidget(self._create_header_row())
+    def _init_ui(self):
+        main = QVBoxLayout(self)
+        main.setContentsMargins(0, 0, 0, 0)
+        main.setSpacing(0)
 
-        self.scroll_area = QScrollArea()
-        self.scroll_area.setWidgetResizable(True)
-        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.scroll_area.setStyleSheet("""
-        QScrollArea {
-            background: transparent;
-        }
-        QScrollArea::viewport {
-            background: transparent;
-        }
-        """)
+        self.table = QTableWidget()
+        headers = ["CE", "BID", "ASK", "LTP", "OI", "STRIKE", "OI", "LTP", "BID", "ASK", "PE"]
+        self.table.setColumnCount(len(headers))
+        self.table.setHorizontalHeaderLabels(headers)
+        self.table.setMouseTracking(False)
+        self.table.viewport().setMouseTracking(False)
+        self.table.setContextMenuPolicy(Qt.CustomContextMenu)
+        main.addWidget(self.table, 1)
+        self.table.verticalScrollBar().sliderPressed.connect(
+            lambda: setattr(self, "_user_scrolling", True)
+        )
+        self.table.verticalScrollBar().sliderReleased.connect(
+            lambda: setattr(self, "_user_scrolling", False)
+        )
+        self.table.verticalScrollBar().valueChanged.connect(
+            lambda: setattr(self, "_user_scrolling", True)
+        )
 
-        self.strikes_container = QWidget()
-        self.strikes_container.setStyleSheet("background: transparent;")
-        self.ladder_layout = QVBoxLayout(self.strikes_container)
-        self.ladder_layout.setContentsMargins(0, 0, 0, 0)
-        self.ladder_layout.setSpacing(1)  # Tighter rows
-        self.ladder_layout.addStretch()
+        # Create footer
+        self._create_footer()
+        main.addWidget(self.footer)
 
-        self.scroll_area.setWidget(self.strikes_container)
-        main_layout.addWidget(self.scroll_area)
+    def _reset_user_scroll(self):
+        self._user_scrolling = False
 
-        self.background = QWidget(self)
-        self.background.setObjectName("ladderBg")
-        self.background.lower()  # push behind everything
+    def _create_footer(self):
+        """Institutional-grade footer with key metrics."""
+        self.footer = QWidget()
+        self.footer.setObjectName("ladderFooter")
+        self.footer.setFixedHeight(28)
 
-        self.background.setStyleSheet("""
-        #ladderBg {
-            background-image: url("assets/textures/strike_ladder_bg.png");            
-            background-repeat: no-repeat;
-            background-position: center;
-            background-color: #161A25;
-        }
-        """)
+        layout = QHBoxLayout(self.footer)
+        layout.setContentsMargins(8, 0, 8, 0)
+        layout.setSpacing(8)
 
-    def _create_header_row(self) -> QWidget:
-        """Creates the styled header for the ladder."""
-        header_row = QWidget()
-        header_row.setFixedHeight(35)
-        header_layout = QHBoxLayout(header_row)
-        header_layout.setContentsMargins(5, 0, 5, 0)
-        header_layout.setSpacing(1)
-        headers = ["CE", "BID/ASK", "LTP", "OI", "STRIKE", "OI", "LTP", "BID/ASK", "PE"]
+        # Settings button
+        self.settings_btn = QPushButton("⚙")
+        self.settings_btn.setObjectName("settingsBtn")
+        self.settings_btn.setFixedSize(21, 21)
+        self.settings_btn.setToolTip("Ladder Settings")
 
-        for i, (header, width) in enumerate(zip(headers, self.COLUMN_WIDTHS)):
-            label = QLabel(header)
-            label.setFixedWidth(width)
-            label.setAlignment(Qt.AlignCenter)
-            label.setStyleSheet(f"""
-                background-image: url("assets/textures/cross_stripes.png");            
-                background-color: {self.colors['bg_header']};
-                color: {self.colors['text_header']};
-                padding: 4px 0;
-                font-family: 'Segoe UI';
+        # --- UNDERLYING METRICS ---
+        self.underlying_lbl = QLabel("—")
+        self.underlying_lbl.setObjectName("underlyingLabel")
+        self.underlying_lbl.setToolTip("Underlying LTP & Change")
+
+        self.range_lbl = QLabel("Range: —")
+        self.range_lbl.setObjectName("footerStat")
+        self.range_lbl.setToolTip("Day High/Low")
+
+        self.vol_lbl = QLabel("Vol: —")
+        self.vol_lbl.setObjectName("footerStat")
+        self.vol_lbl.setToolTip("Volume Traded")
+
+        # --- OPTIONS METRICS ---
+        self.call_oi_lbl = QLabel("CE OI: —")
+        self.call_oi_lbl.setObjectName("footerStat")
+
+        self.put_oi_lbl = QLabel("PE OI: —")
+        self.put_oi_lbl.setObjectName("footerStat")
+
+        self.pcr_label = QLabel("PCR: —")
+        self.pcr_label.setObjectName("pcrLabel")
+
+        self.vix_label = QLabel("VIX: —")
+        self.vix_label.setObjectName("vixLabel")
+
+        # Alignment
+        for lbl in [self.underlying_lbl, self.range_lbl, self.vol_lbl,
+                    self.call_oi_lbl, self.put_oi_lbl, self.pcr_label, self.vix_label]:
+            lbl.setAlignment(Qt.AlignVCenter)
+
+        # Assemble left → right
+        layout.addWidget(self.settings_btn)
+        layout.addSpacing(6)
+
+        # Underlying section
+        layout.addWidget(self.underlying_lbl)
+        layout.addWidget(self._footer_sep())
+        layout.addWidget(self.range_lbl)
+        layout.addWidget(self._footer_sep())
+        layout.addWidget(self.vol_lbl)
+        layout.addWidget(self._footer_sep())
+
+        # Options section
+        layout.addWidget(self.call_oi_lbl)
+        layout.addWidget(self._footer_sep())
+        layout.addWidget(self.put_oi_lbl)
+        layout.addWidget(self._footer_sep())
+        layout.addWidget(self.pcr_label)
+        layout.addWidget(self._footer_sep())
+        layout.addWidget(self.vix_label)
+
+        layout.addStretch(1)
+
+    def _footer_sep(self):
+        sep = QLabel("│")
+        sep.setStyleSheet("color: #3A4458; font-size: 10px;")
+        return sep
+
+    def _apply_styles(self):
+        self.table.verticalHeader().hide()
+        self.table.setShowGrid(False)
+        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table.setSelectionMode(QAbstractItemView.NoSelection)
+        self.table.setFocusPolicy(Qt.NoFocus)
+
+        self.table.setCurrentCell(-1, -1)
+
+        h = self.table.horizontalHeader()
+
+        # Fixed columns
+        h.setSectionResizeMode(self.CE_BTN, QHeaderView.Fixed)
+        h.setSectionResizeMode(self.PE_BTN, QHeaderView.Fixed)
+        h.setSectionResizeMode(self.STRIKE, QHeaderView.Fixed)
+
+        self.table.setColumnWidth(self.CE_BTN, 32)
+        self.table.setColumnWidth(self.PE_BTN, 32)
+        self.table.setColumnWidth(self.STRIKE, 75)
+
+        # Stretchable columns
+        for col in self.COLUMN_WEIGHTS:
+            h.setSectionResizeMode(col, QHeaderView.Stretch)
+
+        self.setStyleSheet("""
+            QTableWidget {
+                background-image: url("assets/textures/main_window_bg.png");
+                color: #E0E0E0;
+                border: none;
+                font-size: 12px;
+            }
+            QHeaderView::section {
+                background: #041D27;
+                color: #A9B1C3;
+                padding: 6px 4px;
+                border: none;
+                font-weight: 600;
                 font-size: 11px;
-                font-weight: bold;
-            """)
-            header_layout.addWidget(label)
-        return header_row
-
-    def _create_strike_row_widget(self, strike: float, is_atm: bool) -> QWidget:
-        """Creates a single, fully styled row for a strike price."""
-        row_widget = QWidget()
-        row_layout = QHBoxLayout(row_widget)
-        row_layout.setContentsMargins(5, 0, 5, 0)
-        row_layout.setSpacing(1)
-
-        ce_contract = self.contracts.get(strike, {}).get('CE')
-        pe_contract = self.contracts.get(strike, {}).get('PE')
-
-        is_call_itm = strike < self.current_price
-        is_put_itm = strike > self.current_price
-
-        # Create and add widgets for the row
-        row_layout.addWidget(self._create_option_button(ce_contract))
-        row_layout.addWidget(self._create_data_label(f"call_ba_{strike}", ce_contract, 'ba', is_call_itm))
-        row_layout.addWidget(self._create_data_label(f"call_ltp_{strike}", ce_contract, 'ltp', is_call_itm))
-        row_layout.addWidget(self._create_oi_widget(f"call_oi_{strike}", ce_contract, is_call_itm))
-
-        row_layout.addWidget(self._create_strike_label(strike, is_atm))
-
-        row_layout.addWidget(self._create_oi_widget(f"put_oi_{strike}", pe_contract, is_put_itm))
-        row_layout.addWidget(self._create_data_label(f"put_ltp_{strike}", pe_contract, 'ltp', is_put_itm))
-        row_layout.addWidget(self._create_data_label(f"put_ba_{strike}", pe_contract, 'ba', is_put_itm))
-        row_layout.addWidget(self._create_option_button(pe_contract))
-
-        for i in range(row_layout.count()):
-            row_layout.itemAt(i).widget().setFixedWidth(self.COLUMN_WIDTHS[i])
-        return row_widget
-
-    @staticmethod
-    def _create_strike_label(strike: float, is_atm: bool) -> QLabel:
-        """Creates the strike price label with styling from the old design."""
-        label = QLabel(f"{strike:.0f}")
-        label.setAlignment(Qt.AlignCenter)
-
-        if is_atm:
-            # Style for the ATM (At-The-Money) strike row
-            label.setStyleSheet("""
-                            QLabel {
-                                color: #05dbf7;
-                                background-color: #161A25;
-                                border: 1px solid #444444;
-                                border-radius: 4px;
-                                padding: 6px 0;
-                                font-size: 14px;
-                                font-weight: bold;
-                                font-family: 'Segoe UI', 'Arial', monospace;
-                            }
-                        """)
-        else:
-            # Style for all other non-ATM strike rows
-            label.setStyleSheet("""
-                QLabel {
-                    color: #FFFFFF;
-                    background-color: #000614;
-                    border: 1px solid #444444;
-                    border-radius: 3px;
-                    padding: 6px 0;
-                    font-size: 13px;
-                    font-weight: bold;
-                    font-family: 'Segoe UI', 'Arial', monospace;
-                }
-            """)
-        return label
+            }
+            QTableWidget::item {
+                padding: 4px 4px;
+                border-bottom: 1px solid #1E2430;
+                outline: 0;
+            }
+            
+            QTableWidget::item:hover {
+                background: transparent;
+            }
+            
+            QTableWidget::item:selected:hover {
+                background: transparent;
+            }
+            QScrollBar:vertical {
+                background: transparent;
+                width: 0px;
+            }
+            QScrollBar::handle:vertical {
+                background: rgba(169, 177, 195, 0.25);
+                border-radius: 3px;
+                min-height: 30px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: rgba(169, 177, 195, 0.4);
+            }
+            #ladderFooter {
+                background: #041D27;
+                border-top: 1px solid #3A4458;
+            }
+            
+            #settingsBtn {
+                background: transparent;
+                color: #A9B1C3;
+                border: 1px solid #3A4458;
+                border-radius: 3px;
+                padding: 0px;
+            }
+            
+            #settingsBtn:hover {
+                background: #3A4458;
+            }
+            
+            #footerStat {
+                color: #A9B1C3;
+                font-size: 10.5px;
+            }
+            
+            #pcrLabel {
+                font-size: 10.5px;
+                font-weight: 700;
+            }
 
 
-    def _create_data_label(self, name: str, contract: Optional[Contract], type: str, is_itm: bool) -> QLabel:
-        text, color = "-", self.colors['text_secondary']
-        if contract:
-            if type == 'ltp':
-                text = f"{contract.ltp:.2f}"
-                color = self.colors['call'] if contract.option_type == 'CE' else self.colors['put']
-            # --- MODIFICATION START ---
-            elif type == 'ba' and contract.bid > 0 and contract.ask > 0:
-                text = f"{contract.bid:.2f} / {contract.ask:.2f}"
-            # --- MODIFICATION END ---
-
-        label = QLabel(text)
-        label.setObjectName(name)
-        label.setAlignment(Qt.AlignCenter)
-        bg = self.colors['bg_itm_call'] if is_itm and contract and contract.option_type == 'CE' else \
-            self.colors['bg_itm_put'] if is_itm and contract and contract.option_type == 'PE' else 'transparent'
-        label.setStyleSheet(f"background-color: {bg}; color: {color}; font-size: 13px; font-weight: 500;")
-        return label
-
-    def _create_oi_widget(self, name: str, contract: Optional[Contract], is_itm: bool) -> QWidget:
-        container = QWidget()
-        container.setObjectName(name)
-        layout = QVBoxLayout(container)
-        layout.setContentsMargins(2, 4, 2, 4)
-        layout.setSpacing(2)
-
-        oi_value = contract.oi if contract else 0
-        oi_label = QLabel(format_indian(oi_value))
-        oi_label.setAlignment(Qt.AlignCenter)
-
-        oi_bar = QProgressBar()
-        oi_bar.setMaximum(100)
-        oi_bar.setValue(int((oi_value / self._max_oi) * 100) if self._max_oi > 0 else 0)
-        oi_bar.setTextVisible(False)
-        oi_bar.setFixedHeight(3)
-
-        is_call_option = contract and contract.option_type == 'CE'
-
-        # --- MODIFICATION START ---
-        # Invert the progress bar direction for Call options
-        if is_call_option:
-            oi_bar.setInvertedAppearance(True)
-        # --- MODIFICATION END ---
-
-        bar_color = self.colors['oi_call_bar'] if is_call_option else self.colors['oi_put_bar']
-        bg = self.colors['bg_itm_call'] if is_itm and is_call_option else \
-            self.colors['bg_itm_put'] if is_itm and not is_call_option else 'transparent'
-
-        container.setStyleSheet(f"background-color: {bg};")
-        oi_label.setStyleSheet("color: #E0E0E0; font-size: 11px;")
-        oi_bar.setStyleSheet(
-            f"QProgressBar {{ border: none; border-radius: 1.5px; background-color: {self.colors['accent']}; }} "
-            f"QProgressBar::chunk {{ background-color: {bar_color}; border-radius: 1.5px; }}")
-
-        layout.addWidget(oi_label)
-        layout.addWidget(oi_bar)
-        return container
-
-    def _create_option_button(self, contract: Optional[Contract]) -> QPushButton:
-        btn = QPushButton()
-        btn.setCursor(Qt.PointingHandCursor)
-        if not contract:
-            btn.setEnabled(False)
-            btn.setStyleSheet("background-color: transparent; border: none;")
-            return btn
-
-        btn.setText(contract.option_type)
-        btn.clicked.connect(lambda: self.strike_selected.emit(contract))
-
-        color_map = {'CE': {'bg': self.colors['call'], 'hover': '#32E0E3'},
-                     'PE': {'bg': self.colors['put'], 'hover': '#FA6B64'}}
-        style = color_map.get(contract.option_type, color_map['CE'])
-        btn.setStyleSheet(f"""
-            QPushButton {{ background-color: transparent; color: {style['bg']}; border: 1px solid {self.colors['accent']}; border-radius: 4px; font-size: 11px; font-weight: bold; }}
-            QPushButton:hover {{ background-color: {style['bg']}; color: {self.colors['bg']}; }}
+            QCheckBox {
+                color: #A9B1C3;
+                font-size: 11px;
+            }
+            QCheckBox::indicator {
+                width: 15px;
+                height: 15px;
+                border: 1px solid #3A4458;
+                border-radius: 3px;
+            }
+            QCheckBox::indicator:checked {
+                background: #29C7C9;
+                border-color: #29C7C9;
+            }
+            #pcrLabel {
+                font-size: 12px;
+                font-weight: 700;
+            }
+            #footerStat {
+                color: #A9B1C3;
+                font-size: 11px;
+            }
+            QMenu {
+                background: #1B2030;
+                border: 1px solid #3A4458;
+                border-radius: 6px;
+                padding: 6px;
+            }
+            QMenu::item {
+                padding: 7px 20px;
+                color: #E0E0E0;
+                font-size: 12px;
+                border-radius: 4px;
+            }
+            QMenu::item:selected {
+                background: #2A3350;
+            }
+            #underlyingLabel {
+                font-size: 10.5px;
+                font-weight: 700;
+            }
+            
+            #vixLabel {
+                font-size: 10.5px;
+                font-weight: 700;
+            }
         """)
-        return btn
+
+    from PySide6.QtWidgets import QStyle
+
+    def _apply_weighted_column_widths(self):
+        total_weight = sum(self.COLUMN_WEIGHTS.values())
+
+        fixed_width = (
+                self.table.columnWidth(self.CE_BTN)
+                + self.table.columnWidth(self.PE_BTN)
+                + self.table.columnWidth(self.STRIKE)
+        )
+
+        scrollbar_slack = self.table.style().pixelMetric(
+            QStyle.PixelMetric.PM_ScrollBarExtent
+        )
+
+        header_slack = 6  # header/grid rounding safety
+
+        available = (
+                self.table.viewport().width()
+                - fixed_width
+                - scrollbar_slack
+                - header_slack
+        )
+
+        if available <= 0:
+            return
+
+        acc = 0
+        cols = list(self.COLUMN_WEIGHTS.items())
+
+        for i, (col, weight) in enumerate(cols):
+            if i == len(cols) - 1:
+                w = available - acc  # give remainder to last column
+            else:
+                w = int(available * (weight / total_weight))
+                acc += w
+
+            self.table.setColumnWidth(col, max(w, 40))
+
+    def _connect_signals(self):
+        self.settings_btn.clicked.connect(self._show_settings)
+        self.table.customContextMenuRequested.connect(self._show_menu)
 
 
-    def _update_ladder_ui(self):
-        """Update the text/values of existing widgets. Preserves original logic."""
-        for strike, row_widget in self.row_widgets.items():
-            if not row_widget: continue
-            ce_contract = self.contracts.get(strike, {}).get('CE')
-            pe_contract = self.contracts.get(strike, {}).get('PE')
-            if ce_contract:
-                # --- MODIFICATION START (Call side) ---
-                row_widget.findChild(QLabel, f"call_ba_{strike}").setText(
-                    f"{ce_contract.bid:.2f} / {ce_contract.ask:.2f}" if ce_contract.bid and ce_contract.ask else "-")
-                # --- MODIFICATION END ---
-                row_widget.findChild(QLabel, f"call_ltp_{strike}").setText(
-                    f"{ce_contract.ltp:.2f}" if ce_contract.ltp else "-")
-                oi_container = row_widget.findChild(QWidget, f"call_oi_{strike}")
-                if oi_container:
-                    oi_container.findChild(QLabel).setText(format_indian(ce_contract.oi))
-                    oi_container.findChild(QProgressBar).setValue(
-                        int((ce_contract.oi / self._max_oi) * 100) if self._max_oi > 0 else 0)
-            if pe_contract:
-                # --- MODIFICATION START (Put side) ---
-                row_widget.findChild(QLabel, f"put_ba_{strike}").setText(
-                    f"{pe_contract.bid:.2f} / {pe_contract.ask:.2f}" if pe_contract.bid and pe_contract.ask else "-")
-                # --- MODIFICATION END ---
-                row_widget.findChild(QLabel, f"put_ltp_{strike}").setText(
-                    f"{pe_contract.ltp:.2f}" if pe_contract.ltp else "-")
-                oi_container = row_widget.findChild(QWidget, f"put_oi_{strike}")
-                if oi_container:
-                    oi_container.findChild(QLabel).setText(format_indian(pe_contract.oi))
-                    oi_container.findChild(QProgressBar).setValue(
-                        int((pe_contract.oi / self._max_oi) * 100) if self._max_oi > 0 else 0)
-    # --- ALL BACKEND AND LOGIC METHODS FROM YOUR FILE ARE PRESERVED BELOW ---
+    def _show_menu(self, pos: QPoint):
+        item = self.table.itemAt(pos)
+        if not item:
+            return
+        strike = self._get_strike_from_row(item.row())
+        if not strike:
+            return
 
+        menu = QMenu(self)
+        jump = menu.addAction(f"Jump to {strike:.0f}")
+        jump.triggered.connect(lambda: self._jump_to_strike(strike))
+        menu.addSeparator()
+        both = menu.addAction("Trade Both CE + PE")
+        both.triggered.connect(lambda: self._trade_both(strike))
+        menu.exec_(self.table.viewport().mapToGlobal(pos))
+
+    def _show_settings(self):
+        """Settings dialog."""
+        d = QDialog(self)
+        d.setWindowTitle("Ladder Settings")
+        d.setFixedWidth(320)
+
+        layout = QVBoxLayout(d)
+        layout.setSpacing(14)
+
+        title = QLabel("Strike Ladder Settings")
+        title.setStyleSheet("font-size: 14px; font-weight: 700;")
+        layout.addWidget(title)
+
+        f = QFormLayout()
+        f.setSpacing(10)
+
+        above = QSpinBox()
+        above.setRange(5, 30)
+        above.setValue(self.num_strikes_above)
+
+        below = QSpinBox()
+        below.setRange(5, 30)
+        below.setValue(self.num_strikes_below)
+
+        auto_check = QCheckBox()
+        auto_check.setChecked(self.auto_adjust_enabled)
+
+        f.addRow("Strikes Above:", above)
+        f.addRow("Strikes Below:", below)
+        f.addRow("Auto-Adjust ATM:", auto_check)
+
+        layout.addLayout(f)
+
+        atm_btn = QPushButton("Jump to ATM Strike")
+        atm_btn.setFixedHeight(32)
+        atm_btn.clicked.connect(lambda: (self._jump_to_atm(), d.close()))
+        layout.addWidget(atm_btn)
+
+        apply_btn = QPushButton("Apply Settings")
+        apply_btn.setFixedHeight(32)
+        apply_btn.clicked.connect(lambda: (
+            setattr(self, 'num_strikes_above', above.value()),
+            setattr(self, 'num_strikes_below', below.value()),
+            self.set_auto_adjust(auto_check.isChecked()),
+            self._refresh_ladder(),
+            d.accept()
+        ))
+        layout.addWidget(apply_btn)
+        d.exec()
+
+    def _rebuild_table(self):
+        self.table.setRowCount(0)
+        all_oi = [c.oi for sc in self.contracts.values() for c in sc.values() if c and c.oi > 0]
+        self._max_oi = max(all_oi) if all_oi else 1.0
+
+        # ✅ Reverse the sort - lowest strikes at top, highest at bottom
+        for strike in sorted(self.contracts.keys()):  # removed reverse=True
+            self._add_row(strike)
+        self._update_stats()
+        QTimer.singleShot(120, self._force_center_atm)
+        QTimer.singleShot(0, self._apply_weighted_column_widths)
+
+    def _add_row(self, strike: float):
+        row = self.table.rowCount()
+        self.table.insertRow(row)
+        self.table.setRowHeight(row, 26)
+
+        ce = self.contracts.get(strike, {}).get('CE')
+        pe = self.contracts.get(strike, {}).get('PE')
+        is_atm = abs(strike - self.atm_strike) < 0.001
+
+        self.table.setCellWidget(row, self.CE_BTN, self._make_btn(ce))
+        self.table.setItem(row, self.CE_BID, self._make_bid_ask(ce, 'bid'))
+        self.table.setItem(row, self.CE_ASK, self._make_bid_ask(ce, 'ask'))
+        self.table.setItem(row, self.CE_LTP, self._make_ltp(ce, True))
+        self.table.setCellWidget(row, self.CE_OI, self._make_oi(ce, True))
+        self.table.setItem(row, self.STRIKE, self._make_strike(strike, is_atm))
+        self.table.setCellWidget(row, self.PE_OI, self._make_oi(pe, False))
+        self.table.setItem(row, self.PE_LTP, self._make_ltp(pe, False))
+        self.table.setItem(row, self.PE_BID, self._make_bid_ask(pe, 'bid'))
+        self.table.setItem(row, self.PE_ASK, self._make_bid_ask(pe, 'ask'))
+        self.table.setCellWidget(row, self.PE_BTN, self._make_btn(pe))
+
+    def _make_btn(self, c: Optional[Contract]) -> QPushButton:
+        b = QPushButton()
+        b.setFixedSize(28, 20)
+        if not c:
+            b.setEnabled(False)
+            b.setStyleSheet("background: transparent;")
+            return b
+        b.setText(c.option_type)
+        b.setCursor(Qt.PointingHandCursor)
+        b.clicked.connect(lambda: self.strike_selected.emit(c))
+        col = "#29C7C9" if c.option_type == "CE" else "#F85149"
+        b.setStyleSheet(f"""
+            QPushButton {{ background: transparent; color: {col}; 
+                           border: 1px solid {col}40; border-radius: 3px;
+                           font-size: 9px; font-weight: 700; }}
+            QPushButton:hover {{ background: {col}; color: #161A25; }}
+        """)
+        return b
+
+    def _make_strike(self, s: float, atm: bool) -> QTableWidgetItem:
+        i = QTableWidgetItem(f"{s:.0f}")
+        i.setTextAlignment(Qt.AlignCenter)
+        if atm:
+            i.setForeground(QColor("#29C7C9"))
+            f = QFont()
+            f.setBold(True)
+            i.setFont(f)
+        return i
+
+    def _make_ltp(self, c: Optional[Contract], is_call: bool) -> QTableWidgetItem:
+        txt = f"{c.ltp:.2f}" if c and c.ltp else "—"
+        i = QTableWidgetItem(txt)
+        i.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        if c and c.ltp:
+            i.setForeground(QColor("#29C7C9" if is_call else "#F85149"))
+            f = QFont()
+            f.setBold(True)
+            i.setFont(f)
+        return i
+
+    def _make_bid_ask(self, c: Optional[Contract], field: str) -> QTableWidgetItem:
+        val = getattr(c, field, 0) if c else 0
+        txt = f"{val:.2f}" if val and val > 0 else "—"
+        i = QTableWidgetItem(txt)
+        i.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        i.setForeground(QColor("#9CA3AF"))
+        return i
+
+    def _make_oi(self, c: Optional[Contract], is_call: bool) -> QWidget:
+        w = QWidget()
+        l = QVBoxLayout(w)
+        l.setContentsMargins(4, 2, 4, 2)
+        l.setSpacing(1)
+
+        val = c.oi if c else 0
+        lbl = QLabel(format_indian(val))
+        lbl.setAlignment(Qt.AlignCenter)
+        lbl.setStyleSheet("color: #E0E0E0; font-size: 10px;")
+
+        bar = QProgressBar()
+        bar.setMaximum(100)
+        bar.setValue(int((val / self._max_oi) * 100) if self._max_oi > 0 else 0)
+        bar.setTextVisible(False)
+        bar.setFixedHeight(3)
+        if is_call:
+            bar.setInvertedAppearance(True)
+
+        col = "#29C7C9" if is_call else "#F85149"
+        bar.setStyleSheet(f"""
+            QProgressBar {{ border: none; border-radius: 1.5px; background: #2A3140; }}
+            QProgressBar::chunk {{ background: {col}; border-radius: 1.5px; }}
+        """)
+
+        l.addWidget(lbl)
+        l.addWidget(bar)
+        return w
+
+    def _update_table(self):
+        for row in range(self.table.rowCount()):
+            strike = self._get_strike_from_row(row)
+            if not strike:
+                continue
+            ce = self.contracts.get(strike, {}).get('CE')
+            pe = self.contracts.get(strike, {}).get('PE')
+
+            if ce:
+                if ce.ltp:
+                    self.table.item(row, self.CE_LTP).setText(f"{ce.ltp:.2f}")
+                if ce.bid and ce.bid > 0:
+                    self.table.item(row, self.CE_BID).setText(f"{ce.bid:.2f}")
+                if ce.ask and ce.ask > 0:
+                    self.table.item(row, self.CE_ASK).setText(f"{ce.ask:.2f}")
+
+            if pe:
+                if pe.ltp:
+                    self.table.item(row, self.PE_LTP).setText(f"{pe.ltp:.2f}")
+                if pe.bid and pe.bid > 0:
+                    self.table.item(row, self.PE_BID).setText(f"{pe.bid:.2f}")
+                if pe.ask and pe.ask > 0:
+                    self.table.item(row, self.PE_ASK).setText(f"{pe.ask:.2f}")
+
+            self._update_oi_widget(row, self.CE_OI, ce)
+            self._update_oi_widget(row, self.PE_OI, pe)
+        self._update_stats()
+
+    def _update_oi_widget(self, row: int, col: int, c: Optional[Contract]):
+        w = self.table.cellWidget(row, col)
+        if not w or not c:
+            return
+        lbl = w.findChild(QLabel)
+        bar = w.findChild(QProgressBar)
+        if lbl:
+            lbl.setText(format_indian(c.oi))
+        if bar:
+            bar.setValue(int((c.oi / self._max_oi) * 100) if self._max_oi > 0 else 0)
+
+    def _update_stats(self):
+        ce_oi = sum(c.oi for sc in self.contracts.values() for c in [sc.get('CE')] if c)
+        pe_oi = sum(c.oi for sc in self.contracts.values() for c in [sc.get('PE')] if c)
+
+        self.call_oi_lbl.setText(f"CE OI: {self._format_oi_lakhs(ce_oi)}")
+        self.put_oi_lbl.setText(f"PE OI: {self._format_oi_lakhs(pe_oi)}")
+
+        pcr = pe_oi / ce_oi if ce_oi > 0 else 0
+        col = "#1DE9B6" if pcr > 1 else "#F85149" if pcr < 0.7 else "#FBBF24"
+        self.pcr_label.setText(f"PCR: {pcr:.2f}")
+        self.pcr_label.setStyleSheet(f"color: {col}; font-weight: 700; font-size: 10.5px;")
+
+    def _jump_to_atm(self):
+        if self._user_scrolling:
+            return
+
+        for row in range(self.table.rowCount()):
+            s = self._get_strike_from_row(row)
+            if s and abs(s - self.atm_strike) < 0.001:
+                self.table.scrollToItem(
+                    self.table.item(row, self.STRIKE),
+                    QTableWidget.PositionAtCenter
+                )
+
+                # 👇 THIS IS WHERE IT BELONGS
+                QTimer.singleShot(300, self._reset_user_scroll)
+                return
+
+    def _jump_to_strike(self, target: float):
+        for row in range(self.table.rowCount()):
+            s = self._get_strike_from_row(row)
+            if s and abs(s - target) < 0.001:
+                self.table.scrollToItem(self.table.item(row, self.STRIKE),
+                                        QTableWidget.PositionAtCenter)
+                return
+
+    def _get_strike_from_row(self, row: int) -> Optional[float]:
+        i = self.table.item(row, self.STRIKE)
+        if i:
+            try:
+                return float(i.text())
+            except:
+                pass
+        return None
+
+    def _trade_both(self, strike: float):
+        ce = self.contracts.get(strike, {}).get('CE')
+        pe = self.contracts.get(strike, {}).get('PE')
+        if ce:
+            self.strike_selected.emit(ce)
+        if pe:
+            self.strike_selected.emit(pe)
+
+    # Public API
     def set_instrument_data(self, data: dict):
         self.instrument_data = data
 
     def calculate_strike_interval(self, symbol: str) -> float:
-        if symbol not in self.instrument_data: return 50.0
-        try:
-            strikes = sorted(set(float(inst['strike']) for inst in self.instrument_data[symbol]['instruments']))
-            self.available_strikes = strikes
-            if len(strikes) < 2: return 50.0
-            intervals = [s2 - s1 for s1, s2 in zip(strikes, strikes[1:]) if s2 - s1 > 0]
-            calculated_interval = float(min(intervals)) if intervals else 50.0
-            self.base_strike_interval = calculated_interval
-            if self.user_strike_interval <= 0:
-                self.user_strike_interval = calculated_interval
-            return calculated_interval
-        except Exception as e:
-            logger.error(f"Error calculating strike interval: {e}")
+        if symbol not in self.instrument_data:
             return 50.0
+        strikes = sorted(set(float(i['strike']) for i in self.instrument_data[symbol]['instruments']))
+        self.available_strikes = strikes
+        if len(strikes) < 2:
+            return 50.0
+        intervals = [s2 - s1 for s1, s2 in zip(strikes, strikes[1:])]
+        self.base_strike_interval = min(intervals) if intervals else 50.0
+        if self.user_strike_interval <= 0:
+            self.user_strike_interval = self.base_strike_interval
+        return self.base_strike_interval
 
     def _calculate_atm_strike(self, price: float) -> float:
         if not self.available_strikes:
-            logger.warning("available_strikes is empty. Falling back to interval-based calculation.")
-            interval = self.base_strike_interval or 50.0
-            return round(price / interval) * interval
+            return round(price / self.base_strike_interval) * self.base_strike_interval
         return min(self.available_strikes, key=lambda x: abs(x - price))
 
     def update_strikes(self, symbol: str, current_price: float, expiry: date, strike_interval: float):
-        self.symbol, self.expiry, self.current_price, self.user_strike_interval = symbol, expiry, current_price, strike_interval
+        self._last_centered_atm = None
+        self._last_atm_strike = None
+        self.symbol, self.expiry, self.current_price = symbol, expiry, current_price
+        self.user_strike_interval = strike_interval
         self.atm_strike = self._calculate_atm_strike(current_price)
-        self._clear_ladder()
         self.contracts.clear()
-        self._fetch_and_build_ladder(symbol, expiry, self._generate_strikes())
+        self._fetch_and_build(symbol, expiry, self._gen_strikes())
 
-    def _generate_strikes(self) -> List[float]:
+    def _gen_strikes(self) -> List[float]:
         if not self.available_strikes:
-            logger.warning("Cannot generate strikes, available_strikes list is empty.")
             return []
         try:
-            atm_index = self.available_strikes.index(self.atm_strike)
+            idx = self.available_strikes.index(self.atm_strike)
         except ValueError:
-            logger.error(f"Calculated ATM strike {self.atm_strike} not in available strikes list. Cannot build ladder.")
             return []
-        start_index = max(0, atm_index - self.num_strikes_below)
-        end_index = min(len(self.available_strikes), atm_index + self.num_strikes_above + 1)
-        return self.available_strikes[start_index:end_index]
+        start = max(0, idx - self.num_strikes_below)
+        end = min(len(self.available_strikes), idx + self.num_strikes_above + 1)
+        return self.available_strikes[start:end]
 
-    def _clear_ladder(self):
-        while self.ladder_layout.count() > 1:
-            item = self.ladder_layout.takeAt(0)
-            if widget := item.widget():
-                widget.deleteLater()
-        self.row_widgets.clear()
-        self.atm_row_widget = None
-
-    def _fetch_and_build_ladder(self, symbol: str, expiry: date, strikes: List[float]):
-        instruments_to_fetch = []
+    def _fetch_and_build(self, symbol: str, expiry: date, strikes: List[float]):
+        to_fetch = []
         for strike in strikes:
-            for opt_type in ['CE', 'PE']:
-                if symbol in self.instrument_data:
-                    for inst in self.instrument_data[symbol]['instruments']:
-                        if inst.get('strike') == strike and inst.get('instrument_type') == opt_type and inst.get(
-                                'expiry') == expiry:
-                            contract = Contract(symbol=symbol, tradingsymbol=inst['tradingsymbol'],
-                                                instrument_token=inst['instrument_token'],
-                                                lot_size=inst.get('lot_size', 1), strike=strike, option_type=opt_type,
-                                                expiry=expiry)
-                            if strike not in self.contracts: self.contracts[strike] = {}
-                            self.contracts[strike][opt_type] = contract
-                            instruments_to_fetch.append(f"NFO:{inst['tradingsymbol']}")
-                            break
-        if not instruments_to_fetch: return
+            for ot in ['CE', 'PE']:
+                for inst in self.instrument_data.get(symbol, {}).get('instruments', []):
+                    if inst.get('strike') == strike and inst.get('instrument_type') == ot and inst.get(
+                            'expiry') == expiry:
+                        c = Contract(symbol=symbol, tradingsymbol=inst['tradingsymbol'],
+                                     instrument_token=inst['instrument_token'],
+                                     lot_size=inst.get('lot_size', 1), strike=strike,
+                                     option_type=ot, expiry=expiry)
+                        if strike not in self.contracts:
+                            self.contracts[strike] = {}
+                        self.contracts[strike][ot] = c
+                        to_fetch.append(f"NFO:{inst['tradingsymbol']}")
+                        break
+        if not to_fetch:
+            return
         try:
-            quotes = self.kite.quote(instruments_to_fetch)
-            for instrument, quote in quotes.items():
-                tradingsymbol = instrument.split(':')[-1]
-                for strike_contracts in self.contracts.values():
-                    for contract in strike_contracts.values():
-                        if contract.tradingsymbol == tradingsymbol:
-                            contract.ltp, contract.oi = quote.get('last_price', 0.0), quote.get('oi', 0)
-                            depth = quote.get('depth', {})
-                            if depth and depth.get('buy'): contract.bid = depth['buy'][0]['price']
-                            if depth and depth.get('sell'): contract.ask = depth['sell'][0]['price']
-                            break
-            self._redisplay_ladder()
+            quotes = self.kite.quote(to_fetch)
+            for k, q in quotes.items():
+                ts = k.split(':')[-1]
+                for sc in self.contracts.values():
+                    for c in sc.values():
+                        if c.tradingsymbol == ts:
+                            c.ltp, c.oi = q.get('last_price', 0.0), q.get('oi', 0)
+                            depth = q.get('depth', {})
+                            if depth and depth.get('buy'):
+                                c.bid = depth['buy'][0]['price']
+                            if depth and depth.get('sell'):
+                                c.ask = depth['sell'][0]['price']
+            self._rebuild_table()
         except Exception as e:
-            logger.error(f"Failed to fetch initial quotes for {symbol}: {e}")
-
-    def _redisplay_ladder(self):
-        self._clear_ladder()
-        all_oi = [c.oi for sc in self.contracts.values() for c in sc.values() if c and c.oi > 0]
-        self._max_oi = max(all_oi) if all_oi else 1
-        sorted_strikes = sorted(self.contracts.keys())
-        for strike in sorted_strikes:
-            is_atm = abs(strike - self.atm_strike) < 0.001
-            row_widget = self._create_strike_row_widget(strike, is_atm)
-            self.row_widgets[strike] = row_widget
-            if is_atm: self.atm_row_widget = row_widget
-            self.ladder_layout.insertWidget(self.ladder_layout.count() - 1, row_widget)
-        if self.atm_row_widget:
-            QTimer.singleShot(150, self._center_on_row)
+            logger.error(f"Fetch failed: {e}")
 
     def update_prices(self, data: Union[dict, list]):
         ticks = data if isinstance(data, list) else [data]
-        updated_contracts = False
-        ticks_by_token = {tick['instrument_token']: tick for tick in ticks}
-        for strike, strike_contracts in self.contracts.items():
-            for contract in strike_contracts.values():
-                if contract and contract.instrument_token in ticks_by_token:
-                    updated_contracts = True
-                    tick = ticks_by_token[contract.instrument_token]
-                    contract.ltp = tick.get('last_price', contract.ltp)
-                    depth = tick.get('depth', {})
-                    if depth and depth.get('buy'): contract.bid = depth['buy'][0]['price']
-                    if depth and depth.get('sell'): contract.ask = depth['sell'][0]['price']
-                    contract.oi = tick.get('oi', contract.oi)
-        if updated_contracts:
+        updated = False
+        tick_map = {t['instrument_token']: t for t in ticks}
+        for sc in self.contracts.values():
+            for c in sc.values():
+                if c and c.instrument_token in tick_map:
+                    t = tick_map[c.instrument_token]
+                    c.ltp = t.get('last_price', c.ltp)
+                    depth = t.get('depth', {})
+                    if depth and depth.get('buy'):
+                        c.bid = depth['buy'][0]['price']
+                    if depth and depth.get('sell'):
+                        c.ask = depth['sell'][0]['price']
+                    c.oi = t.get('oi', c.oi)
+                    updated = True
+        if updated:
             all_oi = [c.oi for sc in self.contracts.values() for c in sc.values() if c and c.oi > 0]
-            self._max_oi = max(all_oi) if all_oi else 1
-            self._update_ladder_ui()
-
-    def _center_on_row(self):
-        try:
-            if self.atm_row_widget:
-                scroll_bar = self.scroll_area.verticalScrollBar()
-                widget_y_pos = self.atm_row_widget.y()
-                viewport_height = self.scroll_area.viewport().height()
-                widget_height = self.atm_row_widget.height()
-                target_scroll_value = widget_y_pos - (viewport_height / 2) + (widget_height / 2)
-                self.scroll_animation = QPropertyAnimation(scroll_bar, QByteArray(b"value"))
-                self.scroll_animation.setDuration(250)
-                self.scroll_animation.setStartValue(scroll_bar.value())
-                self.scroll_animation.setEndValue(int(target_scroll_value))
-                self.scroll_animation.setEasingCurve(QEasingCurve.Type.InOutCubic)
-                self.scroll_animation.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
-        except Exception as e:
-            logger.error(f"Failed to center scroll position: {e}")
+            self._max_oi = max(all_oi) if all_oi else 1.0
+            self._update_table()
 
     def _check_price_movement(self):
-        if not self.auto_adjust_enabled or not self.current_price or not self.symbol: return
+        if not self.auto_adjust_enabled or not self.current_price or not self.symbol:
+            return
         try:
-            index_map = {'NIFTY': 'NIFTY 50', 'BANKNIFTY': 'NIFTY BANK', 'FINNIFTY': 'NIFTY FIN SERVICE',
-                         'MIDCPNIFTY': 'NIFTY MID SELECT'}
-            index_symbol = f"NSE:{index_map.get(self.symbol, self.symbol)}"
-            ltp_data = self.kite.ltp(index_symbol)
-            new_price = ltp_data[index_symbol]['last_price']
+            idx_map = {
+                'NIFTY': 'NIFTY 50',
+                'BANKNIFTY': 'NIFTY BANK',
+                'FINNIFTY': 'NIFTY FIN SERVICE',
+                'MIDCPNIFTY': 'NIFTY MID SELECT'
+            }
+            sym = f"NSE:{idx_map.get(self.symbol, self.symbol)}"
+
+            # 🔥 Fetch full quote for underlying + VIX
+            quote_data = self.kite.quote([sym, "NSE:INDIA VIX"])
+
+            # --- UNDERLYING DATA ---
+            underlying = quote_data.get(sym, {})
+            if underlying:
+                ohlc = underlying.get('ohlc', {})
+                self.underlying_data.update({
+                    'ltp': underlying.get('last_price', 0.0),
+                    'prev_close': ohlc.get('close', 0.0),
+                    'day_high': ohlc.get('high', 0.0),
+                    'day_low': ohlc.get('low', 0.0),
+                    'volume': underlying.get('volume', 0)
+                })
+
+                # Calculate % change
+                if self.underlying_data['prev_close'] > 0:
+                    change = self.underlying_data['ltp'] - self.underlying_data['prev_close']
+                    self.underlying_data['change_pct'] = (change / self.underlying_data['prev_close']) * 100
+
+                self._update_underlying_display()
+
+            # --- VIX DATA ---
+            vix_data = quote_data.get("NSE:INDIA VIX", {})
+            if vix_data:
+                self.underlying_data['vix'] = vix_data.get('last_price', 0.0)
+                self._update_vix_display()
+
+            # --- ATM LOGIC (existing) ---
+            new_price = self.underlying_data['ltp']
             new_atm = self._calculate_atm_strike(new_price)
-            if abs(new_atm - self.atm_strike) > 0.001:
-                logger.info(f"ATM changed from {self.atm_strike} to {new_atm}")
-                self.update_strikes(self.symbol, new_price, self.expiry, self.user_strike_interval)
+
+            if self._user_scrolling:
+                return
+
+            if self._last_atm_strike is None:
+                self._last_atm_strike = new_atm
+                return
+
+            if new_atm == self._last_atm_strike:
+                return
+
+            self._last_atm_strike = new_atm
+            self.update_strikes(self.symbol, new_price, self.expiry, self.user_strike_interval)
+
         except Exception as e:
             logger.debug(f"Price check failed: {e}")
 
-    @staticmethod
-    def _format_strike(strike: float) -> str:
-        return f"{strike:.0f}"
+    def _refresh_ladder(self):
+        if self.symbol and self.expiry and self.current_price:
+            self.update_strikes(self.symbol, self.current_price, self.expiry, self.user_strike_interval)
 
-    def get_ltp_for_token(self, token: int) -> Optional[float]:
-        for strike_contracts in self.contracts.values():
-            for contract in strike_contracts.values():
-                if contract.instrument_token == token:
-                    return contract.ltp
-        return None
+    def _update_underlying_display(self):
+        """Update underlying price with color-coded change."""
+        d = self.underlying_data
 
+        # Color based on direction
+        if d['change_pct'] > 0:
+            color = "#1DE9B6"
+            sign = "+"
+        elif d['change_pct'] < 0:
+            color = "#F85149"
+            sign = ""
+        else:
+            color = "#A9B1C3"
+            sign = ""
+
+        # Format: "NIFTY 24,850 +0.45%"
+        self.underlying_lbl.setText(
+            f"{self.symbol} {d['ltp']:.2f} {sign}{d['change_pct']:.2f}%"
+        )
+        self.underlying_lbl.setStyleSheet(
+            f"color: {color}; font-weight: 700; font-size: 10.5px;"
+        )
+
+        # Update range
+        self.range_lbl.setText(f"Range: {d['day_low']:.2f}–{d['day_high']:.2f}")
+
+        # Update volume (abbreviated)
+        vol_str = self._format_volume(d['volume'])
+        self.vol_lbl.setText(f"Vol: {vol_str}")
+
+    def _format_volume(self, vol: int) -> str:
+        """Format volume in K/M/Cr notation."""
+        if vol >= 10_000_000:  # 1 Crore
+            return f"{vol / 10_000_000:.1f}Cr"
+        elif vol >= 100_000:  # 1 Lakh
+            return f"{vol / 100_000:.1f}L"
+        elif vol >= 1_000:
+            return f"{vol / 1_000:.1f}K"
+        return str(vol)
+
+    def _format_oi_lakhs(self, oi: int) -> str:
+        """Format OI in Lakhs notation."""
+        if oi >= 100_000:  # 1 Lakh
+            return f"{oi / 100_000:.2f}L"
+        elif oi >= 1_000:
+            return f"{oi / 1_000:.1f}K"
+        return str(oi) if oi > 0 else "—"
+
+    def _update_vix_display(self):
+        """Update VIX with color coding."""
+        vix = self.underlying_data['vix']
+
+        if vix > 20:
+            color = "#F85149"  # High volatility (fear)
+        elif vix < 12:
+            color = "#1DE9B6"  # Low volatility (calm)
+        else:
+            color = "#FBBF24"  # Medium
+
+        self.vix_label.setText(f"VIX: {vix:.2f}")
+        self.vix_label.setStyleSheet(
+            f"color: {color}; font-weight: 700; font-size: 10.5px;"
+        )
     def set_auto_adjust(self, enabled: bool):
         self.auto_adjust_enabled = enabled
 
@@ -504,15 +874,31 @@ class StrikeLadderWidget(QWidget):
     def get_base_strike_interval(self) -> float:
         return self.base_strike_interval
 
+    def get_ltp_for_token(self, token: int) -> Optional[float]:
+        for sc in self.contracts.values():
+            for c in sc.values():
+                if c.instrument_token == token:
+                    return c.ltp
+        return None
+
     def get_ladder_data(self) -> List[Dict]:
         data = []
-        for strike, contracts_by_type in self.contracts.items():
-            call, put = contracts_by_type.get('CE'), contracts_by_type.get('PE')
-            data.append({'strike': strike, 'call_ltp': getattr(call, 'ltp', 0.0), 'put_ltp': getattr(put, 'ltp', 0.0),
-                         'call_contract': call, 'put_contract': put})
+        for strike, contracts in self.contracts.items():
+            ce, pe = contracts.get('CE'), contracts.get('PE')
+            data.append({
+                'strike': strike,
+                'call_ltp': getattr(ce, 'ltp', 0.0),
+                'put_ltp': getattr(pe, 'ltp', 0.0),
+                'call_contract': ce,
+                'put_contract': pe
+            })
         return sorted(data, key=lambda x: x['strike'])
 
     def resizeEvent(self, event):
-        if hasattr(self, "background"):
-            self.background.setGeometry(self.rect())
         super().resizeEvent(event)
+        self._apply_weighted_column_widths()
+
+    def _force_center_atm(self):
+        self._user_scrolling = False
+        self._last_centered_atm = None
+        self._jump_to_atm()

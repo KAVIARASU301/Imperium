@@ -4,6 +4,7 @@ import os
 from datetime import datetime
 from typing import Dict, List
 from PySide6.QtCore import QObject, QTimer, Signal
+from utils.paper_rms import PaperRMS
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,7 @@ class PaperTradingManager(QObject):
     VARIETY_REGULAR = "regular"
 
     order_update = Signal(dict)
+    order_rejected = Signal(dict)
 
     def __init__(self):
         super().__init__()
@@ -33,12 +35,26 @@ class PaperTradingManager(QObject):
         self.tradingsymbol_to_token: Dict[str, int] = {}
         self.config_path = os.path.join(os.path.expanduser("~"), ".options_badger", "paper_account.json")
 
-        self.balance = 100000.0
         self._positions: Dict[str, Dict] = {}
         self._orders: List[Dict] = []
+        self.balance = 1_000_000.0
+        self.rms = PaperRMS(starting_balance=self.balance)
 
         self._load_state()
-
+        # Each position structure:
+        # {
+        #   tradingsymbol: {
+        #       "tradingsymbol": str,
+        #       "quantity": int,
+        #       "average_price": float,
+        #       "last_price": float,
+        #       "realized_pnl": float,
+        #       "unrealized_pnl": float,
+        #       "product": str,
+        #       "exchange": str,
+        #       "timestamp": str
+        #   }
+        # }
         self.order_execution_timer = QTimer(self)
         self.order_execution_timer.timeout.connect(self._process_pending_orders)
         self.order_execution_timer.start(1000)
@@ -67,6 +83,8 @@ class PaperTradingManager(QObject):
                     self.balance = state.get('balance', 100000.0)
                     self._positions = state.get('positions', {})
                     logger.info("Paper trading state loaded.")
+                    self.rms.used_margin = state.get('rms_used_margin', 0.0)
+
             except Exception as e:
                 logger.error(f"Could not load paper trading state: {e}")
         self._save_state()
@@ -75,12 +93,48 @@ class PaperTradingManager(QObject):
         try:
             os.makedirs(os.path.dirname(self.config_path), exist_ok=True)
             with open(self.config_path, 'w') as f:
-                json.dump({'balance': self.balance, 'positions': self._positions}, f, indent=4)
+                json.dump({
+                    'balance': self.balance,
+                    'positions': self._positions,
+                    'rms_used_margin': self.rms.used_margin
+                }, f, indent=4)
         except Exception as e:
             logger.error(f"Could not save paper trading state: {e}")
 
     def place_order(self, variety, exchange, tradingsymbol, transaction_type, quantity, product, order_type, price=None,
                     **kwargs):
+        if transaction_type == self.TRANSACTION_TYPE_BUY:
+            # 🔒 Resolve price safely (paper trading)
+            if price is None:
+                token = self.tradingsymbol_to_token.get(tradingsymbol)
+                if token and token in self.market_data:
+                    price = self.market_data[token].get("last_price")
+
+            # If still no price → reject cleanly
+            if price is None:
+                reason = "Price unavailable for margin calculation"
+                logger.warning(f"RMS rejected order: {reason}")
+
+                self.order_rejected.emit({
+                    "reason": reason,
+                    "tradingsymbol": tradingsymbol,
+                    "quantity": quantity
+                })
+                return None
+
+            allowed, reason = self.rms.can_place_order(price, quantity)
+            if not allowed:
+                logger.warning(f"RMS rejected order: {reason}")
+
+                # Emit rejection event (UI listens to this)
+                self.order_rejected.emit({
+                    "reason": reason,
+                    "tradingsymbol": tradingsymbol,
+                    "quantity": quantity
+                })
+
+                return None
+
         order_id = f"paper_{int(datetime.now().timestamp() * 1000)}"
         order = {
             "order_id": order_id,
@@ -121,7 +175,10 @@ class PaperTradingManager(QObject):
                 self._execute_trade(order, price or trigger_price)
 
         self._orders.append(order)
-        self.order_update.emit(order)
+        # DO NOT emit here if already executed
+        if order["status"] != "COMPLETE":
+            self.order_update.emit(order)
+
         return order_id
 
     def cancel_order(self, variety, order_id, **kwargs):
@@ -137,16 +194,19 @@ class PaperTradingManager(QObject):
         return self._orders
 
     def margins(self):
-        used_margin = 0.0
-        for position in self._positions.values():
-            used_margin += abs(position['quantity'] * position['average_price'])
+        """
+        Kite-compatible margins structure for PAPER trading
+        """
         return {
             "equity": {
-                "net": self.balance,
-                "utilised": {"total": used_margin},
-                "available": {"live_balance": self.balance - used_margin}
-            },
-            "commodity": {}
+                "available": {
+                    "live_balance": self.available_margin
+                },
+                "utilised": {
+                    "total": self.used_margin
+                },
+                "net": self.available_margin + self.used_margin
+            }
         }
 
     @staticmethod
@@ -155,12 +215,14 @@ class PaperTradingManager(QObject):
 
     def positions(self):
         self._remove_expired_positions()
-        for symbol, pos in self._positions.items():
-            instrument_token = self.tradingsymbol_to_token.get(symbol)
-            if instrument_token and instrument_token in self.market_data:
-                ltp = self.market_data[instrument_token].get('last_price', pos.get('last_price', 0))
-                pos['last_price'] = ltp
-                pos['pnl'] = (ltp - pos['average_price']) * pos['quantity']
+
+        for pos in self._positions.values():
+            token = self.tradingsymbol_to_token.get(pos["tradingsymbol"])
+            if token and token in self.market_data:
+                ltp = self.market_data[token].get("last_price", pos["last_price"])
+                pos["last_price"] = ltp
+                pos["unrealized_pnl"] = (ltp - pos["average_price"]) * pos["quantity"]
+
         return {"net": list(self._positions.values())}
 
     def _process_pending_orders(self):
@@ -177,36 +239,80 @@ class PaperTradingManager(QObject):
                     elif order['status'] == 'PENDING_EXECUTION':
                         self._execute_trade(order, ltp)
 
-    def _execute_trade(self, order, price):
-        if price <= 0:
-            instrument_token = self.tradingsymbol_to_token.get(order['tradingsymbol'])
-            if instrument_token and instrument_token in self.market_data:
-                last_known_ltp = self.market_data[instrument_token].get('last_price', 0.0)
-                if last_known_ltp > 0:
-                    price = last_known_ltp
-        symbol, quantity, is_buy = order['tradingsymbol'], order['quantity'], order[
-                                                                                  'transaction_type'] == self.TRANSACTION_TYPE_BUY
-        trade_value = quantity * price
-        pos = self._positions.get(symbol)
-        if is_buy:
-            self.balance -= trade_value
-            if not pos:
-                pos = self._positions[symbol] = {'tradingsymbol': symbol, 'quantity': 0, 'average_price': 0.0,
-                                                 'exchange': order['exchange'], 'product': order['product'], 'pnl': 0,
-                                                 'last_price': price}
-            new_total_cost = (pos['average_price'] * pos['quantity']) + trade_value
-            pos['quantity'] += quantity
-            pos['average_price'] = new_total_cost / pos['quantity'] if pos['quantity'] != 0 else 0
-        else:
-            self.balance += trade_value
-            if pos:
-                realized_pnl = (price - pos['average_price']) * quantity
-                order['pnl'] = realized_pnl
-                pos['quantity'] -= quantity
-                if pos['quantity'] == 0:
-                    del self._positions[symbol]
-        order.update({'status': 'COMPLETE', 'average_price': price, 'filled_quantity': quantity})
-        logger.info(f"Paper trade executed: {order['transaction_type']} {quantity} {symbol} @ {price:.2f}")
+    def _execute_trade(self, order: dict, price: float):
+        tradingsymbol = order["tradingsymbol"]
+        qty = order["quantity"]
+        side = order["transaction_type"]
+
+        order["status"] = "COMPLETE"
+        order["average_price"] = price
+        order["filled_quantity"] = qty
+        order["exchange_timestamp"] = datetime.now().isoformat()
+
+        position = self._positions.get(tradingsymbol)
+
+        if side == self.TRANSACTION_TYPE_BUY:
+            self.rms.reserve_margin(price, qty)
+
+            if not position:
+                self._positions[tradingsymbol] = {
+                    "tradingsymbol": tradingsymbol,
+                    "quantity": qty,
+                    "average_price": price,
+                    "last_price": price,
+                    "realized_pnl": 0.0,
+                    "unrealized_pnl": 0.0,
+                    "product": order["product"],
+                    "exchange": order["exchange"],
+                    "timestamp": order["exchange_timestamp"]
+                }
+            else:
+                total_qty = position["quantity"] + qty
+                position["average_price"] = (
+                        (position["average_price"] * position["quantity"] + price * qty)
+                        / total_qty
+                )
+                position["quantity"] = total_qty
+
+
+        else:  # SELL
+
+            if not position:
+                logger.error("Sell executed without position — ignoring")
+
+                return
+
+            entry_price = position["average_price"]
+
+            # 1️⃣ Calculate realized PnL
+
+            realized = (price - entry_price) * qty
+
+            position["realized_pnl"] += realized
+
+            # 2️⃣ UPDATE ACCOUNT BALANCE (IMPORTANT)
+
+            self.balance += realized
+
+            # 3️⃣ RELEASE RMS MARGIN (⬅️ THIS IS THE LINE YOU ASKED ABOUT)
+
+            self.rms.release_margin(entry_price, qty)
+            logger.info(
+                f"RMS release | price={entry_price} qty={qty} "
+                f"used={self.rms.used_margin:.2f}"
+            )
+
+            # 4️⃣ Update / close position
+
+            position["quantity"] -= qty
+
+            if position["quantity"] <= 0:
+                del self._positions[tradingsymbol]
+
+            # 5️⃣ Attach realized PnL to order (for ledger/UI)
+
+            order["realized_pnl"] = realized
+
         self._save_state()
         self.order_update.emit(order)
 
@@ -246,3 +352,11 @@ class PaperTradingManager(QObject):
                     logger.info(f"PaperTradingManager: Removed expired position {symbol} from state.")
             self._save_state()
 
+    @property
+    def used_margin(self) -> float:
+        return self.rms.used_margin
+
+
+    @property
+    def available_margin(self) -> float:
+        return self.rms.available_margin
