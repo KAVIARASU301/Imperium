@@ -172,8 +172,6 @@ class CVDSingleChartDialog(QDialog):
         status_layout.addStretch()
         root.addLayout(status_layout)
 
-
-
         # Chart
         self.axis = AxisItem(orientation="bottom")
         self.plot = pg.PlotWidget(axisItems={"bottom": self.axis})
@@ -355,8 +353,20 @@ class CVDSingleChartDialog(QDialog):
             else:
                 y = y_raw
 
+            # Prepend zero point for current session (fills gap from zero line)
+            is_current_session = (i == len(sessions) - 1)
+            if is_current_session:
+                import numpy as np
+                y = np.insert(y, 0, 0.0)
+                first_ts = df_sess.index[0]
+                self.all_timestamps.append(first_ts)
+
             xs = list(range(x_offset, x_offset + len(y)))
-            self.all_timestamps.extend(df_sess.index.tolist())
+
+            if not is_current_session:
+                self.all_timestamps.extend(df_sess.index.tolist())
+            else:
+                self.all_timestamps.extend(df_sess.index.tolist())
 
             if i == 0 and len(sessions) == 2:
                 self.prev_curve.setData(xs, y)

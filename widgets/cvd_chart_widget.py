@@ -61,6 +61,7 @@ class CVDChartWidget(QWidget):
         self._pulse_target = 6
         self._pulse_velocity = 0
         self._last_slope = None
+        self._dot_visible = True  # For blinking effect
 
         # Crosshair state
         self.all_timestamps = []
@@ -80,6 +81,11 @@ class CVDChartWidget(QWidget):
         self.pulse_timer = QTimer(self)
         self.pulse_timer.timeout.connect(self._update_pulse)
         self.pulse_timer.start(40)  # ~25 FPS, light and smooth
+
+        # Blinking timer for live dot
+        self.blink_timer = QTimer(self)
+        self.blink_timer.timeout.connect(self._blink_dot)
+        self.blink_timer.start(500)  # 500ms blink interval
 
     # ------------------------------------------------------------------
     # UI
@@ -181,9 +187,16 @@ class CVDChartWidget(QWidget):
         self._historical_failed = False
         self._last_hist_range = None
 
-        # ✅ Start timer ONLY now
-        if not hasattr(self, "timer"):
+        # ✅ Start ALL timers (refresh, pulse, blink)
+        if not hasattr(self, "timer") or not self.timer.isActive():
             self._start_refresh_timer()
+
+        # Restart pulse and blink timers if they were stopped
+        if hasattr(self, "pulse_timer") and not self.pulse_timer.isActive():
+            self.pulse_timer.start(40)
+
+        if hasattr(self, "blink_timer") and not self.blink_timer.isActive():
+            self.blink_timer.start(500)
 
         # Load now (safe)
         self._load_historical()
@@ -295,6 +308,21 @@ class CVDChartWidget(QWidget):
 
         self.end_dot.setSize(max(4, int(self._pulse_size)))
 
+    def _blink_dot(self):
+        """Toggle dot visibility for blinking effect (like single chart)."""
+        if not self.live_mode:
+            return
+
+        self._dot_visible = not self._dot_visible
+
+        # Get current color from the brush
+        current_brush = self.end_dot.brush
+        if current_brush:
+            color = current_brush.color()
+            # Alternate between high and low alpha
+            alpha = 220 if self._dot_visible else 60
+            self.end_dot.setBrush(pg.mkBrush(color.red(), color.green(), color.blue(), alpha))
+
     # ------------------------------------------------------------------
     # Date Navigation
     # ------------------------------------------------------------------
@@ -311,11 +339,18 @@ class CVDChartWidget(QWidget):
 
         # ✅ Decide mode based on date
         if current_date >= today:
-            # LIVE MODE
+            # LIVE MODE - restart ALL timers
             self.live_mode = True
 
             if hasattr(self, "timer") and not self.timer.isActive():
                 self.timer.start(self.REFRESH_INTERVAL_MS)
+
+            # Restart pulse and blink timers
+            if hasattr(self, "pulse_timer") and not self.pulse_timer.isActive():
+                self.pulse_timer.start(40)
+
+            if hasattr(self, "blink_timer") and not self.blink_timer.isActive():
+                self.blink_timer.start(500)
         else:
             # HISTORICAL MODE
             self.live_mode = False
@@ -450,15 +485,27 @@ class CVDChartWidget(QWidget):
             df_sess = self.cvd_df[self.cvd_df["session"] == sess]
             y_raw = df_sess["close"].values
 
-            # Store timestamps
-            self.all_timestamps.extend(df_sess.index.tolist())
-            self.x_offset_map[sess] = x_offset
-
             # Rebasing logic
             if self.rebased_mode and i == 0 and len(sessions) == 2:
                 y = y_raw - self.prev_day_close_cvd
             else:
                 y = y_raw
+
+            # Prepend zero point for current session (fills gap from zero line)
+            is_current_session = (i == len(sessions) - 1)
+            if is_current_session:
+                import numpy as np
+                y = np.insert(y, 0, 0.0)
+                first_ts = df_sess.index[0]
+                self.all_timestamps.append(first_ts)
+
+            # Store timestamps
+            if not is_current_session:
+                self.all_timestamps.extend(df_sess.index.tolist())
+            else:
+                self.all_timestamps.extend(df_sess.index.tolist())
+
+            self.x_offset_map[sess] = x_offset
 
             x = list(range(x_offset, x_offset + len(y)))
 
@@ -545,6 +592,17 @@ class CVDChartWidget(QWidget):
             self.timer.stop()
         if hasattr(self, "pulse_timer"):
             self.pulse_timer.stop()
+        if hasattr(self, "blink_timer"):
+            self.blink_timer.stop()
+
+    def start_updates(self):
+        """Start all timers (called when activating widget)."""
+        if hasattr(self, "timer") and not self.timer.isActive():
+            self.timer.start(self.REFRESH_INTERVAL_MS)
+        if hasattr(self, "pulse_timer") and not self.pulse_timer.isActive():
+            self.pulse_timer.start(40)
+        if hasattr(self, "blink_timer") and not self.blink_timer.isActive():
+            self.blink_timer.start(500)
 
     # ------------------------------------------------------------------
     # Toggle

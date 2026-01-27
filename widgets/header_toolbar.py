@@ -5,10 +5,9 @@ from typing import List, Dict
 
 from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QComboBox, QPushButton, QSpinBox, QVBoxLayout, QWidget,
-    QAbstractSpinBox, QGraphicsDropShadowEffect
+    QAbstractSpinBox
 )
-from PySide6.QtCore import Qt, Signal, QPropertyAnimation, QEasingCurve, Property
-from PySide6.QtGui import QColor
+from PySide6.QtCore import Qt, Signal, QPropertyAnimation, QEasingCurve, Property, QByteArray
 from widgets.symbol_picker import SymbolPickerPopup
 
 logger = logging.getLogger(__name__)
@@ -23,7 +22,10 @@ class AnimatedButton(QPushButton):
         self._setup_animation()
 
     def _setup_animation(self):
-        self.glow_animation = QPropertyAnimation(self, b"glow_intensity")
+        self.glow_animation = QPropertyAnimation(
+            self,
+            QByteArray(b"glow_intensity")
+        )
         self.glow_animation.setDuration(180)
         self.glow_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
 
@@ -34,7 +36,13 @@ class AnimatedButton(QPushButton):
         self._glow_intensity = value
         self.update()
 
-    glow_intensity = Property(float, get_glow_intensity, set_glow_intensity)
+    glow_intensity = Property(
+        float,
+        get_glow_intensity,
+        set_glow_intensity,
+        None,
+        notify=None
+    )
 
     def enterEvent(self, event):
         self.glow_animation.stop()
@@ -62,7 +70,10 @@ class PulsingDot(QLabel):
         self._setup_animation()
 
     def _setup_animation(self):
-        self.pulse_animation = QPropertyAnimation(self, b"opacity")
+        self.pulse_animation = QPropertyAnimation(
+            self,
+            QByteArray(b"opacity")
+        )
         self.pulse_animation.setDuration(1200)
         self.pulse_animation.setStartValue(1.0)
         self.pulse_animation.setEndValue(0.4)

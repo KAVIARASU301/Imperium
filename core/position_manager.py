@@ -26,6 +26,7 @@ class PositionManager(QObject):
     position_added = Signal(object)
     position_removed = Signal(str)
     portfolio_exit_triggered = Signal(str, float)
+
     # args: reason ("STOP_LOSS" / "TARGET"), pnl
 
     def __init__(self, trader: Union[KiteConnect, PaperTradingManager], trade_logger: TradeLogger):
@@ -105,12 +106,13 @@ class PositionManager(QObject):
             if pos_data.get('quantity', 0) != 0:
                 pos = self._convert_api_to_position(pos_data)
                 if pos:
+                    # ✅ PRESERVE ALL RISK MANAGEMENT DATA FROM EXISTING POSITION
                     if existing_pos := self._positions.get(pos.tradingsymbol):
                         pos.order_id = existing_pos.order_id
                         pos.stop_loss_order_id = existing_pos.stop_loss_order_id
                         pos.target_order_id = existing_pos.target_order_id
                         pos.pnl = existing_pos.pnl
-                        # --- ADD THESE THREE LINES ---
+                        # 🔥 FIX: Preserve SL/TP/TSL during API refresh
                         pos.stop_loss_price = existing_pos.stop_loss_price
                         pos.target_price = existing_pos.target_price
                         pos.trailing_stop_loss = existing_pos.trailing_stop_loss
@@ -122,10 +124,14 @@ class PositionManager(QObject):
 
         self.positions_updated.emit(self.get_all_positions())
         self.pending_orders_updated.emit(self.get_pending_orders())
+
     def _convert_api_to_position(self, api_pos: dict) -> Optional[Position]:
         """
         Converts position data from the API into a rich Position object,
         using the stored instrument data to create a full Contract object.
+
+        🔥 FIX: Now includes stop_loss_price, target_price, trailing_stop_loss as None
+        so they can be set later without AttributeError
         """
         tradingsymbol = api_pos.get('tradingsymbol')
         if not tradingsymbol:
@@ -161,7 +167,11 @@ class PositionManager(QObject):
                 order_id=None,
                 exchange=api_pos.get('exchange', 'NFO'),
                 product=api_pos.get('product', 'MIS'),
-                contract=contract
+                contract=contract,
+                # 🔥 FIX: Initialize SL/TP fields as None (will be preserved from existing if available)
+                stop_loss_price=None,
+                target_price=None,
+                trailing_stop_loss=None
             )
         except KeyError as e:
             logger.error(f"Missing key {e} in position data: {api_pos}")
@@ -184,14 +194,12 @@ class PositionManager(QObject):
         if expired_count > 0:
             self._emit_all()
 
-
     def update_pnl_from_market_data(self, data: Union[dict, list]):
         updated = False
         ticks = data if isinstance(data, list) else [data]
         ticks_by_token = {tick['instrument_token']: tick for tick in ticks}
 
         for pos in list(self._positions.values()):
-
 
             if pos.is_exiting:
                 continue
@@ -200,45 +208,55 @@ class PositionManager(QObject):
                 tick = ticks_by_token[pos.contract.instrument_token]
                 ltp = tick.get('last_price', pos.ltp)
 
-                if abs(pos.ltp - ltp) > 1e-9:
-                    pos.update_pnl(ltp)
+                if ltp != pos.ltp:
+                    pos.ltp = ltp
+                    qty = pos.quantity
+                    avg = pos.average_price
+                    pos.pnl = (ltp - avg) * qty
                     updated = True
 
-            # Stop Loss Check - Exit if LTP goes BELOW stop loss price (for long positions)
-            if pos.stop_loss_price is not None and pos.quantity > 0:
-                if pos.ltp <= pos.stop_loss_price:
-                    logger.info(
-                        f"Stop Loss triggered for {pos.tradingsymbol}: LTP {pos.ltp} <= SL {pos.stop_loss_price}")
-                    self.exit_position(pos)
-                    continue  # Skip further checks for this position
+                    if pos.trailing_stop_loss and pos.trailing_stop_loss > 0:
+                        pos.stop_loss_price = self._update_trailing_stop_loss(pos, ltp)
 
-            # Target Check - Exit if LTP goes ABOVE target price (for long positions)
-            if pos.target_price is not None and pos.quantity > 0:
-                if pos.ltp >= pos.target_price:
-                    logger.info(f"Target reached for {pos.tradingsymbol}: LTP {pos.ltp} >= TP {pos.target_price}")
-                    self.exit_position(pos)
-                    continue  # Skip further checks for this position
+                    if pos.stop_loss_price:
+                        if (qty > 0 and ltp <= pos.stop_loss_price) or \
+                                (qty < 0 and ltp >= pos.stop_loss_price):
+                            logger.warning(f"🛑 SL HIT: {pos.tradingsymbol} @ {ltp} (SL: {pos.stop_loss_price})")
+                            self.exit_position(pos)
+                            continue
 
-            # Trailing Stop Loss – LOCAL ONLY
-            if pos.trailing_stop_loss and pos.stop_loss_price and pos.quantity > 0:
-                pnl_points = pos.ltp - pos.average_price
-
-                if pnl_points > 0:
-                    current_trail = (pos.average_price - pos.stop_loss_price) // pos.trailing_stop_loss
-                    new_trail = pnl_points // pos.trailing_stop_loss
-
-                    if new_trail > current_trail:
-                        new_sl_price = pos.stop_loss_price + (new_trail - current_trail) * pos.trailing_stop_loss
-                        logger.info(
-                            f"Trailing SL moved for {pos.tradingsymbol}: {pos.stop_loss_price} → {new_sl_price}"
-                        )
-                        pos.stop_loss_price = new_sl_price
+                    if pos.target_price:
+                        if (qty > 0 and ltp >= pos.target_price) or \
+                                (qty < 0 and ltp <= pos.target_price):
+                            logger.warning(f"🎯 TARGET HIT: {pos.tradingsymbol} @ {ltp} (Target: {pos.target_price})")
+                            self.exit_position(pos)
+                            continue
 
         if updated:
             self.positions_updated.emit(self.get_all_positions())
 
-        # 🔑 PORTFOLIO SL / TP CHECK (GLOBAL EXIT)
         self._check_portfolio_sl_tp()
+
+    def _update_trailing_stop_loss(self, pos: Position, ltp: float) -> float:
+        if not pos.stop_loss_price:
+            if pos.quantity > 0:
+                pos.stop_loss_price = ltp - pos.trailing_stop_loss
+            else:
+                pos.stop_loss_price = ltp + pos.trailing_stop_loss
+            return pos.stop_loss_price
+
+        if pos.quantity > 0:
+            new_sl = ltp - pos.trailing_stop_loss
+            if new_sl > pos.stop_loss_price:
+                pos.stop_loss_price = new_sl
+                logger.info(f"📈 TSL updated: {pos.tradingsymbol} SL={new_sl:.2f}")
+        else:
+            new_sl = ltp + pos.trailing_stop_loss
+            if new_sl < pos.stop_loss_price:
+                pos.stop_loss_price = new_sl
+                logger.info(f"📉 TSL updated: {pos.tradingsymbol} SL={new_sl:.2f}")
+
+        return pos.stop_loss_price
 
     def add_position(self, position: Position):
         self._positions[position.tradingsymbol] = position
@@ -278,31 +296,30 @@ class PositionManager(QObject):
                 order_type=self.trader.ORDER_TYPE_MARKET,
             )
             logger.info(f"Exit order placed for {position.tradingsymbol}")
-
-            # ✅ IMMEDIATE LOCAL CLEANUP (THIS FIXES FREEZE)
             exited_pos = self._positions.pop(symbol, None)
             if exited_pos:
                 self.position_removed.emit(symbol)
                 self.positions_updated.emit(self.get_all_positions())
                 self.refresh_completed.emit(True)
 
-            self._exit_in_progress.discard(symbol)
-
         except Exception as e:
-            logger.error(f"Exit failed for {symbol}: {e}")
-            position.is_exiting = False
+            logger.error(f"Failed to exit position {position.tradingsymbol}: {e}", exc_info=True)
+            self._emit_all()
+        finally:
             self._exit_in_progress.discard(symbol)
 
     def remove_position(self, tradingsymbol: str):
-        exited_pos = self._positions.pop(tradingsymbol, None)
-        if not exited_pos:
-            return
-
-        self.position_removed.emit(tradingsymbol)
-        self._emit_all()
+        removed_pos = self._positions.pop(tradingsymbol, None)
+        if removed_pos:
+            self.position_removed.emit(tradingsymbol)
+            self._emit_all()
 
     def get_all_positions(self) -> List[Position]:
         return list(self._positions.values())
+
+    def has_positions(self) -> bool:
+        """Check if there are any open positions"""
+        return len(self._positions) > 0
 
     def get_pending_orders(self) -> List[Dict]:
         return self._pending_orders
@@ -319,82 +336,43 @@ class PositionManager(QObject):
 
         total_pnl = self.get_total_pnl()
 
-        if self.portfolio_stop_loss is not None:
-            if total_pnl <= self.portfolio_stop_loss:
-                self._trigger_portfolio_exit("STOP_LOSS", total_pnl)
-                return
+        if self.portfolio_stop_loss is not None and total_pnl <= self.portfolio_stop_loss:
+            logger.critical(f"🚨 PORTFOLIO STOP-LOSS HIT: Total P&L={total_pnl:.2f}")
+            self._portfolio_exit_triggered = True
+            self.portfolio_exit_triggered.emit("STOP_LOSS", total_pnl)
 
-        if self.portfolio_target is not None:
-            if total_pnl >= self.portfolio_target:
-                self._trigger_portfolio_exit("TARGET", total_pnl)
-        logger.debug(
-            f"[PORTFOLIO CHECK] Total PnL={total_pnl:.2f}, "
-            f"SL={self.portfolio_stop_loss}, TP={self.portfolio_target}"
-        )
-
-    def _trigger_portfolio_exit(self, reason: str, pnl: float):
-        if self._portfolio_exit_triggered:
-            return
-
-        self._portfolio_exit_triggered = True
-
-        logger.critical(f"PORTFOLIO EXIT TRIGGERED [{reason}] | PnL={pnl:.2f}")
-        self.portfolio_exit_triggered.emit(reason, pnl)
-
-        for pos in list(self._positions.values()):
-            if pos.quantity != 0 and not pos.is_exiting:
-                self.exit_position(pos)
+        elif self.portfolio_target is not None and total_pnl >= self.portfolio_target:
+            logger.critical(f"🎯 PORTFOLIO TARGET HIT: Total P&L={total_pnl:.2f}")
+            self._portfolio_exit_triggered = True
+            self.portfolio_exit_triggered.emit("TARGET", total_pnl)
 
     def get_position(self, tradingsymbol: str) -> Optional[Position]:
         return self._positions.get(tradingsymbol)
 
+    def remove_expired_positions(self) -> int:
+        expired_symbols = []
+        from datetime import datetime
 
+        for symbol, pos in self._positions.items():
+            if pos.contract and pos.contract.expiry:
+                # Check if expiry is before current date
+                if isinstance(pos.contract.expiry, datetime):
+                    expiry_date = pos.contract.expiry.date()
+                else:
+                    expiry_date = pos.contract.expiry
 
-    def has_positions(self) -> bool:
-        """Checks if there are any open positions with non-zero quantity."""
-        return any(pos.quantity != 0 for pos in self._positions.values())
+                if expiry_date < datetime.now().date():
+                    expired_symbols.append(symbol)
+
+        for symbol in expired_symbols:
+            logger.info(f"Removing expired position: {symbol}")
+            self._positions.pop(symbol, None)
+
+        return len(expired_symbols)
 
     def _emit_all(self):
         self.positions_updated.emit(self.get_all_positions())
-
-    def remove_expired_positions(self):
-        import re
-        from datetime import date, timedelta
-        current_date = date.today()
-        expired_symbols = []
-        for symbol, position in list(self._positions.items()):
-            try:
-                expiry_date = None
-                month_match = re.search(r'(\d{2})(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)', symbol)
-                if month_match:
-                    year_str, month_str = month_match.groups()
-                    month_map = {'JAN': 1, 'FEB': 2, 'MAR': 3, 'APR': 4, 'MAY': 5, 'JUN': 6,
-                                 'JUL': 7, 'AUG': 8, 'SEP': 9, 'OCT': 10, 'NOV': 11, 'DEC': 12}
-                    month = month_map[month_str]
-                    year = 2000 + int(year_str)
-                    if month == 12:
-                        expiry_date = date(year + 1, 1, 1) - timedelta(days=1)
-                    else:
-                        expiry_date = date(year, month + 1, 1) - timedelta(days=1)
-                else:
-                    weekly_match = re.search(r'(\d{5})', symbol)
-                    if weekly_match:
-                        date_str = weekly_match.group(1)
-                        year, month, day = 2000 + int(date_str[0:2]), int(date_str[2:3]), int(date_str[3:5])
-                        expiry_date = date(year, month, day)
-                if expiry_date and expiry_date < current_date:
-                    expired_symbols.append(symbol)
-            except (ValueError, IndexError):
-                continue
-        if expired_symbols:
-            for symbol in expired_symbols:
-                logger.info(f"Removing expired position: {symbol}")
-                if symbol in self._positions:
-                    del self._positions[symbol]
-                    self.position_removed.emit(symbol)
-            logger.info(f"Auto-removed {len(expired_symbols)} expired positions")
-            return len(expired_symbols)
-        return 0
+        self.pending_orders_updated.emit(self.get_pending_orders())
 
     def update_sl_tp_for_position(
             self,
@@ -403,6 +381,9 @@ class PositionManager(QObject):
             tp_price: Optional[float],
             tsl_value: Optional[float]
     ):
+        """
+        Update SL/TP for an existing position
+        """
         position = self.get_position(tradingsymbol)
         if not position:
             logger.warning(f"SL/TP update ignored — position already closed: {tradingsymbol}")

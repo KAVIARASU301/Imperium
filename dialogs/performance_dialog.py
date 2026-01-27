@@ -10,14 +10,19 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QGridLayout
 )
 
-
 logger = logging.getLogger(__name__)
 
 
 class PerformanceDialog(QDialog):
     """
     Professional Performance Dashboard
-    Single source of truth: PnlLogger
+    Single source of truth: TradeLedger
+
+    KEY IMPROVEMENTS:
+    - Properly filters by trading_mode (LIVE vs PAPER)
+    - Uses uppercase mode comparison for consistency
+    - Validates data at every step
+    - Clear separation between live and paper trading metrics
     """
 
     refresh_requested = Signal()
@@ -33,8 +38,8 @@ class PerformanceDialog(QDialog):
 
         "avg_win": "Average profit from winning trades.",
         "avg_loss": "Average loss from losing trades.",
-        "rr_ratio": "Risk–Reward Ratio.\nHow much you gain compared to how much you lose.",
-        "rr_quality": "Human-friendly evaluation of Risk–Reward quality.",
+        "rr_ratio": "Risk—Reward Ratio.\nHow much you gain compared to how much you lose.",
+        "rr_quality": "Human-friendly evaluation of Risk—Reward quality.",
 
         "total_trades": "Total number of completed trades.",
         "consistency": "Percentage of days that ended in profit.\nMeasures stability, not accuracy.",
@@ -47,11 +52,17 @@ class PerformanceDialog(QDialog):
     def __init__(self, trade_ledger, mode="live", parent=None):
         super().__init__(parent)
 
-        self.mode = mode.lower()
+        # ✅ CRITICAL: Store mode in uppercase for DB consistency
+        self.mode = mode.upper()
         self._drag_pos: QPoint | None = None
         self.trade_ledger = trade_ledger
 
-        self.setWindowTitle("Performance Dashboard")
+        # Validate trade_ledger
+        if not self.trade_ledger:
+            logger.error("PerformanceDialog initialized without trade_ledger!")
+            raise ValueError("trade_ledger is required")
+
+        self.setWindowTitle(f"Performance Dashboard - {self.mode}")
         self.setMinimumSize(1000, 720)
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
         self.setAttribute(Qt.WA_TranslucentBackground)
@@ -60,7 +71,10 @@ class PerformanceDialog(QDialog):
         self._connect_signals()
         self._apply_styles()
 
+        # Initial data load
         self.refresh()
+
+        logger.info(f"PerformanceDialog initialized for mode: {self.mode}")
 
     # ------------------------------------------------------------------
     # UI
@@ -88,7 +102,8 @@ class PerformanceDialog(QDialog):
         title = QLabel("PERFORMANCE DASHBOARD")
         title.setObjectName("dialogTitle")
 
-        mode_badge = QLabel(self.mode.upper())
+        # Display mode badge (lowercase for display, uppercase for logic)
+        mode_badge = QLabel(self.mode)
         mode_badge.setObjectName("modeBadge")
 
         self.refresh_btn = QPushButton("REFRESH")
@@ -119,7 +134,7 @@ class PerformanceDialog(QDialog):
 
             ("Avg Win", "avg_win"),
             ("Avg Loss", "avg_loss"),
-            ("Risk–Reward", "rr_ratio"),
+            ("Risk—Reward", "rr_ratio"),
             ("RR Quality", "rr_quality"),
 
             ("Total Trades", "total_trades"),
@@ -166,48 +181,111 @@ class PerformanceDialog(QDialog):
     # ------------------------------------------------------------------
 
     def _create_chart(self):
-        axis = DateAxisItem(orientation="bottom")
-        chart = pg.PlotWidget(axisItems={"bottom": axis})
+        # Custom axis formatter for Y-axis (PnL)
+        class CurrencyAxisItem(pg.AxisItem):
+            def tickStrings(self, values, scale, spacing):
+                """Format tick values as currency without scientific notation"""
+                strings = []
+                for v in values:
+                    if abs(v) >= 10_000_000:  # 1 Cr+
+                        strings.append(f'₹{v / 10_000_000:.1f}Cr')
+                    elif abs(v) >= 100_000:  # 1 Lakh+
+                        strings.append(f'₹{v / 100_000:.1f}L')
+                    elif abs(v) >= 1_000:  # 1K+
+                        strings.append(f'₹{v / 1_000:.0f}K')
+                    else:
+                        strings.append(f'₹{v:.0f}')
+                return strings
+
+        # Create axes with custom formatters
+        date_axis = DateAxisItem(orientation="bottom")
+        currency_axis = CurrencyAxisItem(orientation="left")
+
+        chart = pg.PlotWidget(axisItems={"bottom": date_axis, "left": currency_axis})
         chart.setBackground("#161A25")
         chart.showGrid(x=True, y=True, alpha=0.25)
-        chart.setLabel("left", "Cumulative P&L (₹)")
+        chart.setLabel("left", "Cumulative P&L")
         chart.setLabel("bottom", "Date")
 
+        # Set tick spacing for date axis
         chart.getAxis("bottom").setTickSpacing(
-            major=86400 * 7,
-            minor=86400
+            major=86400 * 7,  # 7 days
+            minor=86400  # 1 day
         )
+
+        # Style the axes
+        for axis_name in ['left', 'bottom']:
+            axis = chart.getAxis(axis_name)
+            axis.setPen(pg.mkPen('#3A4458', width=1))
+            axis.setTextPen(pg.mkPen('#A9B1C3'))
 
         self.chart = chart
         return chart
 
     # ------------------------------------------------------------------
-    # DATA
+    # DATA - PROPERLY FILTERED BY MODE
     # ------------------------------------------------------------------
+
     def _get_trades_from_ledger(self) -> list[dict]:
-        cur = self.trade_ledger.conn.cursor()
-        cur.execute("""
-            SELECT
-                tradingsymbol,
-                net_pnl,
-                quantity,
-                session_date
-            FROM trades
-            WHERE trading_mode = ?
-            ORDER BY session_date ASC
-        """, (self.mode.upper(),))
+        """
+        Fetch trades for the current mode from TradeLedger.
+        ✅ CRITICAL: Uses uppercase mode for DB query
+        """
+        try:
+            cur = self.trade_ledger.conn.cursor()
+            cur.execute("""
+                SELECT
+                    tradingsymbol,
+                    net_pnl,
+                    quantity,
+                    session_date,
+                    exit_time
+                FROM trades
+                WHERE trading_mode = ?
+                ORDER BY session_date ASC, exit_time ASC
+            """, (self.mode,))  # Already uppercase from __init__
 
-        rows = cur.fetchall()
+            rows = cur.fetchall()
 
-        return [
-            {
-                "symbol": r[0],
-                "pnl": r[1],
-                "qty": r[2],
-                "date": r[3],
-            }
-            for r in rows
-        ]
+            logger.debug(f"Fetched {len(rows)} trades for mode: {self.mode}")
+
+            return [
+                {
+                    "symbol": r[0],
+                    "pnl": r[1],
+                    "qty": r[2],
+                    "date": r[3],
+                    "exit_time": r[4],
+                }
+                for r in rows
+            ]
+        except Exception as e:
+            logger.error(f"Error fetching trades from ledger: {e}", exc_info=True)
+            return []
+
+    def _get_pnl_by_day_from_ledger(self) -> dict:
+        """
+        Get daily PnL aggregated by session_date.
+        ✅ CRITICAL: Filters by trading_mode
+        """
+        try:
+            cur = self.trade_ledger.conn.cursor()
+            cur.execute("""
+                SELECT session_date, COALESCE(SUM(net_pnl), 0)
+                FROM trades
+                WHERE trading_mode = ?
+                GROUP BY session_date
+                ORDER BY session_date ASC
+            """, (self.mode,))
+
+            rows = cur.fetchall()
+
+            logger.debug(f"Fetched {len(rows)} trading days for mode: {self.mode}")
+
+            return {row[0]: row[1] for row in rows}
+        except Exception as e:
+            logger.error(f"Error fetching PnL by day: {e}", exc_info=True)
+            return {}
 
     def update_metrics(self, _metrics: dict | None = None):
         """
@@ -219,28 +297,37 @@ class PerformanceDialog(QDialog):
     def refresh(self):
         """
         Refresh performance metrics directly from TradeLedger.
+        ✅ All data is filtered by self.mode
         """
+        logger.info(f"Refreshing performance dialog for mode: {self.mode}")
+
         pnl_by_day = self._get_pnl_by_day_from_ledger()
+
+        if not pnl_by_day:
+            logger.info(f"No trading data found for mode: {self.mode}")
+            self._clear_metrics()
+            self.chart.clear()
+            return
 
         self._update_metrics(pnl_by_day)
         self._plot_equity(pnl_by_day)
 
-    def _get_pnl_by_day_from_ledger(self) -> dict:
-        cur = self.trade_ledger.conn.cursor()
-        cur.execute("""
-            SELECT session_date, COALESCE(SUM(net_pnl), 0)
-            FROM trades
-            WHERE trading_mode = ?
-            GROUP BY session_date
-            ORDER BY session_date ASC
-        """, (self.mode.upper(),))
-
-        rows = cur.fetchall()
-        return {row[0]: row[1] for row in rows}
+    def _clear_metrics(self):
+        """Reset all metrics to default values"""
+        for key, label in self.labels.items():
+            label.setText("—")
+            label.setStyleSheet("color: #E0E0E0;")
 
     def _update_metrics(self, pnl_by_day: dict):
+        """
+        Calculate and display all performance metrics.
+        ✅ Uses trade-level data filtered by mode
+        """
         trades = self._get_trades_from_ledger()
+
         if not trades:
+            logger.warning(f"No trades found for mode: {self.mode}")
+            self._clear_metrics()
             return
 
         trade_pnls = [t["pnl"] for t in trades]
@@ -251,6 +338,7 @@ class PerformanceDialog(QDialog):
         total_trades = len(trade_pnls)
         total_pnl = sum(trade_pnls)
 
+        # Trade-level metrics
         win_rate = (len(wins) / total_trades) * 100 if total_trades else 0
         avg_win = sum(wins) / len(wins) if wins else 0
         avg_loss = abs(sum(losses) / len(losses)) if losses else 0
@@ -270,7 +358,7 @@ class PerformanceDialog(QDialog):
             "Very Good"
         )
 
-        # --- Day-based metrics ---
+        # Day-based metrics
         daily_values = list(pnl_by_day.values())
         green_days = [v for v in daily_values if v > 0]
 
@@ -282,12 +370,13 @@ class PerformanceDialog(QDialog):
         best_day = max(daily_values) if daily_values else 0
         worst_day = min(daily_values) if daily_values else 0
 
-        # --- UI setter ---
+        # UI update helper
         def setv(key, text, color):
             lbl = self.labels[key]
             lbl.setText(text)
             lbl.setStyleSheet(f"color:{color};")
 
+        # Update all metrics
         setv("total_pnl", f"₹{total_pnl:,.0f}", "#29C7C9" if total_pnl >= 0 else "#F85149")
         setv("expectancy", f"₹{expectancy:,.0f}", "#00D1B2" if expectancy >= 0 else "#F85149")
         setv("win_rate", f"{win_rate:.1f}%", "#4CAF50" if win_rate >= 50 else "#F39C12")
@@ -304,7 +393,13 @@ class PerformanceDialog(QDialog):
         setv("best_day", f"₹{best_day:,.0f}", "#4CAF50")
         setv("worst_day", f"₹{worst_day:,.0f}", "#F85149")
 
+        logger.info(f"Metrics updated: {total_trades} trades, Total PnL: ₹{total_pnl:,.0f}")
+
     def _plot_equity(self, pnl: dict):
+        """
+        Plot cumulative equity curve from daily PnL data.
+        ✅ Data is already filtered by mode
+        """
         self.chart.clear()
 
         xs, ys = [], []
@@ -321,6 +416,7 @@ class PerformanceDialog(QDialog):
             ys.append(running)
 
         if not xs:
+            logger.debug("No data points to plot")
             return
 
         # Zero line
@@ -335,7 +431,7 @@ class PerformanceDialog(QDialog):
             antialias=True
         )
 
-        # Area fills
+        # Area fills for visual clarity
         self.chart.plot(xs, [y if y > 0 else 0 for y in ys],
                         pen=None, fillLevel=0,
                         fillBrush=pg.mkBrush(41, 199, 201, 55))
@@ -343,6 +439,8 @@ class PerformanceDialog(QDialog):
         self.chart.plot(xs, [y if y < 0 else 0 for y in ys],
                         pen=None, fillLevel=0,
                         fillBrush=pg.mkBrush(248, 81, 73, 55))
+
+        logger.debug(f"Equity curve plotted with {len(xs)} data points")
 
     # ------------------------------------------------------------------
     # DRAG SUPPORT
