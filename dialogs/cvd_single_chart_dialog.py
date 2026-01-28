@@ -135,7 +135,7 @@ class CVDSingleChartDialog(QDialog):
         self.previous_date = None
 
         self.setWindowTitle(f"CVD Chart — {symbol}")
-        self.setMinimumSize(1300, 720)
+        self.setMinimumSize(1100, 650)
         self.setWindowFlags(
             Qt.Window |
             Qt.WindowMinimizeButtonHint |

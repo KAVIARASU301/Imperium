@@ -21,9 +21,11 @@ logger = logging.getLogger(__name__)
 
 from enum import Enum
 
+
 class QuickOrderMode(Enum):
     ENTRY = "entry"
     MODIFY_RISK = "modify_risk"
+
 
 class QuickOrderDialog(QDialog):
     """
@@ -34,12 +36,13 @@ class QuickOrderDialog(QDialog):
     refresh_requested = Signal(str)
     risk_confirmed = Signal(dict)
 
-    def __init__(self, parent, contract, default_lots, mode=QuickOrderMode.ENTRY):
+    def __init__(self, parent, contract, default_lots, mode=QuickOrderMode.ENTRY, position_exists=False):
         super().__init__(parent)
         self.mode = mode
         self.contract = contract
         self._drag_pos = None
         self._last_ltp = None
+        self.position_exists = position_exists
 
         self._setup_window(parent)
         self._setup_ui(default_lots)
@@ -227,6 +230,20 @@ class QuickOrderDialog(QDialog):
         form_layout.addWidget(self.tsl_checkbox, 5, 0)
         form_layout.addWidget(self.tsl_spinbox, 5, 1)
 
+        # 🔒 Disable SL/TP/TSL when adding to existing position (ENTRY mode only)
+        if self.position_exists and self.mode == QuickOrderMode.ENTRY:
+            self.sl_checkbox.setEnabled(False)
+            self.sl_spinbox.setEnabled(False)
+            self.sl_checkbox.setToolTip("Cannot set SL when adding to existing position - use 'Modify SL/TP' instead")
+
+            self.tp_checkbox.setEnabled(False)
+            self.tp_spinbox.setEnabled(False)
+            self.tp_checkbox.setToolTip("Cannot set TP when adding to existing position - use 'Modify SL/TP' instead")
+
+            self.tsl_checkbox.setEnabled(False)
+            self.tsl_spinbox.setEnabled(False)
+            self.tsl_checkbox.setToolTip("Cannot set TSL when adding to existing position - use 'Modify SL/TP' instead")
+
         self.total_value_label = QLabel()
         self.total_value_label.setObjectName("totalValueLabel")
         self.total_value_label.setAlignment(Qt.AlignCenter)
@@ -280,18 +297,38 @@ class QuickOrderDialog(QDialog):
 
         avg_price = self.price_spinbox.value()
         quantity = int(self.lots_spinbox.value()) * self.contract.lot_size
+        is_buy = self.buy_radio.isChecked()
 
         stop_loss_value = self.sl_spinbox.value() if self.sl_checkbox.isChecked() else 0
         take_profit_value = self.tp_spinbox.value() if self.tp_checkbox.isChecked() else 0
+        trailing_sl_value = self.tsl_spinbox.value() if self.tsl_checkbox.isChecked() else 0
 
-        stop_loss_price = (
-            avg_price - (stop_loss_value / quantity)
-            if stop_loss_value > 0 else None
-        )
-        take_profit_price = (
-            avg_price + (take_profit_value / quantity)
-            if take_profit_value > 0 else None
-        )
+        # 🔥 FIX: Calculate SL/TP prices based on direction
+        stop_loss_price = None
+        take_profit_price = None
+        trailing_sl_per_unit = None
+
+        if stop_loss_value > 0:
+            sl_per_unit = stop_loss_value / quantity
+            if is_buy:
+                # For BUY: SL is BELOW entry price
+                stop_loss_price = avg_price - sl_per_unit
+            else:
+                # For SELL: SL is ABOVE entry price
+                stop_loss_price = avg_price + sl_per_unit
+
+        if take_profit_value > 0:
+            tp_per_unit = take_profit_value / quantity
+            if is_buy:
+                # For BUY: TP is ABOVE entry price
+                take_profit_price = avg_price + tp_per_unit
+            else:
+                # For SELL: TP is BELOW entry price
+                take_profit_price = avg_price - tp_per_unit
+
+        # 🔥 FIX: Convert TSL from total amount to per-share amount
+        if trailing_sl_value > 0:
+            trailing_sl_per_unit = trailing_sl_value / quantity
 
         return {
             'contract': self.contract,
@@ -300,15 +337,12 @@ class QuickOrderDialog(QDialog):
             'order_type': 'LIMIT',
             'transaction_type': (
                 KiteConnect.TRANSACTION_TYPE_BUY
-                if self.buy_radio.isChecked()
+                if is_buy
                 else KiteConnect.TRANSACTION_TYPE_SELL
             ),
             'stop_loss_price': stop_loss_price,
             'target_price': take_profit_price,
-            'trailing_stop_loss': (
-                self.tsl_spinbox.value()
-                if self.tsl_checkbox.isChecked() else 0
-            ),
+            'trailing_stop_loss': trailing_sl_per_unit,  # ✅ Now in per-share units
         }
 
     def _apply_styles(self):
@@ -544,6 +578,7 @@ class QuickOrderDialog(QDialog):
                 background: #6D28D9;
             }
         """)
+
     def _update_summary(self):
         qty = self.lots_spinbox.value() * self.contract.lot_size
         price = self.price_spinbox.value()
@@ -653,7 +688,9 @@ class QuickOrderDialog(QDialog):
             # Populate TSL
             if position.trailing_stop_loss is not None and position.trailing_stop_loss > 0:
                 self.tsl_checkbox.setChecked(True)
-                self.tsl_spinbox.setValue(position.trailing_stop_loss)
+                # Convert per-unit TSL back to total amount for display
+                tsl_total_amount = position.trailing_stop_loss * abs(position.quantity)
+                self.tsl_spinbox.setValue(tsl_total_amount)
 
             logger.info(f"Dialog populated for modifying SL/TP for order {position.order_id}")
 

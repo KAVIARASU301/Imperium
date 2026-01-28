@@ -61,7 +61,6 @@ class CVDChartWidget(QWidget):
         self._pulse_target = 6
         self._pulse_velocity = 0
         self._last_slope = None
-        self._dot_visible = True  # For blinking effect
 
         # Crosshair state
         self.all_timestamps = []
@@ -82,10 +81,6 @@ class CVDChartWidget(QWidget):
         self.pulse_timer.timeout.connect(self._update_pulse)
         self.pulse_timer.start(40)  # ~25 FPS, light and smooth
 
-        # Blinking timer for live dot
-        self.blink_timer = QTimer(self)
-        self.blink_timer.timeout.connect(self._blink_dot)
-        self.blink_timer.start(500)  # 500ms blink interval
 
     # ------------------------------------------------------------------
     # UI
@@ -195,9 +190,6 @@ class CVDChartWidget(QWidget):
         if hasattr(self, "pulse_timer") and not self.pulse_timer.isActive():
             self.pulse_timer.start(40)
 
-        if hasattr(self, "blink_timer") and not self.blink_timer.isActive():
-            self.blink_timer.start(500)
-
         # Load now (safe)
         self._load_historical()
 
@@ -288,40 +280,24 @@ class CVDChartWidget(QWidget):
         self.external_update = False
 
     def _update_pulse(self):
-        """
-        Smoothly animate dot size back to normal.
-        """
+        # Do nothing if dot is not visible / no data
+        if not self.end_dot.data:
+            return
+
         if self._pulse_size == self._pulse_target:
             return
 
-        # Simple spring-like decay
         diff = self._pulse_target - self._pulse_size
         self._pulse_velocity += diff * 0.25
         self._pulse_velocity *= 0.6
 
         self._pulse_size += self._pulse_velocity
 
-        # Clamp + settle
         if abs(diff) < 0.1:
             self._pulse_size = self._pulse_target
             self._pulse_velocity = 0
 
         self.end_dot.setSize(max(4, int(self._pulse_size)))
-
-    def _blink_dot(self):
-        """Toggle dot visibility for blinking effect (like single chart)."""
-        if not self.live_mode:
-            return
-
-        self._dot_visible = not self._dot_visible
-
-        # Get current color from the brush
-        current_brush = self.end_dot.brush
-        if current_brush:
-            color = current_brush.color()
-            # Alternate between high and low alpha
-            alpha = 220 if self._dot_visible else 60
-            self.end_dot.setBrush(pg.mkBrush(color.red(), color.green(), color.blue(), alpha))
 
     # ------------------------------------------------------------------
     # Date Navigation
@@ -349,8 +325,6 @@ class CVDChartWidget(QWidget):
             if hasattr(self, "pulse_timer") and not self.pulse_timer.isActive():
                 self.pulse_timer.start(40)
 
-            if hasattr(self, "blink_timer") and not self.blink_timer.isActive():
-                self.blink_timer.start(500)
         else:
             # HISTORICAL MODE
             self.live_mode = False
@@ -542,12 +516,16 @@ class CVDChartWidget(QWidget):
             self.end_dot.setData([last_x], [last_y])
 
             # --- Pulse trigger ---
+            # --- Institutional pulse trigger ---
             if self._last_slope is not None:
-                # Pulse when direction flips OR acceleration increases
-                if (slope > 0 > self._last_slope) or (slope < 0 < self._last_slope) or abs(slope) > abs(
-                        self._last_slope) * 1.4:
+
+                slope_flip = (slope > 0 > self._last_slope) or (slope < 0 < self._last_slope)
+
+                acceleration = abs(slope) > abs(self._last_slope) * 2.0
+
+                if slope_flip or acceleration:
                     self._pulse_size = 14  # instant expansion
-                    self._pulse_target = 6  # decay back to normal
+                    self._pulse_target = 6  # decay back
                     self._pulse_velocity = 0
 
             self._last_slope = slope
@@ -592,8 +570,7 @@ class CVDChartWidget(QWidget):
             self.timer.stop()
         if hasattr(self, "pulse_timer"):
             self.pulse_timer.stop()
-        if hasattr(self, "blink_timer"):
-            self.blink_timer.stop()
+
 
     def start_updates(self):
         """Start all timers (called when activating widget)."""
@@ -601,8 +578,6 @@ class CVDChartWidget(QWidget):
             self.timer.start(self.REFRESH_INTERVAL_MS)
         if hasattr(self, "pulse_timer") and not self.pulse_timer.isActive():
             self.pulse_timer.start(40)
-        if hasattr(self, "blink_timer") and not self.blink_timer.isActive():
-            self.blink_timer.start(500)
 
     # ------------------------------------------------------------------
     # Toggle

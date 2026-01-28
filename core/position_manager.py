@@ -98,32 +98,125 @@ class PositionManager(QObject):
             self._refresh_in_progress = False
 
     def _process_orders_and_positions(self, api_positions: List[Dict], api_orders: List[Dict]):
-        current_positions = {}
-        pending_orders = [o for o in api_orders if
-                          o.get('status') in ['TRIGGER PENDING', 'OPEN', 'AMO REQ RECEIVED']]
+        current_positions: Dict[str, Position] = {}
+
+        pending_orders = [
+            o for o in api_orders
+            if o.get('status') in ['TRIGGER PENDING', 'OPEN', 'AMO REQ RECEIVED']
+        ]
 
         for pos_data in api_positions:
-            if pos_data.get('quantity', 0) != 0:
-                pos = self._convert_api_to_position(pos_data)
-                if pos:
-                    # ✅ PRESERVE ALL RISK MANAGEMENT DATA FROM EXISTING POSITION
-                    if existing_pos := self._positions.get(pos.tradingsymbol):
-                        pos.order_id = existing_pos.order_id
-                        pos.stop_loss_order_id = existing_pos.stop_loss_order_id
-                        pos.target_order_id = existing_pos.target_order_id
-                        pos.pnl = existing_pos.pnl
-                        # 🔥 FIX: Preserve SL/TP/TSL during API refresh
-                        pos.stop_loss_price = existing_pos.stop_loss_price
-                        pos.target_price = existing_pos.target_price
-                        pos.trailing_stop_loss = existing_pos.trailing_stop_loss
-                        pos.is_exiting = pos.tradingsymbol in self._exit_in_progress
-                    current_positions[pos.tradingsymbol] = pos
+            if pos_data.get('quantity', 0) == 0:
+                continue
 
+            pos = self._convert_api_to_position(pos_data)
+            if not pos:
+                continue
+
+            existing_pos = self._positions.get(pos.tradingsymbol)
+            is_new_position = existing_pos is None
+
+            # --------------------------------------------------
+            # 🔒 Lifecycle flag (single source of truth)
+            # --------------------------------------------------
+            pos.is_new = getattr(existing_pos, "is_new", is_new_position)
+
+            if not is_new_position:
+                # --------------------------------------------------
+                # Preserve runtime / OMS state
+                # --------------------------------------------------
+                pos.order_id = existing_pos.order_id
+                pos.stop_loss_order_id = existing_pos.stop_loss_order_id
+                pos.target_order_id = existing_pos.target_order_id
+                pos.pnl = existing_pos.pnl
+
+                # --------------------------------------------------
+                # 🔒 ALWAYS preserve SL / TP / TSL
+                # --------------------------------------------------
+                pos.stop_loss_price = existing_pos.stop_loss_price
+                pos.target_price = existing_pos.target_price
+                pos.trailing_stop_loss = existing_pos.trailing_stop_loss
+
+                # --------------------------------------------------
+                # 🔥 TRUE averaging → quantity increase ONLY
+                # --------------------------------------------------
+                if abs(pos.quantity) > abs(existing_pos.quantity):
+                    self._recalculate_sl_tp_on_averaging(pos, existing_pos)
+
+                pos.is_exiting = pos.tradingsymbol in self._exit_in_progress
+
+            # --------------------------------------------------
+            # Register position for this refresh
+            # --------------------------------------------------
+            current_positions[pos.tradingsymbol] = pos
+
+        # ------------------------------------------------------
+        # Synchronize (add / remove positions atomically)
+        # ------------------------------------------------------
         self._synchronize_positions(current_positions)
+
+        # ------------------------------------------------------
+        # 🔒 Clear is_new AFTER full refresh cycle
+        # ------------------------------------------------------
+        for p in self._positions.values():
+            if getattr(p, "is_new", False):
+                p.is_new = False
+
         self._pending_orders = pending_orders
 
         self.positions_updated.emit(self.get_all_positions())
         self.pending_orders_updated.emit(self.get_pending_orders())
+
+    def _recalculate_sl_tp_on_averaging(self, new_pos: Position, old_pos: Position):
+        """
+        When adding to a position, recalculate SL/TP based on new average price.
+        Maintains proportional risk as position size increases.
+        """
+        # 🔒 NEVER recalc for brand-new position
+        if getattr(old_pos, "is_new", False):
+            return
+
+        # Only recalc when quantity increases (true averaging)
+        if abs(new_pos.quantity) <= abs(old_pos.quantity):
+            return
+
+        # Check if we had SL/TP set
+        if old_pos.stop_loss_price is None and old_pos.target_price is None:
+            return  # No SL/TP to recalculate
+
+        # Recalculate SL
+        if old_pos.stop_loss_price is not None:
+            # Calculate old SL amount in rupees
+            old_sl_amount = abs(old_pos.average_price - old_pos.stop_loss_price) * abs(old_pos.quantity)
+
+            # For new quantity, maintain proportional risk
+            new_sl_amount = old_sl_amount * (abs(new_pos.quantity) / abs(old_pos.quantity))
+
+            # Convert back to price
+            sl_per_unit = new_sl_amount / abs(new_pos.quantity)
+
+            # Direction depends on whether it's long or short
+            if new_pos.quantity > 0:  # Long position
+                new_pos.stop_loss_price = new_pos.average_price - sl_per_unit
+            else:  # Short position
+                new_pos.stop_loss_price = new_pos.average_price + sl_per_unit
+
+            logger.info(
+                f"📊 SL recalculated on averaging: {new_pos.tradingsymbol} | "
+                f"Old: {old_pos.quantity}@{old_pos.average_price:.2f} SL={old_pos.stop_loss_price:.2f} | "
+                f"New: {new_pos.quantity}@{new_pos.average_price:.2f} SL={new_pos.stop_loss_price:.2f}"
+            )
+
+        # Recalculate TP
+        if old_pos.target_price is not None:
+            old_tp_amount = abs(old_pos.target_price - old_pos.average_price) * abs(old_pos.quantity)
+            new_tp_amount = old_tp_amount * (abs(new_pos.quantity) / abs(old_pos.quantity))
+            tp_per_unit = new_tp_amount / abs(new_pos.quantity)
+
+            if new_pos.quantity > 0:  # Long position
+                new_pos.target_price = new_pos.average_price + tp_per_unit
+            else:  # Short position
+                new_pos.target_price = new_pos.average_price - tp_per_unit
 
     def _convert_api_to_position(self, api_pos: dict) -> Optional[Position]:
         """

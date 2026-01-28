@@ -1546,21 +1546,43 @@ class ScalperMainWindow(QMainWindow):
         )
 
     def _exit_position(self, position_data_to_exit: dict):
-        tradingsymbol = position_data_to_exit.get('tradingsymbol')
-        current_quantity = position_data_to_exit.get('quantity', 0)
-        entry_price = position_data_to_exit.get('average_price', 0.0)
-        pnl = position_data_to_exit.get('pnl', 0.0)
-        exchange = position_data_to_exit.get('exchange', 'NFO')
-        product = position_data_to_exit.get('product', 'MIS')
+        tradingsymbol = position_data_to_exit.get("tradingsymbol")
+        current_quantity = position_data_to_exit.get("quantity", 0)
+        entry_price = position_data_to_exit.get("average_price", 0.0)
+        pnl = position_data_to_exit.get("pnl", 0.0)
+        exchange = position_data_to_exit.get("exchange", "NFO")
+        product = position_data_to_exit.get("product", "MIS")
 
+        # --------------------------------------------------
+        # Basic validation
+        # --------------------------------------------------
         if not tradingsymbol or current_quantity == 0:
-            QMessageBox.warning(self, "Exit Failed",
-                                "Invalid position data for exit (missing symbol or zero quantity).")
-            logger.warning(f"Attempted to exit invalid position data: {position_data_to_exit}")
+            QMessageBox.warning(
+                self,
+                "Exit Failed",
+                "Invalid position data for exit (missing symbol or zero quantity)."
+            )
+            logger.warning(f"Invalid exit request: {position_data_to_exit}")
             return
 
         exit_quantity = abs(current_quantity)
 
+        # --------------------------------------------------
+        # 🔒 SNAPSHOT POSITION BEFORE EXIT
+        # --------------------------------------------------
+        original_position = self.position_manager.get_position(tradingsymbol)
+        if not original_position:
+            QMessageBox.warning(
+                self,
+                "Exit Failed",
+                f"Position {tradingsymbol} not found. It may have already been exited."
+            )
+            logger.warning(f"Exit aborted — position not found: {tradingsymbol}")
+            return
+
+        # --------------------------------------------------
+        # User confirmation
+        # --------------------------------------------------
         reply = QMessageBox.question(
             self,
             "Confirm Exit Position",
@@ -1574,9 +1596,18 @@ class ScalperMainWindow(QMainWindow):
         if reply != QMessageBox.StandardButton.Yes:
             return
 
-        self.statusBar().showMessage(f"Exiting position {tradingsymbol}...", 1000)
+        self.statusBar().showMessage(f"Exiting position {tradingsymbol}...", 1500)
+
+        # --------------------------------------------------
+        # Place exit order
+        # --------------------------------------------------
         try:
-            transaction_type = self.trader.TRANSACTION_TYPE_SELL if current_quantity > 0 else self.trader.TRANSACTION_TYPE_BUY
+            transaction_type = (
+                self.trader.TRANSACTION_TYPE_SELL
+                if current_quantity > 0
+                else self.trader.TRANSACTION_TYPE_BUY
+            )
+
             order_id = self.trader.place_order(
                 variety=self.trader.VARIETY_REGULAR,
                 exchange=exchange,
@@ -1586,50 +1617,76 @@ class ScalperMainWindow(QMainWindow):
                 product=product,
                 order_type=self.trader.ORDER_TYPE_MARKET,
             )
-            logger.info(f"Exit order placed for {tradingsymbol} (Qty: {exit_quantity}) -> Order ID: {order_id}")
 
-            if not isinstance(self.trader, PaperTradingManager):
-                import time
-                time.sleep(0.5)
-                confirmed_order = self._confirm_order_success(order_id)
-                if confirmed_order and confirmed_order.get("status") == "COMPLETE":
-                    exit_price = confirmed_order.get("average_price", 0.0)
-                    filled_qty = confirmed_order.get("filled_quantity", exit_quantity)
+            logger.info(
+                f"Exit order placed for {tradingsymbol} "
+                f"(Qty: {exit_quantity}) | Order ID: {order_id}"
+            )
 
-                    realized_pnl = (exit_price - entry_price) * filled_qty
-
-                    # 🔒 FETCH ORIGINAL POSITION SAFELY
-                    original_position = self.position_manager.get_position(tradingsymbol)
-
-                    self._record_completed_exit_trade(
-                        confirmed_order,
-                        original_position,
-                        trading_mode="LIVE"
-                    )
-
-                    self.statusBar().showMessage(
-                        f"Exit order {order_id} confirmed. Realized P&L: ₹{realized_pnl:,.2f}", 5000
-                    )
-
-                    self._play_sound(success=True)
-                else:
-                    self.statusBar().showMessage(
-                        f"Exit order {order_id} for {tradingsymbol} placed, but confirmation pending or failed.", 5000)
-                    logger.warning(f"Exit order {order_id} for {tradingsymbol} could not be confirmed immediately.")
-                    self._play_sound(success=False)
-
+            # --------------------------------------------------
+            # PAPER MODE → UI only, no confirmation loop
+            # --------------------------------------------------
             if isinstance(self.trader, PaperTradingManager):
                 self._play_sound(success=True)
-                return  # 🔒 ABSOLUTE STOP — no refresh, no UI logic
+                return  # 🔒 ABSOLUTE STOP (PositionManager handles removal)
 
+            # --------------------------------------------------
+            # LIVE MODE → confirm execution
+            # --------------------------------------------------
+            import time
+            time.sleep(0.5)
+
+            confirmed_order = self._confirm_order_success(order_id)
+
+            if confirmed_order and confirmed_order.get("status") == "COMPLETE":
+                exit_price = confirmed_order.get("average_price", 0.0)
+                filled_qty = confirmed_order.get("filled_quantity", exit_quantity)
+
+                if current_quantity > 0:
+                    realized_pnl = (exit_price - entry_price) * filled_qty
+                else:
+                    realized_pnl = (entry_price - exit_price) * filled_qty
+
+                # 🔒 USE SNAPSHOT POSITION (never re-fetch)
+                self._record_completed_exit_trade(
+                    confirmed_order=confirmed_order,
+                    original_position=original_position,
+                    trading_mode="LIVE"
+                )
+
+                self.statusBar().showMessage(
+                    f"Exit confirmed. Realized P&L: ₹{realized_pnl:,.2f}",
+                    5000
+                )
+                self._play_sound(success=True)
+
+            else:
+                logger.warning(
+                    f"Exit order {order_id} for {tradingsymbol} "
+                    f"placed but confirmation pending or failed."
+                )
+                self.statusBar().showMessage(
+                    f"Exit order {order_id} placed, confirmation pending.",
+                    5000
+                )
+                self._play_sound(success=False)
 
         except Exception as e:
-            error_msg = str(e)
-            logger.error(f"Failed to place exit order for {tradingsymbol}: {error_msg}", exc_info=True)
-            QMessageBox.critical(self, "Exit Order Failed",
-                                 f"Failed to place exit order for {tradingsymbol}:\n{error_msg}")
+            logger.error(
+                f"Failed to exit position {tradingsymbol}: {e}",
+                exc_info=True
+            )
+            QMessageBox.critical(
+                self,
+                "Exit Order Failed",
+                f"Failed to place exit order for {tradingsymbol}:\n{e}"
+            )
             self._play_sound(success=False)
+
         finally:
+            # --------------------------------------------------
+            # Final sync (safe now)
+            # --------------------------------------------------
             self._refresh_positions()
 
     def _exit_position_from_dialog(self, symbol_or_pos_data):
@@ -1756,6 +1813,7 @@ class ScalperMainWindow(QMainWindow):
 
                         if order_status == 'COMPLETE':
                             avg_price_from_order = confirmed_order_api_data.get('average_price', contract_to_trade.ltp)
+                            tsl = confirmed_order_details.get("trailing_stop_loss") or 0
                             new_position = Position(
                                 symbol=f"{contract_to_trade.symbol}{contract_to_trade.strike}{contract_to_trade.option_type}",
                                 tradingsymbol=contract_to_trade.tradingsymbol,
@@ -1771,11 +1829,7 @@ class ScalperMainWindow(QMainWindow):
                                 # 🔑 ADD THESE THREE
                                 stop_loss_price=confirmed_order_details.get("stop_loss_price"),
                                 target_price=confirmed_order_details.get("target_price"),
-                                trailing_stop_loss=(
-                                    confirmed_order_details.get("trailing_stop_loss")
-                                    if confirmed_order_details.get("trailing_stop_loss", 0) > 0
-                                    else None
-                                )
+                                trailing_stop_loss=tsl if tsl > 0 else None
                             )
 
                             self.position_manager.add_position(new_position)
@@ -1831,7 +1885,15 @@ class ScalperMainWindow(QMainWindow):
 
         default_lots = self.header.lot_size_spin.value()
 
-        dialog = QuickOrderDialog(parent=self, contract=contract, default_lots=default_lots)
+        # Check if position already exists for this symbol
+        position_exists = self.position_manager.get_position(contract.tradingsymbol) is not None
+
+        dialog = QuickOrderDialog(
+            parent=self,
+            contract=contract,
+            default_lots=default_lots,
+            position_exists=position_exists
+        )
         self.active_quick_order_dialog = dialog
 
         dialog.order_placed.connect(self._execute_single_strike_order)
@@ -1972,17 +2034,47 @@ class ScalperMainWindow(QMainWindow):
             trading_mode: str,
             exit_reason: str = "MANUAL"
     ):
-        if trading_mode.upper() == "PAPER" and confirmed_order.get("_ledger_recorded") is not True:
+        # --------------------------------------------------
+        # 🔒 HARD GUARD: original position must exist
+        # --------------------------------------------------
+        if original_position is None:
+            logger.error(
+                f"Exit trade skipped: original_position is None "
+                f"(order_id={confirmed_order.get('order_id')})"
+            )
+            return
+
+        trading_mode = trading_mode.upper()
+
+        # --------------------------------------------------
+        # 🔒 Prevent duplicate PAPER ledger writes
+        # --------------------------------------------------
+        if trading_mode == "PAPER" and confirmed_order.get("_ledger_recorded") is True:
             logger.warning("Blocked duplicate paper trade ledger write")
             return
 
         exit_price = confirmed_order.get("average_price", 0.0)
-        filled_qty = confirmed_order.get("filled_quantity", abs(original_position.quantity))
+        filled_qty = confirmed_order.get(
+            "filled_quantity",
+            abs(original_position.quantity)
+        )
 
-        realized_pnl = (exit_price - original_position.average_price) * filled_qty
+        entry_price = original_position.average_price
+        is_long = original_position.quantity > 0
+
+        # --------------------------------------------------
+        # 🔑 Correct realized P&L calculation
+        # --------------------------------------------------
+        if is_long:
+            realized_pnl = (exit_price - entry_price) * filled_qty
+            side = "LONG"
+        else:
+            realized_pnl = (entry_price - exit_price) * filled_qty
+            side = "SHORT"
 
         trade = {
             "trade_id": str(uuid4()),
+
             "order_id_entry": original_position.order_id,
             "order_id_exit": confirmed_order.get("order_id"),
 
@@ -1993,14 +2085,17 @@ class ScalperMainWindow(QMainWindow):
             "expiry": original_position.contract.expiry,
             "strike": original_position.contract.strike,
 
-            "side": "LONG",
+            "side": side,
             "quantity": filled_qty,
 
-            "entry_price": original_position.average_price,
+            "entry_price": entry_price,
             "exit_price": exit_price,
 
-            "entry_time": original_position.entry_time.isoformat()
-            if hasattr(original_position, "entry_time") else None,
+            "entry_time": (
+                original_position.entry_time.isoformat()
+                if hasattr(original_position, "entry_time") and original_position.entry_time
+                else None
+            ),
             "exit_time": datetime.now().isoformat(),
 
             "realized_pnl": realized_pnl,
@@ -2010,11 +2105,25 @@ class ScalperMainWindow(QMainWindow):
             "exit_reason": exit_reason,
             "strategy_tag": None,
 
-            "trading_mode": trading_mode.upper(),
+            "trading_mode": trading_mode,
             "session_date": date.today().isoformat(),
         }
 
+        # --------------------------------------------------
+        # Record trade atomically
+        # --------------------------------------------------
         self.trade_ledger.record_trade(trade)
+
+        # --------------------------------------------------
+        # 🔒 Mark PAPER order as recorded
+        # --------------------------------------------------
+        if trading_mode == "PAPER":
+            confirmed_order["_ledger_recorded"] = True
+
+        logger.info(
+            f"Trade recorded | {trade['tradingsymbol']} | "
+            f"{side} | Qty={filled_qty} | PnL={realized_pnl:.2f}"
+        )
 
     def _handle_order_error(self, error: Exception, order_params: dict):
         error_msg_str = str(error).strip().lower()
@@ -2392,7 +2501,15 @@ class ScalperMainWindow(QMainWindow):
 
         default_lots = int(order_data.get('quantity', 1) / contract.lot_size if contract.lot_size > 0 else 1)
 
-        dialog = QuickOrderDialog(parent=self, contract=contract, default_lots=default_lots)
+        # Check if position already exists for this symbol
+        position_exists = self.position_manager.get_position(contract.tradingsymbol) is not None
+
+        dialog = QuickOrderDialog(
+            parent=self,
+            contract=contract,
+            default_lots=default_lots,
+            position_exists=position_exists
+        )
         self.active_quick_order_dialog = dialog
 
         dialog.populate_from_order(order_data)

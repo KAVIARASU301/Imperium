@@ -30,7 +30,6 @@ class OrderStatusWidget(QWidget):
         self.show()
         self.animate_in()
 
-
     def _setup_ui(self):
         self.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
@@ -99,8 +98,16 @@ class OrderStatusWidget(QWidget):
         type_label = QLabel(f"● {transaction_type}")
         type_label.setObjectName("buyLabel" if transaction_type == "BUY" else "sellLabel")
 
-        # Quantity and price
-        info_label = QLabel(f"{qty} qty @ ₹{price:.2f}")
+        # Quantity and price - handle orders without price (SL-M, etc)
+        if price is not None:
+            info_label = QLabel(f"{qty} qty @ ₹{price:.2f}")
+        else:
+            # For SL-M orders, show trigger price if available
+            trigger = self.order_data.get('trigger_price')
+            if trigger:
+                info_label = QLabel(f"{qty} qty @ trigger ₹{trigger:.2f}")
+            else:
+                info_label = QLabel(f"{qty} qty @ market")
         info_label.setObjectName("infoLabel")
 
         details.addWidget(type_label)
@@ -278,12 +285,12 @@ class OrderStatusWidget(QWidget):
             color: #A9B1C3;
             border: none;
         }
-        
+
         #modifyButton:hover {
             background-color: #2A3140;
             color: #E0E0E0;
         }
-        
+
         #modifyButton:pressed {
             background-color: #1E2433;
         }
@@ -295,11 +302,11 @@ class OrderStatusWidget(QWidget):
             font-weight: 700;
             padding: 6px 14px;
         }
-        
+
         #cancelButton:hover {
             background-color: #FA6B64;
         }
-        
+
         #cancelButton:pressed {
             background-color: #E6453E;
         }

@@ -156,23 +156,33 @@ class PaperTradingManager(QObject):
         if instrument_token and instrument_token in self.market_data:
             ltp = self.market_data[instrument_token].get('last_price', 0)
 
+        logger.info(
+            f"📦 Placing {order_type} {transaction_type} order: {tradingsymbol} qty={quantity} price={price} ltp={ltp}")
+
         if order_type == self.ORDER_TYPE_MARKET:
             if ltp > 0:
                 self._execute_trade(order, ltp)
+                logger.info(f"✅ MARKET order executed immediately @ {ltp}")
             else:
                 order['status'] = 'PENDING_EXECUTION'
+                logger.warning(f"⏳ MARKET order pending - no LTP available")
 
         elif order_type == self.ORDER_TYPE_LIMIT:
             limit_price = order['price']
             is_buy = transaction_type == self.TRANSACTION_TYPE_BUY
             if ltp > 0 and ((is_buy and limit_price >= ltp) or (not is_buy and limit_price <= ltp)):
                 self._execute_trade(order, ltp)
+                logger.info(f"✅ LIMIT order executed immediately @ {ltp} (limit: {limit_price})")
+            else:
+                order['status'] = 'TRIGGER PENDING'
+                logger.info(f"⏳ LIMIT order pending @ {limit_price} (current LTP: {ltp})")
 
-        elif order_type == self.ORDER_TYPE_SL:
-            trigger_price = kwargs.get('trigger_price')
-            is_sell = transaction_type == self.TRANSACTION_TYPE_SELL
-            if ltp > 0 and is_sell and ltp <= trigger_price:
-                self._execute_trade(order, price or trigger_price)
+        elif order_type in [self.ORDER_TYPE_SL, self.ORDER_TYPE_SLM]:
+            # 🔒 SL/SLM orders ALWAYS start as TRIGGER PENDING
+            # They should NOT execute immediately at placement
+            order['status'] = 'TRIGGER PENDING'
+            order['trigger_price'] = kwargs.get('trigger_price')
+            logger.info(f"⏳ {order_type} order pending with trigger @ {order['trigger_price']}")
 
         self._orders.append(order)
         # DO NOT emit here if already executed
@@ -183,7 +193,7 @@ class PaperTradingManager(QObject):
 
     def cancel_order(self, variety, order_id, **kwargs):
         for order in self._orders:
-            if order['order_id'] == order_id and order['status'] in ['OPEN', 'PENDING_EXECUTION']:
+            if order['order_id'] == order_id and order['status'] in ['OPEN', 'PENDING_EXECUTION', 'TRIGGER PENDING']:
                 order['status'] = 'CANCELLED'
                 logger.info(f"Paper order {order_id} cancelled.")
                 self.order_update.emit(order)
@@ -225,19 +235,108 @@ class PaperTradingManager(QObject):
 
         return {"net": list(self._positions.values())}
 
+    def place_protective_orders(self, tradingsymbol: str, sl_price: float = None, tp_price: float = None):
+        """
+        Place SL/TP orders AFTER position is created.
+        Called with actual prices (not amounts).
+        """
+        position = self._positions.get(tradingsymbol)
+        if not position:
+            logger.warning(f"Cannot place protective orders - position {tradingsymbol} not found")
+            return
+
+        qty = position["quantity"]
+        avg_price = position["average_price"]
+
+        logger.info(f"📌 Placing protective orders for {tradingsymbol}: SL={sl_price}, TP={tp_price}")
+
+        # Place SL order if provided
+        if sl_price and sl_price > 0:
+            try:
+                sl_order_id = self.place_order(
+                    variety=self.VARIETY_REGULAR,
+                    exchange=position["exchange"],
+                    tradingsymbol=tradingsymbol,
+                    transaction_type=self.TRANSACTION_TYPE_SELL,  # Close the position
+                    quantity=abs(qty),
+                    product=position["product"],
+                    order_type=self.ORDER_TYPE_SLM,
+                    trigger_price=sl_price
+                )
+                logger.info(f"✅ SL order placed: {sl_order_id} @ trigger {sl_price}")
+            except Exception as e:
+                logger.error(f"Failed to place SL order: {e}")
+
+        # Place TP order if provided
+        if tp_price and tp_price > 0:
+            try:
+                tp_order_id = self.place_order(
+                    variety=self.VARIETY_REGULAR,
+                    exchange=position["exchange"],
+                    tradingsymbol=tradingsymbol,
+                    transaction_type=self.TRANSACTION_TYPE_SELL,  # Close the position
+                    quantity=abs(qty),
+                    product=position["product"],
+                    order_type=self.ORDER_TYPE_LIMIT,
+                    price=tp_price
+                )
+                logger.info(f"✅ TP order placed: {tp_order_id} @ {tp_price}")
+            except Exception as e:
+                logger.error(f"Failed to place TP order: {e}")
+
     def _process_pending_orders(self):
         for order in self._orders:
-            if order['status'] in ['OPEN', 'PENDING_EXECUTION']:
-                instrument_token = self.tradingsymbol_to_token.get(order['tradingsymbol'])
-                if instrument_token and instrument_token in self.market_data:
-                    ltp = self.market_data[instrument_token].get('last_price', 0.0)
-                    if ltp <= 0: continue
-                    if order['order_type'] == self.ORDER_TYPE_LIMIT:
-                        if (order['transaction_type'] == self.TRANSACTION_TYPE_BUY and ltp <= order['price']) or \
-                                (order['transaction_type'] == self.TRANSACTION_TYPE_SELL and ltp >= order['price']):
-                            self._execute_trade(order, order['price'])
-                    elif order['status'] == 'PENDING_EXECUTION':
-                        self._execute_trade(order, ltp)
+            if order['status'] not in ['OPEN', 'PENDING_EXECUTION', 'TRIGGER PENDING']:
+                continue
+
+            instrument_token = self.tradingsymbol_to_token.get(order['tradingsymbol'])
+            if not instrument_token or instrument_token not in self.market_data:
+                continue
+
+            ltp = self.market_data[instrument_token].get('last_price', 0.0)
+            if ltp <= 0:
+                continue
+
+            order_type = order['order_type']
+            transaction_type = order['transaction_type']
+
+            # Handle LIMIT orders
+            if order_type == self.ORDER_TYPE_LIMIT:
+                limit_price = order['price']
+                if transaction_type == self.TRANSACTION_TYPE_BUY and ltp <= limit_price:
+                    # BUY limit: execute at current LTP (which is <= limit, so it's a better price)
+                    self._execute_trade(order, ltp)
+                    logger.info(f"✅ LIMIT BUY executed: {order['tradingsymbol']} @ {ltp} (limit was {limit_price})")
+                elif transaction_type == self.TRANSACTION_TYPE_SELL and ltp >= limit_price:
+                    # SELL limit: execute at current LTP (which is >= limit, so it's a better price)
+                    self._execute_trade(order, ltp)
+                    logger.info(f"✅ LIMIT SELL executed: {order['tradingsymbol']} @ {ltp} (limit was {limit_price})")
+
+            # Handle SL/SLM orders (protective orders)
+            elif order_type in [self.ORDER_TYPE_SL, self.ORDER_TYPE_SLM]:
+                trigger_price = order.get('trigger_price')
+                if not trigger_price:
+                    continue
+
+                # SL orders are typically SELL orders that trigger when price falls
+                # OR BUY orders (for short positions) that trigger when price rises
+                if transaction_type == self.TRANSACTION_TYPE_SELL and ltp <= trigger_price:
+                    # Stop loss hit for long position
+                    exec_price = order.get('price',
+                                           trigger_price) if order_type == self.ORDER_TYPE_SL else trigger_price
+                    self._execute_trade(order, exec_price)
+                    logger.info(f"🛑 SL HIT: {order['tradingsymbol']} @ {exec_price}")
+
+                elif transaction_type == self.TRANSACTION_TYPE_BUY and ltp >= trigger_price:
+                    # Stop loss hit for short position OR target for long
+                    exec_price = order.get('price',
+                                           trigger_price) if order_type == self.ORDER_TYPE_SL else trigger_price
+                    self._execute_trade(order, exec_price)
+                    logger.info(f"🎯 TARGET HIT: {order['tradingsymbol']} @ {exec_price}")
+
+            # Handle pending market orders
+            elif order['status'] == 'PENDING_EXECUTION':
+                self._execute_trade(order, ltp)
 
     def _execute_trade(self, order: dict, price: float):
         tradingsymbol = order["tradingsymbol"]
@@ -355,7 +454,6 @@ class PaperTradingManager(QObject):
     @property
     def used_margin(self) -> float:
         return self.rms.used_margin
-
 
     @property
     def available_margin(self) -> float:
