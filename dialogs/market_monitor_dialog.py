@@ -7,9 +7,9 @@ import numpy as np
 import pyqtgraph as pg
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QWidget,
                                QLabel, QLineEdit, QPushButton, QMessageBox, QComboBox,
-                               QSizePolicy, QFrame, QSpacerItem, QGraphicsObject)
-from PySide6.QtCore import Qt, QByteArray, QTimer, QRectF
-from PySide6.QtGui import QFont, QPicture, QPainter
+                               QSizePolicy, QFrame, QSpacerItem)
+from PySide6.QtCore import Qt, QByteArray, QTimer, Signal
+from PySide6.QtGui import QFont
 from kiteconnect import KiteConnect
 
 from utils.config_manager import ConfigManager
@@ -19,98 +19,119 @@ from core.market_data_worker import MarketDataWorker
 logger = logging.getLogger(__name__)
 
 
-# --- MERGED FROM market_monitor_widget.py ---
-class CandlestickItem(QGraphicsObject):
-    def __init__(self, data=None):
-        super().__init__()
-        self.data = data or []
-        # The QPicture caching is removed for efficiency
+class DateNavigator(QWidget):
+    """Date navigation control for historical data viewing"""
+    date_changed = Signal(datetime, datetime)  # current_date, previous_date
 
-    def updateData(self, data):
-        """
-        This method is called to update the data for the chart.
-        It signals that the geometry is about to change, updates the data,
-        and then schedules a repaint.
-        """
-        # Inform the graphics scene that the item's geometry will change.
-        # This is crucial for the scene to manage updates correctly.
-        self.prepareGeometryChange()
-        self.data = data
-        # Schedule a repaint of the item.
-        self.update()
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._current_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        self._setup_ui()
+        self._update_display()
 
-    # The generatePicture method is no longer needed and has been removed.
+    def _setup_ui(self):
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
 
-    def paint(self, painter, option, widget=None):
-        """
-        The paint method is called by the graphics system to draw the item.
-        The drawing logic is now here, which is more efficient than the
-        previous QPicture caching approach for dynamic data.
-        """
-        painter.setRenderHint(QPainter.Antialiasing)
+        self.btn_back = QPushButton("◀")
+        self.btn_back.setFixedSize(40, 32)
+        self.btn_back.setToolTip("Previous trading day")
+        self.btn_back.clicked.connect(self._go_backward)
 
-        BULL_COLOR = '#26A69A'
-        BEAR_COLOR = '#EF5350'
-        w = 0.3  # Width of the candlestick body
+        self.lbl_dates = QLabel()
+        self.lbl_dates.setAlignment(Qt.AlignCenter)
+        self.lbl_dates.setMinimumWidth(500)
+        self.lbl_dates.setStyleSheet("""
+            QLabel {
+                color: #E0E0E0;
+                font-size: 13px;
+                font-weight: 600;
+            }
+        """)
 
-        # The visible range can be optimized here, but for now, we draw all data.
-        for x, open_, high, low, close in self.data:
-            bullish = close >= open_
-            pen_color = BULL_COLOR if bullish else BEAR_COLOR
-            pen = pg.mkPen(color=pen_color, width=1.5)
-            painter.setPen(pen)
+        self.btn_forward = QPushButton("▶")
+        self.btn_forward.setFixedSize(40, 32)
+        self.btn_forward.setToolTip("Next trading day")
+        self.btn_forward.clicked.connect(self._go_forward)
 
-            # Draw the high-low wick
-            painter.drawLine(x, low, x, high)
+        layout.addStretch()
+        layout.addWidget(self.btn_back)
+        layout.addWidget(self.lbl_dates)
+        layout.addWidget(self.btn_forward)
+        layout.addStretch()
 
-            brush_color = BULL_COLOR if bullish else BEAR_COLOR
-            painter.setBrush(pg.mkBrush(brush_color))
+    def _get_previous_trading_day(self, date: datetime) -> datetime:
+        prev = date - timedelta(days=1)
+        while prev.weekday() >= 5:  # Skip weekends
+            prev -= timedelta(days=1)
+        return prev
 
-            top = max(open_, close)
-            bottom = min(open_, close)
-            height = top - bottom
+    def _get_next_trading_day(self, date: datetime) -> datetime:
+        nxt = date + timedelta(days=1)
+        while nxt.weekday() >= 5:  # Skip weekends
+            nxt += timedelta(days=1)
+        return nxt
 
-            # Draw the open-close body
-            painter.drawRect(QRectF(x - w, bottom, w * 2, height))
+    def _update_display(self):
+        prev = self._get_previous_trading_day(self._current_date)
+        cur_str = self._current_date.strftime("%A, %b %d, %Y")
+        prev_str = prev.strftime("%A, %b %d, %Y")
 
-    def boundingRect(self):
-        """
-        This method must return the outer bounds of the item. It is essential
-        for the graphics scene to know the item's area.
-        """
-        if not self.data:
-            return QRectF()
+        self.lbl_dates.setText(
+            f"<span style='color:#5B9BD5;'>Previous: {prev_str}</span>"
+            f"  |  "
+            f"<span style='color:#26A69A;'>Current: {cur_str}</span>"
+        )
 
-        # Unpack all data points to find the min/max coordinates
-        xs, opens, highs, lows, closes = zip(*self.data)
-        pen_width_offset = 1  # Add a small buffer for the pen width
+        today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        self.btn_forward.setEnabled(self._current_date < today)
 
-        return QRectF(
-            min(xs) - pen_width_offset,
-            min(lows),
-            (max(xs) - min(xs)) + (2 * pen_width_offset),
-            max(highs) - min(lows)
+    def _go_backward(self):
+        self._current_date = self._get_previous_trading_day(self._current_date)
+        self._update_display()
+        self.date_changed.emit(
+            self._current_date,
+            self._get_previous_trading_day(self._current_date)
+        )
+
+    def _go_forward(self):
+        self._current_date = self._get_next_trading_day(self._current_date)
+        self._update_display()
+        self.date_changed.emit(
+            self._current_date,
+            self._get_previous_trading_day(self._current_date)
+        )
+
+    def get_dates(self):
+        return (
+            self._current_date,
+            self._get_previous_trading_day(self._current_date)
         )
 
 
 class MarketChartWidget(QWidget):
+    """Optimized chart with line mode only"""
+
     def __init__(self, parent=None, timeframe_combo=None):
         super().__init__(parent)
         self.timeframe_combo = timeframe_combo
         self.symbol = ""
         self.chart_data = pd.DataFrame()
-        self.chart_mode = 'line'
         self.day_separator_pos = None
         self.cpr_levels = None
-        self._candlestick_item = None
         self._line_plot_today = None
         self._line_plot_prev = None
-        self._live_indicator = None
-        # FIX: Add a dirty flag and an update timer for throttling
+        self._live_dot = None  # Small dot at the end
+
+        # Optimized update system
         self._data_is_dirty = False
+        self._pending_ticks = []  # Batch tick updates
+
+        # Throttle to 250ms for smoother updates
         self.update_timer = QTimer(self)
         self.update_timer.timeout.connect(self._throttled_update)
-        self.update_timer.start(500)  # Update chart at most every 500ms
+        self.update_timer.start(250)
 
         self._setup_ui()
         self._setup_chart()
@@ -126,15 +147,6 @@ class MarketChartWidget(QWidget):
         self.symbol_label.setStyleSheet("font-weight: bold; font-size: 14px; color: #E0E0E0;")
         header_layout.addWidget(self.symbol_label)
         header_layout.addStretch()
-        button_style = ("QPushButton { font-size: 11px; background-color: #424242;"
-                        " border-radius: 4px; color: white; padding: 4px 8px; }"
-                        " QPushButton:hover { background-color: #555555; }")
-        self.mode_btn = QPushButton("Candle")
-        self.mode_btn.setFixedWidth(60)
-        self.mode_btn.setToolTip("Toggle Line / Candlestick View")
-        self.mode_btn.setStyleSheet(button_style)
-        self.mode_btn.clicked.connect(self.toggle_chart_mode)
-        header_layout.addWidget(self.mode_btn)
         layout.addLayout(header_layout)
         self.plot_widget = pg.PlotWidget()
         layout.addWidget(self.plot_widget)
@@ -156,10 +168,11 @@ class MarketChartWidget(QWidget):
         self.plot_widget.getAxis('bottom').setStyle(showValues=False)
 
     def _throttled_update(self):
-        """Only redraws the chart if new data has arrived."""
+        """Batched update - process all pending ticks at once"""
         if self._data_is_dirty:
             self._plot_chart_data(full_redraw=False)
             self._data_is_dirty = False
+            self._pending_ticks.clear()
 
     def set_data(self, symbol: str, data: pd.DataFrame, day_separator_pos: int | None = None,
                  cpr_levels: Dict | None = None):
@@ -167,18 +180,21 @@ class MarketChartWidget(QWidget):
             self.show_message(f"[{symbol}]", "No historical data available.")
             return
         self.symbol = symbol
-        self.chart_data = data.copy()
+        # Avoid copy - just reference it (assuming no external mutation)
+        self.chart_data = data
         self.day_separator_pos = day_separator_pos
         self.cpr_levels = cpr_levels
         self.symbol_label.setText(self.symbol)
         self._plot_chart_data(full_redraw=True)
         self.set_visible_range("Auto")
 
+    def add_tick(self, tick: dict):
+        """Queue tick for batched processing"""
+        self._pending_ticks.append(tick)
+        self._data_is_dirty = True
+
     def _draw_cpr(self):
-        """
-        Draw ONLY the CPR center (Pivot) line.
-        No background shading, no BC/TC region.
-        """
+        """Draw ONLY the CPR center (Pivot) line - very subtle"""
         if not self.cpr_levels:
             return
 
@@ -186,386 +202,343 @@ class MarketChartWidget(QWidget):
         if pivot is None:
             return
 
-        pivot_pen = pg.mkPen(
-            color="#F39C12",  # same amber tone you already use
-            width=1,
-            style=Qt.DashLine
-        )
-
-        pivot_line = pg.InfiniteLine(
+        # Very subtle pivot line - thin, low opacity, no label
+        inf_line = pg.InfiniteLine(
             pos=pivot,
             angle=0,
-            movable=False,
-            pen=pivot_pen
+            pen=pg.mkPen(color='#F07637', width=1, style=Qt.DotLine),
         )
+        self.plot_widget.addItem(inf_line)
 
-        self.plot_widget.addItem(pivot_line)
+    def _plot_chart_data(self, full_redraw=True):
+        """Optimized line chart plotting only"""
+        if self.chart_data.empty:
+            return
 
-    def _plot_chart_data(self, full_redraw=False):
+        plot_item = self.plot_widget.getPlotItem()
+
         if full_redraw:
-            self.plot_widget.clear()
-            self._candlestick_item = None
+            plot_item.clear()
             self._line_plot_today = None
             self._line_plot_prev = None
-            self._live_indicator = None
+            self._live_dot = None
 
-            # Draw CPR (only pivot, as already fixed)
+        df = self.chart_data
+        x = np.arange(len(df))
+        closes = df['close'].values
+
+        # Line chart mode
+        if self.day_separator_pos is not None:
+            sep = self.day_separator_pos
+            if self._line_plot_prev is None or full_redraw:
+                self._line_plot_prev = plot_item.plot(
+                    x[:sep], closes[:sep],
+                    pen=pg.mkPen('#666666', width=1.2)
+                )
+            else:
+                self._line_plot_prev.setData(x[:sep], closes[:sep])
+
+            if self._line_plot_today is None or full_redraw:
+                self._line_plot_today = plot_item.plot(
+                    x[sep:], closes[sep:],
+                    pen=pg.mkPen('#00BCD4', width=1.5)
+                )
+            else:
+                self._line_plot_today.setData(x[sep:], closes[sep:])
+        else:
+            if self._line_plot_today is None or full_redraw:
+                self._line_plot_today = plot_item.plot(
+                    x, closes,
+                    pen=pg.mkPen('#00BCD4', width=1.5)
+                )
+            else:
+                self._line_plot_today.setData(x, closes)
+
+        # Draw CPR and separator only on full redraw
+        if full_redraw:
             self._draw_cpr()
-
-            if self.day_separator_pos is not None:
-                sep = pg.InfiniteLine(
+            if self.day_separator_pos:
+                sep_line = pg.InfiniteLine(
                     pos=self.day_separator_pos - 0.5,
                     angle=90,
-                    pen=pg.mkPen(color='#3A4458', style=Qt.DashLine, width=1.5)
+                    pen=pg.mkPen('#555555', width=1, style=Qt.DashLine)
                 )
-                self.plot_widget.addItem(sep)
+                plot_item.addItem(sep_line)
 
-        x = np.arange(len(self.chart_data))
+        # Add small dot at the end to show live movement
+        if len(df) > 0:
+            last_x = x[-1]
+            last_price = closes[-1]
 
-        # ------------------------------------------------------------------
-        # LINE MODE
-        # ------------------------------------------------------------------
-        if self.chart_mode == 'line':
-
-            # Remove candle item if switching modes
-            if self._candlestick_item:
-                self.plot_widget.removeItem(self._candlestick_item)
-                self._candlestick_item = None
-
-            # Create plots if needed
-            if self._line_plot_today is None:
-                fill_brush = pg.mkBrush(color=(41, 199, 201, 20))
-
-                self._line_plot_today = self.plot_widget.plot(
-                    [], [],
-                    pen=pg.mkPen(color='#29C7C9', width=2),
-                    fillLevel=0,
-                    fillBrush=fill_brush
+            if self._live_dot is None or full_redraw:
+                self._live_dot = plot_item.plot(
+                    [last_x], [last_price],
+                    pen=None,
+                    symbol='o',
+                    symbolSize=6,
+                    symbolBrush=pg.mkBrush('#00E676'),
+                    symbolPen=None
                 )
-
-                self._line_plot_prev = self.plot_widget.plot(
-                    [], [],
-                    pen=pg.mkPen(color='#E0E0E0', width=1.5)
-                )
-
-                self._live_indicator = pg.ScatterPlotItem(
-                    [], [],
-                    size=8,
-                    pen=pg.mkPen(color='white', width=1),
-                    brush=pg.mkBrush(color='#29C7C9')
-                )
-                self.plot_widget.addItem(self._live_indicator)
-
-            # ---------------- FIX: build Y series correctly ----------------
-            closes = self.chart_data['close'].values
-            opens = self.chart_data['open'].values
-
-            if len(closes) > 0:
-                # First point = OPEN of first candle
-                full_y = np.concatenate(([opens[0]], closes[1:]))
             else:
-                full_y = closes
+                self._live_dot.setData([last_x], [last_price])
 
-            # ---------------- Handle prev / today split ----------------
-            if self.day_separator_pos is not None and self.day_separator_pos > 0:
-                prev_x = x[:self.day_separator_pos]
-                prev_y = full_y[:self.day_separator_pos]
+    def set_visible_range(self, count_text: str):
+        """Optimized range setting"""
+        if self.chart_data.empty:
+            return
 
-                today_x = x[self.day_separator_pos:]
-                today_y = full_y[self.day_separator_pos:]
+        total = len(self.chart_data)
 
-                self._line_plot_prev.setData(prev_x, prev_y)
-                self._line_plot_today.setData(today_x, today_y)
+        if count_text == "Auto":
+            self.plot_widget.enableAutoRange()
+            return
 
-                if len(today_x) > 0:
-                    self._live_indicator.setData(
-                        [today_x[-1]],
-                        [today_y[-1]]
-                    )
-            else:
-                self._line_plot_prev.clear()
-                self._line_plot_today.setData(x, full_y)
+        try:
+            count = int(count_text)
+            start_idx = max(0, total - count)
+            self.plot_widget.setXRange(start_idx, total, padding=0.02)
+        except ValueError:
+            pass
 
-                if len(x) > 0:
-                    self._live_indicator.setData(
-                        [x[-1]],
-                        [full_y[-1]]
-                    )
-
-        # ------------------------------------------------------------------
-        # CANDLESTICK MODE
-        # ------------------------------------------------------------------
-        else:
-            if self._line_plot_today:
-                self.plot_widget.removeItem(self._line_plot_today)
-                self.plot_widget.removeItem(self._line_plot_prev)
-                self.plot_widget.removeItem(self._live_indicator)
-
-                self._line_plot_today = None
-                self._line_plot_prev = None
-                self._live_indicator = None
-
-            cs_data = [
-                (i, *self.chart_data.iloc[i][['open', 'high', 'low', 'close']].values)
-                for i in range(len(self.chart_data))
-            ]
-
-            if self._candlestick_item is None:
-                self._candlestick_item = CandlestickItem(cs_data)
-                self.plot_widget.addItem(self._candlestick_item)
-            else:
-                self._candlestick_item.updateData(cs_data)
-
-    def add_tick(self, tick: dict):
-        ltp = tick.get('last_price')
-        if self.chart_data.empty or ltp is None: return
-        now = datetime.now().replace(second=0, microsecond=0)
-        tf_str = self.timeframe_combo.currentText() if self.timeframe_combo else "1min"
-        tf_minutes = int(tf_str.replace("min", ""))
-        rounded = now - timedelta(minutes=now.minute % tf_minutes)
-        if rounded in self.chart_data.index:
-            row = self.chart_data.loc[rounded]
-            self.chart_data.at[rounded, 'close'] = ltp
-            self.chart_data.at[rounded, 'high'] = max(row['high'], ltp)
-            self.chart_data.at[rounded, 'low'] = min(row['low'], ltp)
-        else:
-            last_close = self.chart_data.iloc[-1]['close']
-            new_row = pd.DataFrame([{'open': last_close, 'high': ltp, 'low': ltp, 'close': ltp}], index=[rounded])
-            self.chart_data = pd.concat([self.chart_data, new_row])
-            # No need to sort index if new rows are always appended
-        self._data_is_dirty = True
-
-    def set_visible_range(self, count_str: str):
-        if self.chart_data.empty: return
-        vb = self.plot_widget.getViewBox()
-
-        data_view = self.chart_data
-
-        if count_str.lower() != 'auto':
-            try:
-                count = int(count_str)
-                total = len(self.chart_data)
-                start = max(0, total - count)
-                vb.setXRange(start, total, padding=0.02)
-                data_view = self.chart_data.iloc[start:]
-            except (ValueError, TypeError):
-                vb.enableAutoRange()
-                return
-        else:
-            vb.enableAutoRange(axis=pg.ViewBox.XAxis)
-
-        if not data_view.empty:
-            y_min = data_view['low'].min()
-            y_max = data_view['high'].max()
-            y_range = y_max - y_min
-
-            margin = y_range * 0.1  # 10% margin
-            if margin == 0:  # If price is flat
-                margin = y_max * 0.01  # 1% of the price as margin
-            if margin == 0:  # If price is also 0
-                margin = 1  # a small default margin
-
-            vb.setYRange(y_min - margin, y_max + margin, padding=0)
-        else:
-            vb.enableAutoRange(axis=pg.ViewBox.YAxis)
-
-    def toggle_chart_mode(self):
-        self.chart_mode = 'line' if self.chart_mode == 'candlestick' else 'candlestick'
-        self.mode_btn.setText("Candle" if self.chart_mode == 'line' else "Line")
-        self._plot_chart_data(full_redraw=True)
-
-    def show_message(self, title: str, message: str = ""):
+    def show_message(self, title: str, msg: str):
+        """Lightweight message display"""
         self.plot_widget.clear()
-        self.symbol_label.setText(title)
-        if message:
-            text = pg.TextItem(message, color='#888888', anchor=(0.5, 0.5))
-            text.setFont(QFont("Segoe UI", 10))
-            self.plot_widget.addItem(text, ignoreBounds=True)
+        text_item = pg.TextItem(f"{title}\n{msg}", color='#888888', anchor=(0.5, 0.5))
+        text_item.setPos(0.5, 0.5)
+        self.plot_widget.addItem(text_item)
 
-class AddSymbolSetDialog(QDialog):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Add Symbol Set")
-        self.setFixedSize(400, 220)
-
-        layout = QVBoxLayout(self)
-
-        layout.addWidget(QLabel("Group Name"))
-        self.name_edit = QLineEdit()
-        layout.addWidget(self.name_edit)
-
-        layout.addWidget(QLabel("Symbols (comma separated)"))
-        self.symbols_edit = QLineEdit()
-        layout.addWidget(self.symbols_edit)
-
-        btn_layout = QHBoxLayout()
-        btn_layout.addStretch()
-
-        save_btn = QPushButton("Save")
-        cancel_btn = QPushButton("Cancel")
-
-        save_btn.clicked.connect(self.accept)
-        cancel_btn.clicked.connect(self.reject)
-
-        btn_layout.addWidget(save_btn)
-        btn_layout.addWidget(cancel_btn)
-
-        layout.addLayout(btn_layout)
-
-    def get_data(self):
-        return {
-            "name": self.name_edit.text().strip(),
-            "symbols": self.symbols_edit.text().strip()
-        }
-class ManageSymbolSetsDialog(QDialog):
-    def __init__(self, symbol_sets: list[dict], parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Manage Symbol Sets")
-        self.setFixedSize(350, 300)
-        self.symbol_sets = symbol_sets
-
-        layout = QVBoxLayout(self)
-
-        self.list_widget = QComboBox()
-        for s in symbol_sets:
-            self.list_widget.addItem(s["name"])
-        layout.addWidget(self.list_widget)
-
-        delete_btn = QPushButton("Delete Selected")
-        delete_btn.clicked.connect(self._delete_selected)
-        layout.addWidget(delete_btn)
-
-        close_btn = QPushButton("Close")
-        close_btn.clicked.connect(self.accept)
-        layout.addWidget(close_btn)
-
-    def _delete_selected(self):
-        idx = self.list_widget.currentIndex()
-        if idx >= 0:
-            self.symbol_sets.pop(idx)
-            self.list_widget.removeItem(idx)
 
 class MarketMonitorDialog(QDialog):
-    def __init__(self, real_kite_client: KiteConnect, market_data_worker: MarketDataWorker,
-                 config_manager: ConfigManager, parent=None):
+    """Main dialog - inherits optimizations from chart widgets"""
+
+    def __init__(self, real_kite_client: KiteConnect = None,
+                 market_data_worker: MarketDataWorker = None,
+                 config_manager: ConfigManager = None, parent=None,
+                 # Legacy params for backward compatibility
+                 kite: KiteConnect = None, instruments_df: pd.DataFrame = None):
         super().__init__(parent)
-        self.kite = real_kite_client
+
+        # Support both calling conventions
+        self.kite = real_kite_client or kite
         self.config_manager = config_manager
         self.market_data_worker = market_data_worker
-        self.market_data_worker.data_received.connect(self._on_ticks_received)
 
-        self.charts: List[MarketChartWidget] = []
+        # Get instruments from parent's instrument_data (dict format)
+        # Convert to DataFrame for token mapping
+        self.instruments_df = self._get_instruments_from_parent(parent, instruments_df)
+
+        # Pre-build token map once (don't rebuild every lookup)
+        self.symbol_to_token_map = self._build_token_map()
+
         self.token_to_chart_map: Dict[int, MarketChartWidget] = {}
-        self.symbol_sets: List[Dict] = []
-        self.symbol_to_token_map: Dict[str, int] = {}
+        self.symbol_sets = []
 
-        self.timeframe_map = {
-            "1min": "minute", "3min": "3minute", "5min": "5minute",
-            "10min": "10minute", "15min": "15minute", "30min": "30minute"
-        }
+        # Track current dates for historical browsing
+        self.current_date = None
+        self.previous_date = None
+        self.live_mode = True
 
-        self._fetch_and_build_symbol_map()
-        self._setup_window()
         self._setup_ui()
-        self._apply_styles()
         self._connect_signals()
+        self._apply_styles()
         self._load_and_populate_sets()
         self._restore_state()
 
-        self.symbols_entry.setText("NIFTY 50, NIFTY BANK, SENSEX, FINNIFTY")
-        print("[MarketMonitor] Init complete")
-        QTimer.singleShot(100, self._load_charts_data)
+        # Connect to worker with optimized callback
+        self.market_data_worker.data_received.connect(self._on_ticks_received)
 
-    def _setup_window(self):
-        self.setWindowTitle("Market Monitor")
-        self.setWindowFlags(Qt.Window | Qt.WindowMinMaxButtonsHint | Qt.WindowCloseButtonHint)
-        self.resize(1200, 700)
-        self.setMinimumSize(960, 600)
-        self.setObjectName("MarketMonitorDialog")
+        # Initialize with today's date
+        self.current_date, self.previous_date = self.navigator.get_dates()
 
-    def _fetch_and_build_symbol_map(self):
+    def _get_instruments_from_parent(self, parent, instruments_df):
+        """Extract instruments from kite.instruments() or parent"""
+        if instruments_df is not None:
+            return instruments_df
+
+        # The original approach: fetch directly from kite
+        if self.kite:
+            try:
+                instrument_list = self.kite.instruments()
+                # Convert list of dicts to DataFrame
+                return pd.DataFrame(instrument_list)
+            except Exception as e:
+                logger.error(f"Failed to fetch instruments from kite: {e}")
+
+        # Fallback: Try parent's instrument_data (but it's in different format)
+        if parent and hasattr(parent, 'instrument_data'):
+            # parent.instrument_data is dict[symbol -> list of instruments]
+            # We need to flatten it
+            rows = []
+            instrument_data = parent.instrument_data
+            for symbol, instruments in instrument_data.items():
+                if isinstance(instruments, list):
+                    for instr in instruments:
+                        if isinstance(instr, dict):
+                            rows.append(instr)
+                        elif isinstance(instr, str):
+                            # Skip string entries
+                            continue
+
+            if rows:
+                return pd.DataFrame(rows)
+
+        # Last resort: empty DataFrame
+        return pd.DataFrame(columns=['tradingsymbol', 'instrument_token', 'exchange'])
+
+    def _build_token_map(self) -> Dict[str, int]:
+        """Build symbol-to-token map once at init"""
+        token_map = {}
+
+        if self.instruments_df.empty:
+            logger.warning("MarketMonitor: instruments_df is empty, token map will be empty")
+            return token_map
+
+        # Filter for equity and indices only
         try:
-            self.instrument_data = self.kite.instruments()
-            self.symbol_to_token_map = {inst['tradingsymbol']: inst['instrument_token'] for inst in self.instrument_data
-                                        if inst.get('instrument_type') in ['EQ', 'INDICES']}
-        except Exception as e:
-            logger.error(f"Failed to fetch instruments: {e}", exc_info=True)
-            QMessageBox.critical(self, "Error", "Could not load required instrument data.")
+            filtered = self.instruments_df[
+                self.instruments_df['instrument_type'].isin(['EQ', 'INDICES'])
+            ]
+
+            for _, row in filtered.iterrows():
+                token_map[row['tradingsymbol']] = row['instrument_token']
+        except KeyError:
+            # Fallback: just use NSE exchange if instrument_type column doesn't exist
+            logger.warning("MarketMonitor: instrument_type column not found, using NSE filter")
+            try:
+                nse_df = self.instruments_df[self.instruments_df['exchange'] == 'NSE']
+                for _, row in nse_df.iterrows():
+                    token_map[row['tradingsymbol']] = row['instrument_token']
+            except Exception as e:
+                logger.error(f"Failed to build token map: {e}")
+
+        # Add common aliases
+        if 'NIFTY 50' in token_map:
+            token_map['NIFTY'] = token_map['NIFTY 50']
+        if 'NIFTY BANK' in token_map:
+            token_map['BANKNIFTY'] = token_map['NIFTY BANK']
+        if 'NIFTY FIN SERVICE' in token_map:
+            token_map['FINNIFTY'] = token_map['NIFTY FIN SERVICE']
+
+        logger.info(f"MarketMonitor: Built token map with {len(token_map)} symbols")
+        return token_map
 
     def _setup_ui(self):
+        """UI setup with maximize and resize enabled"""
+        self.setObjectName("MarketMonitorDialog")
+        self.setWindowTitle("Market Monitor - Live Multi-Chart View")
+        self.setWindowFlags(Qt.Window | Qt.WindowMinMaxButtonsHint | Qt.WindowCloseButtonHint)
+        self.resize(1400, 900)
+        self.setMinimumSize(800, 600)  # Set minimum size for usability
+
         main_layout = QVBoxLayout(self)
+        main_layout.setSpacing(8)
         main_layout.setContentsMargins(10, 10, 10, 10)
-        main_layout.setSpacing(10)
-        main_layout.addWidget(self._create_control_panel())
-        separator = QFrame()
-        separator.setFrameShape(QFrame.HLine)
-        separator.setFrameShadow(QFrame.Sunken)
-        main_layout.addWidget(separator)
-        main_layout.addLayout(self._create_chart_grid(), 1)
 
-    def _create_control_panel(self) -> QWidget:
-        panel = QWidget()
-        layout = QHBoxLayout(panel)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
+        # Control panel
+        controls_layout = QHBoxLayout()
+        controls_layout.setSpacing(8)
 
-        layout.addWidget(QLabel("Symbol Sets:"))
-        self.set_selector_combo = QComboBox()
-        self.set_selector_combo.setToolTip("Select a pre-saved set of symbols")
-        layout.addWidget(self.set_selector_combo, 1)
+        lbl_symbols = QLabel("Symbols (comma-separated):")
+        controls_layout.addWidget(lbl_symbols)
 
         self.symbols_entry = QLineEdit()
-        self.symbols_entry.setPlaceholderText("Enter comma-separated symbols")
-        layout.addWidget(self.symbols_entry, 3)
+        self.symbols_entry.setPlaceholderText("e.g., NIFTY, BANKNIFTY, RELIANCE")
+        controls_layout.addWidget(self.symbols_entry, 3)
 
-        self.save_set_button = QPushButton("Save Set")
-        layout.addWidget(self.save_set_button)
-
-        layout.addSpacerItem(QSpacerItem(40, 20, QSizePolicy.Expanding, QSizePolicy.Minimum))
-
-        layout.addWidget(QLabel("Candles:"))
-        self.candle_count_combo = QComboBox()
-        self.candle_count_combo.addItems(["Auto", "800", "600", "500", "400", "300", "200", "100", "75", "50"])
-        self.candle_count_combo.setToolTip("Select number of recent candles to show (zoom)")
-        layout.addWidget(self.candle_count_combo)
-
-        layout.addWidget(QLabel("Timeframe:"))
         self.timeframe_combo = QComboBox()
-        self.timeframe_combo.addItems(self.timeframe_map.keys())
-        self.timeframe_combo.setToolTip("Select chart interval")
-        layout.addWidget(self.timeframe_combo)
+        self.timeframe_combo.addItems(["1minute", "3minute", "5minute", "10minute", "15minute", "30minute", "60minute"])
+        self.timeframe_combo.setCurrentText("5minute")
+        controls_layout.addWidget(QLabel("Timeframe:"))
+        controls_layout.addWidget(self.timeframe_combo, 1)
+
+        self.candle_count_combo = QComboBox()
+        self.candle_count_combo.addItems(["30", "60", "90", "120", "150", "Auto"])
+        self.candle_count_combo.setCurrentText("Auto")
+        controls_layout.addWidget(QLabel("Visible Candles:"))
+        controls_layout.addWidget(self.candle_count_combo, 1)
 
         self.load_button = QPushButton("Load Charts")
-        layout.addWidget(self.load_button)
-        return panel
+        controls_layout.addWidget(self.load_button)
 
-    def _create_chart_grid(self) -> QGridLayout:
-        grid_layout = QGridLayout()
-        grid_layout.setSpacing(8)
-        for i in range(2):
-            for j in range(2):
-                chart_widget = MarketChartWidget(self, timeframe_combo=self.timeframe_combo)
-                grid_layout.addWidget(chart_widget, i, j)
-                self.charts.append(chart_widget)
-        return grid_layout
+        main_layout.addLayout(controls_layout)
+
+        # Symbol set management + Date Navigator (combined row)
+        set_nav_layout = QHBoxLayout()
+        set_nav_layout.setSpacing(8)
+
+        set_nav_layout.addWidget(QLabel("Symbol Set:"))
+
+        self.set_selector_combo = QComboBox()
+        self.set_selector_combo.setMinimumWidth(180)
+        set_nav_layout.addWidget(self.set_selector_combo)
+
+        # Date Navigator in the middle
+        self.navigator = DateNavigator(self)
+        set_nav_layout.addWidget(self.navigator, 1)  # Takes remaining space, centered
+
+        self.save_set_button = QPushButton("Save Current Set")
+        set_nav_layout.addWidget(self.save_set_button)
+
+        main_layout.addLayout(set_nav_layout)
+
+        sep1 = QFrame()
+        sep1.setFrameShape(QFrame.HLine)
+        main_layout.addWidget(sep1)
+
+        # Chart grid (2x3)
+        chart_grid = QGridLayout()
+        chart_grid.setSpacing(6)
+
+        self.charts = []
+        for row in range(2):
+            for col in range(3):
+                chart = MarketChartWidget(self, self.timeframe_combo)
+                chart_grid.addWidget(chart, row, col)
+                self.charts.append(chart)
+
+        main_layout.addLayout(chart_grid, 1)
 
     def _fetch_and_plot_initial(self, chart: MarketChartWidget, symbol: str, token: int):
+        """Optimized initial data fetch with historical date support"""
+        if not self.kite:
+            chart.show_message(f"[{symbol}] ERROR", "Kite client not available")
+            logger.error("MarketMonitor: Kite client is None")
+            return
+
         try:
-            selected_tf = self.timeframe_combo.currentText()
-            api_interval = self.timeframe_map.get(selected_tf, "minute")
-            to_date, from_date = datetime.now().date(), datetime.now().date() - timedelta(days=15)
-            hist_data = self.kite.historical_data(token, from_date, to_date, api_interval)
-            if not hist_data: raise ValueError("No historical data from API.")
-            df = pd.DataFrame(hist_data)
+            tf = self.timeframe_combo.currentText()
+
+            # Use navigator dates if in historical mode
+            if self.live_mode:
+                to_date = datetime.now()
+                from_date = to_date - timedelta(days=2)
+            else:
+                # Historical mode - use navigator dates
+                to_date = self.current_date + timedelta(days=1)
+                from_date = self.previous_date
+
+            records = self.kite.historical_data(
+                token, from_date, to_date, tf, continuous=False, oi=False
+            )
+
+            if not records:
+                chart.show_message(f"[{symbol}] NO DATA", "No historical data available")
+                return
+
+            df = pd.DataFrame(records)
             df.dropna(inplace=True)
             df['date'] = pd.to_datetime(df['date'])
             df.set_index('date', inplace=True)
-            if df.index.tz is not None: df.index = df.index.tz_localize(None)
+            if df.index.tz is not None:
+                df.index = df.index.tz_localize(None)
+
             unique_dates = sorted(pd.Series(df.index.date).unique())
             cpr_levels, day_separator_pos = None, None
+
             if len(unique_dates) < 2:
                 chart.set_data(symbol, df)
                 return
+
             today_date, prev_day_date = unique_dates[-1], unique_dates[-2]
             today_df = df[df.index.date == today_date]
             prev_day_df = df[df.index.date == prev_day_date]
@@ -573,6 +546,7 @@ class MarketMonitorDialog(QDialog):
             day_separator_pos = len(prev_day_df)
             two_day_df = pd.concat([prev_day_df, today_df])
             chart.set_data(symbol, two_day_df, day_separator_pos, cpr_levels)
+
         except Exception as e:
             logger.error(f"Failed to fetch/plot data for {symbol}: {e}", exc_info=True)
             chart.show_message(f"[{symbol}] DATA ERROR", "Could not load data.")
@@ -583,8 +557,10 @@ class MarketMonitorDialog(QDialog):
         self.set_selector_combo.currentIndexChanged.connect(self._on_set_selected)
         self.candle_count_combo.currentTextChanged.connect(self._on_candle_count_changed)
         self.timeframe_combo.currentTextChanged.connect(self._load_charts_data)
+        self.navigator.date_changed.connect(self._on_date_changed)
 
     def _apply_styles(self):
+        """Stylesheet (unchanged)"""
         STYLE_SHEET = """
         QDialog#MarketMonitorDialog { background-color: #2C2C2C; }
         QLabel { color: #E0E0E0; font-size: 12px; }
@@ -619,6 +595,7 @@ class MarketMonitorDialog(QDialog):
         self.setStyleSheet(STYLE_SHEET)
 
     def _get_instrument_token(self, symbol: str) -> int | None:
+        """Fast token lookup"""
         upper_symbol = symbol.strip().upper()
         alias_map = {'NIFTY': 'NIFTY 50', 'BANKNIFTY': 'NIFTY BANK', 'FINNIFTY': 'NIFTY FIN SERVICE'}
         return self.symbol_to_token_map.get(alias_map.get(upper_symbol, upper_symbol))
@@ -627,14 +604,36 @@ class MarketMonitorDialog(QDialog):
         for chart in self.charts:
             chart.set_visible_range(text)
 
+    def _on_date_changed(self, current_date: datetime, previous_date: datetime):
+        """Handle date navigation - reload charts with historical data"""
+        today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+
+        self.current_date = current_date
+        self.previous_date = previous_date
+
+        # Check if we're in live mode or historical mode
+        if current_date >= today:
+            self.live_mode = True
+            logger.info("MarketMonitor: Switched to LIVE mode")
+        else:
+            self.live_mode = False
+            logger.info(f"MarketMonitor: Viewing historical data for {current_date.date()}")
+
+        # Reload all charts with the new date range
+        self._load_charts_data()
+
     def _load_charts_data(self):
+        """Load charts (unchanged logic)"""
         self.unsubscribe_all()
         self.token_to_chart_map.clear()
         symbols = [s.strip() for s in self.symbols_entry.text().strip().split(',') if s.strip()]
-        if not symbols: return
+        if not symbols:
+            return
+
         self.load_button.setEnabled(False)
         self.load_button.setText("Loading...")
         tokens_to_subscribe = set()
+
         for i, chart in enumerate(self.charts):
             if i < len(symbols):
                 symbol, token = symbols[i], self._get_instrument_token(symbols[i])
@@ -646,28 +645,28 @@ class MarketMonitorDialog(QDialog):
                     chart.show_message(f"INVALID: {symbol}", "Symbol not found")
             else:
                 chart.show_message("EMPTY", "Awaiting symbol")
+
         self._on_candle_count_changed(self.candle_count_combo.currentText())
-        if tokens_to_subscribe: self._subscribe_to(tokens_to_subscribe)
+        if tokens_to_subscribe:
+            self._subscribe_to(tokens_to_subscribe)
+
         self.load_button.setEnabled(True)
         self.load_button.setText("Load Charts")
 
     def _on_ticks_received(self, ticks: list[dict]):
+        """Optimized tick routing - direct dispatch without logging"""
         for tick in ticks:
-            token = tick.get("instrument_token")
-            if token in self.token_to_chart_map:
-                chart = self.token_to_chart_map[token]
-                chart.add_tick(tick)
-                # print(f"Tick routed to {chart.symbol}: LTP = {tick.get('last_price')}")
+            if (token := tick.get("instrument_token")) in self.token_to_chart_map:
+                self.token_to_chart_map[token].add_tick(tick)
 
     def _subscribe_to(self, tokens: Set[int]):
         if not tokens:
             return
-        self.market_data_worker.set_instruments(tokens, append=True)  # ✅ FIXED
+        self.market_data_worker.set_instruments(tokens, append=True)
         logger.info(f"Market Monitor subscribed to tokens: {tokens}")
 
     def unsubscribe_all(self):
         if self.market_data_worker and self.token_to_chart_map:
-            print("[MarketMonitor] unsubscribe_all called")
             tokens_to_remove = set(self.token_to_chart_map.keys())
             current_subs = self.market_data_worker.subscribed_tokens
             self.market_data_worker.set_instruments(current_subs - tokens_to_remove)
@@ -676,10 +675,8 @@ class MarketMonitorDialog(QDialog):
 
     def _load_and_populate_sets(self):
         self.symbol_sets = self.config_manager.load_market_monitor_sets()
-
         self.set_selector_combo.blockSignals(True)
         self.set_selector_combo.clear()
-
         self.set_selector_combo.addItem("Select a Symbol Set")
 
         for s in self.symbol_sets:
@@ -688,7 +685,6 @@ class MarketMonitorDialog(QDialog):
         self.set_selector_combo.insertSeparator(self.set_selector_combo.count())
         self.set_selector_combo.addItem("➕ Add New Set…")
         self.set_selector_combo.addItem("🗑️ Manage Sets…")
-
         self.set_selector_combo.blockSignals(False)
 
     def _on_set_selected(self, index: int):
@@ -699,6 +695,7 @@ class MarketMonitorDialog(QDialog):
         text = self.set_selector_combo.itemText(index)
 
         if text.startswith("➕"):
+            from dialogs.add_symbol_set_dialog import AddSymbolSetDialog
             dlg = AddSymbolSetDialog(self)
             if dlg.exec() == QDialog.Accepted:
                 data = dlg.get_data()
@@ -709,6 +706,7 @@ class MarketMonitorDialog(QDialog):
             return
 
         if text.startswith("🗑️"):
+            from dialogs.manage_symbol_sets_dialog import ManageSymbolSetsDialog
             dlg = ManageSymbolSetsDialog(self.symbol_sets, self)
             dlg.exec()
             self.config_manager.save_market_monitor_sets(self.symbol_sets)
@@ -721,8 +719,10 @@ class MarketMonitorDialog(QDialog):
             QTimer.singleShot(50, self._load_charts_data)
 
     def _save_current_set(self):
-        if (idx := self.set_selector_combo.currentIndex()) <= 0: return
-        if not (symbols := self.symbols_entry.text().strip()): return
+        if (idx := self.set_selector_combo.currentIndex()) <= 0:
+            return
+        if not (symbols := self.symbols_entry.text().strip()):
+            return
         self.symbol_sets[idx - 1]["symbols"] = symbols
         self.config_manager.save_market_monitor_sets(self.symbol_sets)
 
@@ -735,10 +735,12 @@ class MarketMonitorDialog(QDialog):
 
     def closeEvent(self, event):
         try:
-            self.config_manager.save_dialog_state('market_monitor',
-                                                  self.saveGeometry().toBase64().data().decode('utf-8'))
+            self.config_manager.save_dialog_state(
+                'market_monitor',
+                self.saveGeometry().toBase64().data().decode('utf-8')
+            )
         except Exception as e:
             logger.error(f"Failed to save dialog state: {e}")
-        print("[MarketMonitor] Dialog closed")
+
         self.market_data_worker.data_received.disconnect(self._on_ticks_received)
         super().closeEvent(event)

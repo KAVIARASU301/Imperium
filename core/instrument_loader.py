@@ -7,7 +7,7 @@ import time
 import pickle
 import os
 from datetime import datetime, timedelta
-from typing import Dict, List, Any, Set, Optional
+from typing import Dict, List, Any, Optional
 from PySide6.QtCore import QThread, Signal
 from kiteconnect import KiteConnect
 import requests
@@ -25,7 +25,7 @@ class InstrumentLoader(QThread):
     progress_update = Signal(str)  # For status updates
     loading_progress = Signal(int)  # Progress percentage (0-100)
 
-    def __init__(self, kite_client: KiteConnect, cache_dir: str = None):
+    def __init__(self, kite_client: KiteConnect, cache_dir: Optional[str] = None):
         super().__init__()
         self.kite = kite_client
         self.cache_dir = cache_dir or os.path.expanduser("~/.options_badger/cache")
@@ -45,10 +45,9 @@ class InstrumentLoader(QThread):
             allowed_methods=["HEAD", "GET", "OPTIONS"]
         )
         adapter = HTTPAdapter(max_retries=retry_strategy)
-        self.session.mount("http://", adapter)
-        self.session.mount("https://", adapter)
+        self.session.mount("https://", adapter)  # Only HTTPS for security
 
-    def stop(self):
+    def stop(self) -> None:
         """Request the thread to stop"""
         self._stop_requested = True
         logger.info("Stop requested for InstrumentLoader")
@@ -60,7 +59,7 @@ class InstrumentLoader(QThread):
                 return False
 
             with open(self.cache_info_file, 'rb') as f:
-                cache_info = pickle.load(f)
+                cache_info: Dict[str, Any] = pickle.load(f)
 
             cache_time = cache_info.get('timestamp')
             if not cache_time:
@@ -85,7 +84,7 @@ class InstrumentLoader(QThread):
         """Load processed NFO instruments from cache"""
         try:
             with open(self.cache_file, 'rb') as f:
-                symbol_data = pickle.load(f)
+                symbol_data: Dict[str, Any] = pickle.load(f)
 
             total_instruments = sum(len(data['instruments']) for data in symbol_data.values())
             logger.info(f"Loaded {len(symbol_data)} symbols with {total_instruments} instruments from cache")
@@ -95,22 +94,22 @@ class InstrumentLoader(QThread):
             logger.error(f"Error loading cached NFO instruments: {e}")
             return None
 
-    def save_instruments_to_cache(self, symbol_data: Dict[str, Any]):
+    def save_instruments_to_cache(self, symbol_data: Dict[str, Any]) -> None:
         """Save processed instruments to cache with timestamp"""
         try:
             # Save processed symbol data
             with open(self.cache_file, 'wb') as f:
-                pickle.dump(symbol_data, f)
+                pickle.dump(symbol_data, f, protocol=pickle.HIGHEST_PROTOCOL)
 
             # Save cache info
             total_instruments = sum(len(data['instruments']) for data in symbol_data.values())
-            cache_info = {
+            cache_info: Dict[str, Any] = {
                 'timestamp': datetime.now(),
                 'symbols_count': len(symbol_data),
                 'instruments_count': total_instruments
             }
             with open(self.cache_info_file, 'wb') as f:
-                pickle.dump(cache_info, f)
+                pickle.dump(cache_info, f, protocol=pickle.HIGHEST_PROTOCOL)
 
             logger.info(f"Cached {len(symbol_data)} symbols with {total_instruments} instruments")
 
@@ -122,7 +121,7 @@ class InstrumentLoader(QThread):
         self.progress_update.emit("Processing instruments data...")
         self.loading_progress.emit(70)
 
-        symbol_data = {}
+        symbol_data: Dict[str, Any] = {}
         processed_count = 0
         total_instruments = len(instruments)
 
@@ -140,7 +139,7 @@ class InstrumentLoader(QThread):
                     'expiries': set(),
                     'strikes': set(),
                     'instruments': [],
-                    'futures': []  # <-- ADD THIS LINE
+                    'futures': []
                 }
 
             # Process CE and PE options
@@ -154,11 +153,9 @@ class InstrumentLoader(QThread):
                 symbol_data[symbol_name]['strikes'].add(inst['strike'])
                 symbol_data[symbol_name]['instruments'].append(inst)
 
-            # --- START: NEW CODE BLOCK FOR FUTURES ---
             # Process FUT (Futures) contracts
             elif inst['instrument_type'] == 'FUT':
                 symbol_data[symbol_name]['futures'].append(inst)
-            # --- END: NEW CODE BLOCK FOR FUTURES ---
 
             processed_count += 1
 
@@ -179,7 +176,7 @@ class InstrumentLoader(QThread):
             symbol_data[symbol]['strikes'] = sorted(list(symbol_data[symbol]['strikes']))
 
         logger.info(
-            f"Processed {len(symbol_data)} option and futures symbols from {total_instruments} instruments")  # <-- Optional: Update log message
+            f"Processed {len(symbol_data)} option and futures symbols from {total_instruments} instruments")
         return symbol_data
 
     def fetch_nfo_instruments_with_retry(self) -> List[Dict[str, Any]]:
@@ -238,7 +235,11 @@ class InstrumentLoader(QThread):
                     raise Exception(
                         f"Failed to load NFO instruments after {max_retries} attempts. Last error: {error_msg}")
 
-    def run(self):
+        # This should never be reached due to the raise in the else block above,
+        # but added for type checker satisfaction
+        raise Exception("Unexpected exit from retry loop")
+
+    def run(self) -> None:
         """Load NFO instruments with caching and robust error handling"""
         try:
             self.loading_progress.emit(0)
@@ -296,7 +297,7 @@ class InstrumentLoader(QThread):
                 self.loading_progress.emit(0)
                 self.error_occurred.emit(error_msg)
 
-    def clear_cache(self):
+    def clear_cache(self) -> None:
         """Clear the NFO instrument cache"""
         try:
             if os.path.exists(self.cache_file):
@@ -312,12 +313,13 @@ class InstrumentLoader(QThread):
         try:
             if os.path.exists(self.cache_info_file):
                 with open(self.cache_info_file, 'rb') as f:
-                    return pickle.load(f)
+                    cache_info: Dict[str, Any] = pickle.load(f)
+                    return cache_info
         except Exception as e:
             logger.error(f"Error reading cache info: {e}")
         return None
 
-    def force_refresh(self):
+    def force_refresh(self) -> None:
         """Force refresh by clearing cache and reloading"""
         self.clear_cache()
         if not self.isRunning():

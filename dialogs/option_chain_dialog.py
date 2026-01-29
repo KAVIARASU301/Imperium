@@ -14,19 +14,33 @@ from kiteconnect import KiteConnect
 
 logger = logging.getLogger(__name__)
 
-# --- Constants for easy theme management ---
-PRIMARY_BACKGROUND = "#161A25"
-SECONDARY_BACKGROUND = "#212635"
-TERTIARY_BACKGROUND = "#2A3140"
-HOVER_BACKGROUND = "#2C3243"
-BORDER_COLOR = "#3A4458"
-PRIMARY_TEXT_COLOR = "#E0E0E0"
-SECONDARY_TEXT_COLOR = "#A9B1C3"
-ACCENT_COLOR = "#29C7C9"
-ACCENT_POSITIVE_COLOR = "#00D1B2"
-ACCENT_NEGATIVE_COLOR = "#F85149"
-ATM_STRIKE_BG = "#FFD700"
-ATM_STRIKE_FG_BRIGHT = "#05DBF7"
+# --- Enhanced color scheme for better readability ---
+PRIMARY_BACKGROUND = "#0D1117"
+SECONDARY_BACKGROUND = "#161B22"
+TERTIARY_BACKGROUND = "#21262D"
+HOVER_BACKGROUND = "#30363D"
+BORDER_COLOR = "#30363D"
+
+# Text colors with better contrast
+PRIMARY_TEXT_COLOR = "#F0F6FC"
+SECONDARY_TEXT_COLOR = "#C9D1D9"
+MUTED_TEXT_COLOR = "#8B949E"
+
+# Accent colors
+ACCENT_COLOR = "#58A6FF"
+CALL_COLOR = "#3FB950"  # Green for calls
+PUT_COLOR = "#F85149"  # Red for puts
+CALL_ITM_BG = "#1A3A1F"  # Dark green for ITM calls
+PUT_ITM_BG = "#3A1A1A"  # Dark red for ITM puts
+
+# ATM strike highlighting
+ATM_STRIKE_BG = "#FFA657"
+ATM_STRIKE_FG = "#0D1117"
+
+# OI heat map colors
+OI_LOW_COLOR = "#1F2937"
+OI_HIGH_CALL = "#065F46"  # Dark green
+OI_HIGH_PUT = "#7F1D1D"  # Dark red
 
 INDEX_SYMBOL_MAP = {
     'NIFTY': 'NIFTY 50',
@@ -37,7 +51,7 @@ INDEX_SYMBOL_MAP = {
 
 
 # ---------------------------------------------------------------------------------
-# UPDATED: Real Black-Scholes and Greeks Calculation Logic
+# Black-Scholes and Greeks Calculation
 # ---------------------------------------------------------------------------------
 def black_scholes_price(S, K, T, r, sigma, is_call):
     if T <= 0 or sigma <= 0: return 0
@@ -51,7 +65,7 @@ def black_scholes_price(S, K, T, r, sigma, is_call):
 
 
 def implied_volatility(S, K, T, r, market_price, is_call, tolerance=1e-5, max_iterations=100):
-    sigma = 0.3  # initial guess
+    sigma = 0.3
     for _ in range(max_iterations):
         price = black_scholes_price(S, K, T, r, sigma, is_call)
         if T <= 0: return 0
@@ -62,7 +76,7 @@ def implied_volatility(S, K, T, r, market_price, is_call, tolerance=1e-5, max_it
         if abs(diff) < tolerance:
             return sigma
 
-        if vega == 0:  # Avoid division by zero
+        if vega == 0:
             return sigma
 
         sigma -= diff / vega
@@ -73,7 +87,6 @@ def implied_volatility(S, K, T, r, market_price, is_call, tolerance=1e-5, max_it
 
 def calculate_greeks(spot_price, strike_price, expiry_date, option_price, is_call, interest_rate=0.06):
     days_to_expiry = max((expiry_date - date.today()).days, 0)
-    # If option has expired, Greeks are zero
     if days_to_expiry == 0:
         return {'iv': 0, 'delta': 0, 'theta': 0, 'gamma': 0, 'vega': 0}
 
@@ -82,13 +95,11 @@ def calculate_greeks(spot_price, strike_price, expiry_date, option_price, is_cal
     K = strike_price
     r = interest_rate
 
-    # If option price is zero, IV can't be calculated
     if option_price <= 0:
         return {'iv': 0, 'delta': 0, 'theta': 0, 'gamma': 0, 'vega': 0}
 
     iv = implied_volatility(S, K, T, r, option_price, is_call)
 
-    # --- FIX: Added a check to prevent division by zero ---
     if iv * math.sqrt(T) == 0:
         return {'iv': iv * 100, 'delta': 0, 'theta': 0, 'gamma': 0, 'vega': 0}
 
@@ -97,13 +108,12 @@ def calculate_greeks(spot_price, strike_price, expiry_date, option_price, is_cal
 
     delta = norm.cdf(d1) if is_call else norm.cdf(d1) - 1
 
-    # --- FIX: Corrected the Theta calculation for Puts ---
     if is_call:
         theta = (
                         -S * norm.pdf(d1) * iv / (2 * math.sqrt(T))
                         - r * K * math.exp(-r * T) * norm.cdf(d2)
                 ) / 365
-    else:  # Put option
+    else:
         theta = (
                         -S * norm.pdf(d1) * iv / (2 * math.sqrt(T))
                         + r * K * math.exp(-r * T) * norm.cdf(-d2)
@@ -120,25 +130,48 @@ def calculate_greeks(spot_price, strike_price, expiry_date, option_price, is_cal
         'vega': vega
     }
 
+
 # ---------------------------------------------------------------------------------
 
 def _format_large_number(n: float) -> str:
-    """Formats a large number into a compact string with K, L, or Cr suffixes."""
-    sign = "+" if n > 0 else ""
-    if abs(n) >= 1_00_00_000:
+    """Enhanced number formatting with better readability"""
+    if n == 0:
+        return "—"
+
+    sign = ""
+    abs_n = abs(n)
+
+    if abs_n >= 1_00_00_000:  # Crores
         return f"{sign}{n / 1_00_00_000:.2f}Cr"
-    elif abs(n) >= 1_00_000:
+    elif abs_n >= 1_00_000:  # Lakhs
         return f"{sign}{n / 1_00_000:.2f}L"
-    elif abs(n) >= 1_000:
+    elif abs_n >= 1_000:  # Thousands
         return f"{sign}{n / 1_000:.1f}K"
-    return f"{n:+,}" if n != 0 else "0"
+    else:
+        return f"{n:,.0f}"
+
+
+def _format_price(price: float) -> str:
+    """Format price with appropriate decimal places"""
+    if price == 0:
+        return "—"
+    elif price < 1:
+        return f"{price:.3f}"
+    elif price < 10:
+        return f"{price:.2f}"
+    else:
+        return f"{price:,.2f}"
+
+
+def _format_greek(value: float, decimal_places: int = 2) -> str:
+    """Format greek values for better readability"""
+    if value == 0:
+        return "—"
+    return f"{value:.{decimal_places}f}"
 
 
 class OptionChainDialog(QDialog):
-    """
-    A rewritten, premium Option Chain dialog featuring a compact title bar,
-    enhanced color scheme, and improved readability.
-    """
+    """Premium Option Chain dialog with enhanced readability"""
 
     def __init__(self, real_kite_client: KiteConnect, instrument_data: Dict, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -174,7 +207,7 @@ class OptionChainDialog(QDialog):
 
     def _setup_window(self):
         self.setWindowTitle("Live Option Chain")
-        self.setFixedSize(1200, 640)
+        self.setFixedSize(1300, 650)  # Reduced size
         self.setModal(False)
         self.setWindowFlags(
             Qt.FramelessWindowHint | Qt.Dialog | Qt.WindowMinimizeButtonHint)
@@ -196,7 +229,7 @@ class OptionChainDialog(QDialog):
         title_bar = QWidget()
         title_bar.setObjectName("compactTitleBar")
         layout = QHBoxLayout(title_bar)
-        layout.setContentsMargins(15, 5, 5, 5)
+        layout.setContentsMargins(15, 8, 8, 8)
         layout.setSpacing(15)
 
         title = QLabel("Live Option Chain")
@@ -210,240 +243,395 @@ class OptionChainDialog(QDialog):
 
         layout.addWidget(QLabel("Symbol:"))
         self.symbol_combo = QComboBox()
+        self.symbol_combo.setObjectName("controlCombo")
+        self.symbol_combo.setMinimumWidth(150)
         layout.addWidget(self.symbol_combo)
+
         layout.addWidget(QLabel("Expiry:"))
         self.expiry_combo = QComboBox()
+        self.expiry_combo.setObjectName("controlCombo")
+        self.expiry_combo.setMinimumWidth(130)
         layout.addWidget(self.expiry_combo)
 
-        self.lot_size_checkbox = QCheckBox("Show Per Lot")
-        self.lot_size_checkbox.setChecked(True)
-        layout.addWidget(self.lot_size_checkbox)
+        self.per_lot_checkbox = QCheckBox("Show Per Lot")
+        self.per_lot_checkbox.setObjectName("controlCheckbox")
+        layout.addWidget(self.per_lot_checkbox)
 
-        self.lot_size_label = QLabel("Lot: -")
-        layout.addWidget(self.lot_size_label)
+        separator2 = QFrame()
+        separator2.setFrameShape(QFrame.Shape.VLine)
+        separator2.setFrameShadow(QFrame.Shadow.Sunken)
+        layout.addWidget(separator2)
 
-        layout.addStretch(1)
+        self.spot_label = QLabel("Spot: —")
+        self.spot_label.setObjectName("spotLabel")
+        layout.addWidget(self.spot_label)
 
-        self.ltp_label = QLabel("LTP: 0.00")
-        self.ltp_label.setObjectName("ltpLabel")
-        layout.addWidget(self.ltp_label)
-        layout.addStretch(1)
+        layout.addStretch()
 
-        self.minimize_btn = QPushButton("—")
-        self.minimize_btn.setObjectName("windowControlButton")
-        self.minimize_btn.setFixedSize(30, 30)
+        self.refresh_btn = QPushButton("⟳")
+        self.refresh_btn.setObjectName("iconButton")
+        self.refresh_btn.setFixedSize(32, 32)
+        self.refresh_btn.setToolTip("Refresh Data")
+        layout.addWidget(self.refresh_btn)
 
-        self.close_btn = QPushButton("✕")
-        self.close_btn.setObjectName("closeButton")
-        self.close_btn.setFixedSize(30, 30)
-
+        self.minimize_btn = QPushButton("−")
+        self.minimize_btn.setObjectName("iconButton")
+        self.minimize_btn.setFixedSize(32, 32)
+        self.minimize_btn.setToolTip("Minimize")
         layout.addWidget(self.minimize_btn)
+
+        self.close_btn = QPushButton("×")
+        self.close_btn.setObjectName("closeButton")
+        self.close_btn.setFixedSize(32, 32)
+        self.close_btn.setToolTip("Close")
         layout.addWidget(self.close_btn)
 
         return title_bar
 
-    def _apply_styles(self):
-        self.setStyleSheet(f"""
-            #mainContainer {{
-                background-color: {PRIMARY_BACKGROUND}; border: 1px solid {BORDER_COLOR};
-                border-radius: 12px; font-family: "Segoe UI", sans-serif;
-            }}
-            #compactTitleBar {{
-                background-color: {SECONDARY_BACKGROUND}; border-bottom: 1px solid {BORDER_COLOR};
-                border-top-left-radius: 11px; border-top-right-radius: 11px;
-            }}
-            #dialogTitle {{ color: {PRIMARY_TEXT_COLOR}; font-size: 16px; font-weight: 600; }}
-            #compactTitleBar > QLabel {{ color: {SECONDARY_TEXT_COLOR}; font-weight: 500; }}
-            #ltpLabel {{
-                color: {PRIMARY_TEXT_COLOR}; font-size: 14px; font-weight: bold; padding: 4px 8px;
-                background-color: {TERTIARY_BACKGROUND}; border-radius: 6px;
-            }}
-            QFrame[frameShape="5"] {{ border: 1px solid {TERTIARY_BACKGROUND}; }}
-            #windowControlButton, #closeButton {{
-                background-color: transparent; border: none; color: {SECONDARY_TEXT_COLOR};
-                font-size: 16px; border-radius: 6px;
-            }}
-            #windowControlButton:hover {{ background-color: {TERTIARY_BACKGROUND}; color: {PRIMARY_TEXT_COLOR}; }}
-            #closeButton:hover {{ background-color: {ACCENT_NEGATIVE_COLOR}; color: white; }}
-            QComboBox {{
-                background-color: {TERTIARY_BACKGROUND}; color: {PRIMARY_TEXT_COLOR};
-                border: 1px solid {BORDER_COLOR}; border-radius: 6px; padding: 6px 10px; min-width: 120px;
-            }}
-            QComboBox:focus {{ border: 1px solid {ACCENT_COLOR}; }}
-            QComboBox::drop-down {{ border: none; }}
-            QComboBox QAbstractItemView {{
-                background-color: {SECONDARY_BACKGROUND}; border: 1px solid {BORDER_COLOR};
-                color: {PRIMARY_TEXT_COLOR}; selection-background-color: {ACCENT_COLOR};
-                selection-color: {SECONDARY_BACKGROUND};
-            }}
-            QCheckBox {{
-                color: {SECONDARY_TEXT_COLOR}; font-weight: 500; spacing: 5px;
-            }}
-            QCheckBox::indicator {{
-                width: 16px; height: 16px; border-radius: 4px; border: 1px solid {BORDER_COLOR};
-                background-color: {TERTIARY_BACKGROUND};
-            }}
-            QCheckBox::indicator:checked {{
-                background-color: {ACCENT_COLOR};
-                image: url(none);
-            }}
-        """)
-
     def _connect_signals(self):
-        self.symbol_combo.currentTextChanged.connect(self._on_symbol_change)
-        self.expiry_combo.currentTextChanged.connect(self._fetch_and_build_chain)
-        self.lot_size_checkbox.toggled.connect(self._fetch_market_data)
-        self.minimize_btn.clicked.connect(self.showMinimized)
         self.close_btn.clicked.connect(self.close)
+        self.minimize_btn.clicked.connect(self.showMinimized)
+        self.refresh_btn.clicked.connect(self._fetch_market_data)
+        self.symbol_combo.currentTextChanged.connect(self._on_symbol_changed)
+        self.expiry_combo.currentTextChanged.connect(self._fetch_market_data)
+        self.per_lot_checkbox.toggled.connect(self._on_per_lot_changed)
 
     def _populate_controls(self):
+        self.symbol_combo.blockSignals(True)
+
         if self.instrument_data:
             symbols = sorted(self.instrument_data.keys())
             self.symbol_combo.addItems(symbols)
+            # Default to NIFTY or first symbol
             if "NIFTY" in symbols:
                 self.symbol_combo.setCurrentText("NIFTY")
             else:
                 self.symbol_combo.setCurrentIndex(0)
 
-    def _on_symbol_change(self):
-        symbol = self.symbol_combo.currentText()
-        if not symbol: return
+        self.symbol_combo.blockSignals(False)
+        self._on_symbol_changed(self.symbol_combo.currentText())
 
-        symbol_info = self.instrument_data.get(symbol, {})
-        self.lot_size = symbol_info.get('lot_size', 1)
-        self.lot_size_label.setText(f"Lot: {self.lot_size}")
+    def _on_symbol_changed(self, symbol: str):
+        if not symbol:
+            return
 
-        self.underlying_instrument = f"NSE:{INDEX_SYMBOL_MAP.get(symbol, symbol)}"
-        self.expiry_combo.blockSignals(True)
         self.expiry_combo.clear()
-        if symbol_info:
-            expiries = [exp.strftime('%d-%b-%Y') for exp in symbol_info.get('expiries', [])]
-            self.expiry_combo.addItems(expiries)
-        self.expiry_combo.blockSignals(False)
-        self._fetch_and_build_chain()
 
-    def _fetch_and_build_chain(self, expiry_str_arg=None):
-        symbol = self.symbol_combo.currentText()
-        expiry_str = self.expiry_combo.currentText()
-        if not symbol or not expiry_str: return
-        self.contracts_data = {}
+        # Get symbol data from the nested structure
+        symbol_info = self.instrument_data.get(symbol, {})
+
+        if not symbol_info:
+            logger.warning(f"No data found for symbol: {symbol}")
+            return
+
+        # Extract lot size and expiries
+        self.lot_size = symbol_info.get('lot_size', 1)
+        expiries = symbol_info.get('expiries', [])
+
+        # Set underlying instrument
+        self.underlying_instrument = INDEX_SYMBOL_MAP.get(symbol, symbol)
+
+        logger.info(f"Symbol: {symbol}, Lot Size: {self.lot_size}, Expiries: {len(expiries)}")
+
+        # Populate expiry dropdown
+        if expiries:
+            self.expiry_combo.addItems([exp.strftime('%d-%b-%Y') for exp in expiries])
+
+        self._fetch_market_data()
+
+    def _on_per_lot_changed(self, checked: bool):
+        self._fetch_market_data()
+
+    def _fetch_market_data(self):
+        if not self.expiry_combo.currentText():
+            return
+
         try:
-            expiry_date = datetime.strptime(expiry_str, '%d-%b-%Y').date()
-            if symbol_data := self.instrument_data.get(symbol):
-                for inst in symbol_data.get('instruments', []):
-                    if inst.get('expiry') == expiry_date:
-                        strike, opt_type = inst.get('strike'), inst.get('instrument_type')
-                        if strike not in self.contracts_data: self.contracts_data[strike] = {}
-                        self.contracts_data[strike][opt_type] = inst
-            self._fetch_market_data(is_initial_load=True)
-        except ValueError:
-            logger.warning(f"Could not parse date: {expiry_str}")
-
-    def _fetch_market_data(self, is_initial_load=False):
-        tokens_to_fetch = [self.underlying_instrument]
-        for strike_map in self.contracts_data.values():
-            for contract in strike_map.values():
-                tokens_to_fetch.append(f"NFO:{contract['tradingsymbol']}")
-        if not tokens_to_fetch: return
-        try:
-            market_data = self.kite.quote(tokens_to_fetch)
-            if self.underlying_instrument in market_data:
-                self.underlying_ltp = market_data[self.underlying_instrument].get('last_price', 0.0)
-                self.ltp_label.setText(f"LTP: <b>₹{self.underlying_ltp:,.2f}</b>")
-
+            symbol = self.symbol_combo.currentText()
             expiry_str = self.expiry_combo.currentText()
-            expiry_date = datetime.strptime(expiry_str, '%d-%b-%Y').date() if expiry_str else None
 
-            show_per_lot = self.lot_size_checkbox.isChecked()
+            if not symbol or not expiry_str:
+                return
+
+            expiry_date = datetime.strptime(expiry_str, '%d-%b-%Y').date()
+
+            # Get instruments for this symbol
+            symbol_data = self.instrument_data.get(symbol, {})
+            instruments = symbol_data.get('instruments', [])
+
+            if not instruments:
+                logger.warning(f"No instruments available for {symbol}")
+                return
+
+            # Build contracts data for the selected expiry
+            self.contracts_data.clear()
+            for inst in instruments:
+                if inst.get('expiry') == expiry_date:
+                    strike = inst.get('strike')
+                    opt_type = inst.get('instrument_type')
+                    if strike and opt_type:
+                        if strike not in self.contracts_data:
+                            self.contracts_data[strike] = {}
+                        self.contracts_data[strike][opt_type] = inst
+
+            logger.info(f"Loaded {len(self.contracts_data)} strikes for {symbol} {expiry_str}")
+
+            # Fetch underlying spot price
+            if self.underlying_instrument:
+                try:
+                    underlying_quote = self.kite.ltp([f"NSE:{self.underlying_instrument}"])
+                    self.underlying_ltp = underlying_quote.get(f"NSE:{self.underlying_instrument}", {}).get(
+                        'last_price', 0)
+                    self.spot_label.setText(f"Spot: {self.underlying_ltp:,.2f}")
+                except Exception as e:
+                    logger.warning(f"Could not fetch underlying LTP: {e}")
+
+            # Fetch market data for all option contracts
+            all_symbols = []
+            for strike_data in self.contracts_data.values():
+                for contract in strike_data.values():
+                    if 'tradingsymbol' in contract:
+                        all_symbols.append(f"NFO:{contract['tradingsymbol']}")
+
+            market_data = {}
+            if all_symbols:
+                try:
+                    market_data = self.kite.quote(all_symbols)
+                except Exception as e:
+                    logger.error(f"Error fetching market data: {e}")
+
+            # Update the chain widget
+            show_per_lot = self.per_lot_checkbox.isChecked()
             self.chain_widget.update_chain(
-                self.contracts_data, market_data, self.underlying_ltp, expiry_date,
-                self.lot_size, show_per_lot
+                self.contracts_data,
+                market_data,
+                self.underlying_ltp,
+                expiry_date,
+                self.lot_size,
+                show_per_lot
             )
+            self.chain_widget.center_on_atm()
 
-            if is_initial_load:
-                self.update_timer.singleShot(150, self.chain_widget.center_on_atm)
         except Exception as e:
-            logger.error(f"Failed to fetch option chain market data: {e}", exc_info=True)
+            logger.error(f"Error in _fetch_market_data: {e}", exc_info=True)
 
     def mousePressEvent(self, event: QMouseEvent):
         if event.button() == Qt.LeftButton:
-            self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
-            event.accept()
+            self._drag_pos = event.globalPosition().toPoint()
 
     def mouseMoveEvent(self, event: QMouseEvent):
-        if event.buttons() == Qt.LeftButton and self._drag_pos:
-            self.move(event.globalPosition().toPoint() - self._drag_pos)
-            event.accept()
+        if self._drag_pos and event.buttons() == Qt.LeftButton:
+            self.move(self.pos() + event.globalPosition().toPoint() - self._drag_pos)
+            self._drag_pos = event.globalPosition().toPoint()
 
     def mouseReleaseEvent(self, event: QMouseEvent):
         self._drag_pos = None
-        event.accept()
+
+    def _apply_styles(self):
+        self.setStyleSheet(f"""
+            QDialog {{
+                background-color: {PRIMARY_BACKGROUND};
+                border: 1px solid {BORDER_COLOR};
+                border-radius: 10px;
+            }}
+            #mainContainer {{
+                background-color: {PRIMARY_BACKGROUND};
+                border-radius: 10px;
+            }}
+            #compactTitleBar {{
+                background-color: {SECONDARY_BACKGROUND};
+                border-top-left-radius: 10px;
+                border-top-right-radius: 10px;
+                border-bottom: 1px solid {BORDER_COLOR};
+                min-height: 48px;
+            }}
+            #dialogTitle {{
+                color: {PRIMARY_TEXT_COLOR};
+                font-size: 15px;
+                font-weight: 700;
+                letter-spacing: 0.5px;
+            }}
+            QLabel {{
+                color: {SECONDARY_TEXT_COLOR};
+                font-size: 13px;
+                font-weight: 500;
+            }}
+            #spotLabel {{
+                color: {ACCENT_COLOR};
+                font-size: 14px;
+                font-weight: 700;
+                padding: 4px 12px;
+                background-color: {TERTIARY_BACKGROUND};
+                border-radius: 4px;
+            }}
+            #controlCombo {{
+                background-color: {TERTIARY_BACKGROUND};
+                color: {PRIMARY_TEXT_COLOR};
+                border: 1px solid {BORDER_COLOR};
+                border-radius: 6px;
+                padding: 6px 10px;
+                font-size: 13px;
+                font-weight: 500;
+            }}
+            #controlCombo::drop-down {{
+                border: none;
+                padding-right: 8px;
+            }}
+            #controlCombo::down-arrow {{
+                image: url(down_arrow.png);
+                width: 12px;
+                height: 12px;
+            }}
+            #controlCombo:hover {{
+                border-color: {ACCENT_COLOR};
+                background-color: {HOVER_BACKGROUND};
+            }}
+            #controlCombo QAbstractItemView {{
+                background-color: {SECONDARY_BACKGROUND};
+                color: {PRIMARY_TEXT_COLOR};
+                selection-background-color: {HOVER_BACKGROUND};
+                selection-color: {ACCENT_COLOR};
+                border: 1px solid {BORDER_COLOR};
+                border-radius: 6px;
+                padding: 4px;
+            }}
+            #controlCheckbox {{
+                color: {SECONDARY_TEXT_COLOR};
+                font-size: 13px;
+                font-weight: 500;
+                spacing: 8px;
+            }}
+            #controlCheckbox::indicator {{
+                width: 18px;
+                height: 18px;
+                border: 2px solid {BORDER_COLOR};
+                border-radius: 4px;
+                background-color: {TERTIARY_BACKGROUND};
+            }}
+            #controlCheckbox::indicator:checked {{
+                background-color: {ACCENT_COLOR};
+                border-color: {ACCENT_COLOR};
+            }}
+            #controlCheckbox::indicator:hover {{
+                border-color: {ACCENT_COLOR};
+            }}
+            #iconButton, #closeButton {{
+                background-color: {TERTIARY_BACKGROUND};
+                color: {SECONDARY_TEXT_COLOR};
+                border: 1px solid {BORDER_COLOR};
+                border-radius: 6px;
+                font-size: 18px;
+                font-weight: bold;
+            }}
+            #iconButton:hover {{
+                background-color: {HOVER_BACKGROUND};
+                color: {PRIMARY_TEXT_COLOR};
+                border-color: {ACCENT_COLOR};
+            }}
+            #closeButton {{
+                font-size: 20px;
+            }}
+            #closeButton:hover {{
+                background-color: {PUT_COLOR};
+                color: white;
+                border-color: {PUT_COLOR};
+            }}
+            QFrame[frameShape="5"] {{
+                color: {BORDER_COLOR};
+                max-width: 1px;
+            }}
+        """)
 
 
 class OptionChainDelegate(QStyledItemDelegate):
-    """
-    A custom delegate to take full control of painting table cells,
-    bypassing stylesheet conflicts for background colors.
-    """
+    """Enhanced delegate with better visual hierarchy and color coding"""
 
     def paint(self, painter, option, index):
         style_data = index.data(Qt.ItemDataRole.UserRole)
-
-        if isinstance(style_data, dict):
-            cell_type = style_data.get('cell_type')
-            is_itm = style_data.get('is_itm', False)
-            is_atm = style_data.get('is_atm', False)
-            side = style_data.get('side')
-            value = style_data.get('value')
-            max_value = style_data.get('max_value')
-
-            bg_brush = QBrush(QColor(SECONDARY_BACKGROUND))
-            fg_color = QColor(SECONDARY_TEXT_COLOR)
-
-            if is_itm and not is_atm:
-                itm_bg = QColor(ACCENT_COLOR if side == 'call' else ACCENT_NEGATIVE_COLOR)
-                itm_bg.setAlpha(45)
-                bg_brush = QBrush(itm_bg)
-                fg_color = QColor(PRIMARY_TEXT_COLOR)
-
-            if cell_type == 'oi' and value is not None and max_value is not None:
-                oi_bar_color = QColor(ACCENT_COLOR if side == 'call' else ACCENT_NEGATIVE_COLOR)
-                ratio = value / max_value if max_value > 0 else 0
-                alpha = int(60 + (160 * ratio))
-                oi_bar_color.setAlpha(alpha)
-                bg_brush = QBrush(oi_bar_color)
-                fg_color = QColor(PRIMARY_TEXT_COLOR)
-            elif cell_type == 'ltp':
-                fg_color = QColor(ACCENT_COLOR)
-            elif cell_type == 'strike':
-                fg_color = QColor(PRIMARY_TEXT_COLOR)
-                if is_atm:
-                    gradient = QLinearGradient(option.rect.topLeft(), option.rect.topRight())
-
-                    call_color = QColor(ACCENT_COLOR)
-                    call_color.setAlpha(40)
-
-                    put_color = QColor(ACCENT_NEGATIVE_COLOR)
-                    put_color.setAlpha(40)
-
-                    gradient.setColorAt(0.1, call_color)
-                    gradient.setColorAt(0.9, put_color)
-
-                    bg_brush = QBrush(gradient)
-                    fg_color = QColor(ATM_STRIKE_FG_BRIGHT)
-            elif cell_type == 'greek':
-                fg_color = QColor("#8A9BA8")
-
-            painter.save()
-            painter.fillRect(option.rect, bg_brush)
-            painter.setPen(fg_color)
-            painter.drawText(option.rect, Qt.AlignCenter, index.data())
-            painter.restore()
-        else:
+        if not style_data:
             super().paint(painter, option, index)
+            return
+
+        painter.save()
+        cell_type = style_data.get('cell_type')
+        is_itm = style_data.get('is_itm', False)
+        is_atm = style_data.get('is_atm', False)
+        side = style_data.get('side')
+
+        bg_color = QColor(PRIMARY_BACKGROUND)
+        text_color = QColor(PRIMARY_TEXT_COLOR)
+
+        # Strike column - ATM highlighting
+        if cell_type == 'strike':
+            if is_atm:
+                bg_color = QColor(ATM_STRIKE_BG)
+                text_color = QColor(ATM_STRIKE_FG)
+            else:
+                bg_color = QColor(SECONDARY_BACKGROUND)
+                text_color = QColor(PRIMARY_TEXT_COLOR)
+
+        # OI columns with heat map
+        elif cell_type == 'oi':
+            oi_value = style_data.get('value', 0)
+            max_oi = style_data.get('max_value', 1)
+            if max_oi > 0 and oi_value > 0:
+                intensity = min(oi_value / max_oi, 1.0)
+                if side == 'call':
+                    base = QColor(OI_HIGH_CALL)
+                else:
+                    base = QColor(OI_HIGH_PUT)
+
+                bg_color = QColor(
+                    int(OI_LOW_COLOR[1:3], 16) + int((base.red() - int(OI_LOW_COLOR[1:3], 16)) * intensity),
+                    int(OI_LOW_COLOR[3:5], 16) + int((base.green() - int(OI_LOW_COLOR[3:5], 16)) * intensity),
+                    int(OI_LOW_COLOR[5:7], 16) + int((base.blue() - int(OI_LOW_COLOR[5:7], 16)) * intensity)
+                )
+                text_color = QColor(PRIMARY_TEXT_COLOR)
+            else:
+                bg_color = QColor(TERTIARY_BACKGROUND)
+
+        # LTP columns
+        elif cell_type == 'ltp':
+            if side == 'call':
+                text_color = QColor(CALL_COLOR)
+                bg_color = QColor(TERTIARY_BACKGROUND)
+            else:
+                text_color = QColor(PUT_COLOR)
+                bg_color = QColor(TERTIARY_BACKGROUND)
+
+        # Greeks columns
+        elif cell_type == 'greek':
+            if is_itm:
+                if side == 'call':
+                    bg_color = QColor(CALL_ITM_BG)
+                else:
+                    bg_color = QColor(PUT_ITM_BG)
+            else:
+                bg_color = QColor(TERTIARY_BACKGROUND)
+            text_color = QColor(SECONDARY_TEXT_COLOR)
+
+        # Draw background
+        painter.fillRect(option.rect, QBrush(bg_color))
+
+        # Draw text with enhanced contrast
+        painter.setPen(text_color)
+        font = QFont()
+
+        # Bold for important values
+        if cell_type in ['oi', 'ltp'] or is_atm:
+            font.setWeight(QFont.Weight.Bold)
+            font.setPointSize(11)
+        else:
+            font.setWeight(QFont.Weight.Medium)
+            font.setPointSize(10)
+
+        painter.setFont(font)
+        painter.drawText(option.rect, Qt.AlignCenter, index.data())
+        painter.restore()
+
 
 class OptionChainWidget(QWidget):
-    """The core table widget with programmatic row highlighting and OI heat map."""
+    """Enhanced table widget with improved readability"""
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -454,7 +642,7 @@ class OptionChainWidget(QWidget):
         self.show_per_lot = False
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 5, 10, 10)
+        layout.setContentsMargins(12, 8, 12, 12)
         self.table = QTableWidget()
         self._setup_table()
         layout.addWidget(self.table)
@@ -463,18 +651,20 @@ class OptionChainWidget(QWidget):
     def _setup_table(self):
         self.table.setColumnCount(15)
         headers = [
-            "OI", "LTP", "IV", "Delta", "Theta", "Vega", "Gamma",
+            "OI", "LTP", "IV", "Δ", "Θ", "ν", "Γ",
             "Strike",
-            "Gamma", "Vega", "Theta", "Delta", "IV", "LTP", "OI"
+            "Γ", "ν", "Θ", "Δ", "IV", "LTP", "OI"
         ]
         self.table.setHorizontalHeaderLabels(headers)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         self.table.setMouseTracking(True)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(7, QHeaderView.ResizeMode.Interactive)
-        self.table.setColumnWidth(7, 110)
+        header.setSectionResizeMode(7, QHeaderView.ResizeMode.Fixed)
+        self.table.setColumnWidth(7, 120)
+
         self.table.verticalHeader().setVisible(False)
         self.table.setShowGrid(True)
 
@@ -526,7 +716,7 @@ class OptionChainWidget(QWidget):
         for strike in display_strikes:
             row_pos = self.table.rowCount()
             self.table.insertRow(row_pos)
-            self.table.setRowHeight(row_pos, 36)
+            self.table.setRowHeight(row_pos, 42)  # Increased for better spacing
             is_atm_strike = (strike == self.atm_strike)
 
             strike_item = self._create_item(f"{strike:,.0f}", 'strike', is_atm=is_atm_strike)
@@ -540,6 +730,7 @@ class OptionChainWidget(QWidget):
                                     max_put_oi)
 
         self.table.setUpdatesEnabled(True)
+
     def _populate_side(self, row, side, contract, market_data, is_itm, is_atm, max_oi):
         quote_key = f"NFO:{contract.get('tradingsymbol')}"
         data = market_data.get(quote_key, {})
@@ -554,14 +745,15 @@ class OptionChainWidget(QWidget):
         display_theta = theta * self.lot_size if self.show_per_lot else theta
 
         cols = [
-            (f"{gamma:.4f}", 'greek', {}),
-            (f"{vega:.2f}", 'greek', {}),
-            (f"{display_theta:,.2f}", 'greek', {}),
-            (f"{delta:.2f}", 'greek', {}),
-            (f"{iv:.1f}%", 'greek', {}),
-            (f"{display_ltp:,.2f}", 'ltp', {}),
-            (_format_large_number(oi).replace('+', ''), 'oi', {'value': oi, 'max_value': max_oi})
+            (_format_greek(gamma, 4), 'greek', {}),
+            (_format_greek(vega, 2), 'greek', {}),
+            (_format_greek(display_theta, 2), 'greek', {}),
+            (_format_greek(delta, 2), 'greek', {}),
+            (f"{iv:.1f}%" if iv > 0 else "—", 'greek', {}),
+            (_format_price(display_ltp), 'ltp', {}),
+            (_format_large_number(oi), 'oi', {'value': oi, 'max_value': max_oi})
         ]
+
         if side == 'call':
             cols.reverse()
 
@@ -586,11 +778,6 @@ class OptionChainWidget(QWidget):
         }
         item.setData(Qt.ItemDataRole.UserRole, style_data)
 
-        if is_atm or cell_type == 'oi':
-            font = QFont()
-            font.setBold(True)
-            item.setFont(font)
-
         return item
 
     def center_on_atm(self):
@@ -602,45 +789,47 @@ class OptionChainWidget(QWidget):
                     return
             except (ValueError, AttributeError):
                 continue
+
     def _apply_styles(self):
         self.setStyleSheet(f"""
             QTableWidget {{
                 background-color: {PRIMARY_BACKGROUND};
-                color: {SECONDARY_TEXT_COLOR};
-                gridline-color: {TERTIARY_BACKGROUND};
+                color: {PRIMARY_TEXT_COLOR};
+                gridline-color: {BORDER_COLOR};
                 border: 1px solid {BORDER_COLOR};
                 border-radius: 8px;
-                font-size: 12px;
+                font-size: 13px;
                 font-weight: 500;
             }}
             QHeaderView::section {{
                 background-color: {SECONDARY_BACKGROUND};
-                color: {SECONDARY_TEXT_COLOR};
-                padding: 8px 4px;
+                color: {PRIMARY_TEXT_COLOR};
+                padding: 10px 6px;
                 border: none;
-                border-bottom: 1px solid {BORDER_COLOR};
-                font-weight: bold;
-                font-size: 10px;
-                text-transform: uppercase;
+                border-bottom: 2px solid {BORDER_COLOR};
+                font-weight: 700;
+                font-size: 12px;
+                letter-spacing: 0.5px;
             }}
             QTableWidget::item {{
-                padding: 0px 4px;
+                padding: 8px 6px;
+                border: none;
             }}
             QScrollBar:vertical, QScrollBar:horizontal {{
                 border: none;
                 background-color: {PRIMARY_BACKGROUND};
-                width: 12px;
-                height: 12px;
+                width: 14px;
+                height: 14px;
                 margin: 0px;
             }}
             QScrollBar::handle:vertical, QScrollBar::handle:horizontal {{
                 background-color: {TERTIARY_BACKGROUND};
-                min-width: 20px;
-                min-height: 20px;
-                border-radius: 6px;
+                min-width: 24px;
+                min-height: 24px;
+                border-radius: 7px;
             }}
             QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover {{
-                background-color: {BORDER_COLOR};
+                background-color: {HOVER_BACKGROUND};
             }}
             QScrollBar::add-line, QScrollBar::sub-line {{
                 height: 0px;
