@@ -1,5 +1,6 @@
 import logging
 from datetime import datetime, timedelta
+import numpy as np
 
 import pandas as pd
 import pyqtgraph as pg
@@ -12,6 +13,7 @@ from pyqtgraph import AxisItem, TextItem
 
 from kiteconnect import KiteConnect
 from core.cvd.cvd_historical import CVDHistoricalBuilder
+from core.cvd.cvd_mode import CVDMode
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +131,7 @@ class CVDSingleChartDialog(QDialog):
         self.kite = kite
         self.instrument_token = instrument_token
         self.symbol = symbol
+        self.cvd_engine = cvd_engine
 
         self.live_mode = True
         self.current_date = None
@@ -160,17 +163,45 @@ class CVDSingleChartDialog(QDialog):
         root.setContentsMargins(8, 8, 8, 8)
         root.setSpacing(6)
 
-        # Navigator
-        self.navigator = DateNavigator(self)
-        root.addWidget(self.navigator)
+        # ================= TOP CONTROL BAR =================
+        top_bar = QHBoxLayout()
+        top_bar.setContentsMargins(0, 0, 0, 0)
+        top_bar.setSpacing(12)
 
-        # Status
-        status_layout = QHBoxLayout()
+        # Navigator (center-focused)
+        self.navigator = DateNavigator(self)
+        top_bar.addStretch()
+        top_bar.addWidget(self.navigator)
+        top_bar.addStretch()
+
+        # Focus Button (RIGHT)
+        self.btn_focus = QPushButton("🎯 Focus (1D)")
+        self.btn_focus.setCheckable(True)
+        self.btn_focus.setFixedHeight(28)
+        self.btn_focus.setMinimumWidth(120)
+        self.btn_focus.setStyleSheet("""
+            QPushButton {
+                background:#212635;
+                border:1px solid #3A4458;
+                border-radius:4px;
+                padding:4px 10px;
+            }
+            QPushButton:checked {
+                background:#26A69A;
+                color:#000;
+                font-weight:600;
+            }
+        """)
+        self.btn_focus.toggled.connect(self._on_focus_mode_changed)
+
+        top_bar.addWidget(self.btn_focus)
+
+        root.addLayout(top_bar)
+
+        # Status text (small, below)
         self.status_label = QLabel("Loading...")
         self.status_label.setStyleSheet("color:#8A9BA8; font-size:11px;")
-        status_layout.addWidget(self.status_label)
-        status_layout.addStretch()
-        root.addLayout(status_layout)
+        root.addWidget(self.status_label)
 
         # === PRICE CHART (TOP) ===
         self.price_axis = AxisItem(orientation="bottom")
@@ -289,6 +320,28 @@ class CVDSingleChartDialog(QDialog):
         self.navigator.date_changed.connect(self._on_date_changed)
 
     # ------------------------------------------------------------------
+    def _on_focus_mode_changed(self, enabled: bool):
+        self.btn_focus.setText("🎯 FOCUS ON" if enabled else "Focus (1D)")
+        if enabled:
+            self.status_label.setText("LIVE · SINGLE DAY FOCUS")
+            self.cvd_engine.set_mode(CVDMode.SINGLE_DAY)
+        else:
+            self.status_label.setText("LIVE · NORMAL MODE")
+            self.cvd_engine.set_mode(CVDMode.NORMAL)
+
+        # 🔥 Clear visual state (critical)
+        self.prev_curve.clear()
+        self.today_curve.clear()
+        self.live_dot.clear()
+
+        self.price_prev_curve.clear()
+        self.price_today_curve.clear()
+        self.price_live_dot.clear()
+
+        self.all_timestamps.clear()
+
+        self._load_and_plot()
+
     def _on_mouse_moved(self, pos):
         # Determine which plot is being hovered
         in_price_plot = self.price_plot.sceneBoundingRect().contains(pos)
@@ -356,6 +409,8 @@ class CVDSingleChartDialog(QDialog):
     # ------------------------------------------------------------------
 
     def _load_and_plot(self):
+        focus_mode = self.btn_focus.isChecked()
+
         if not self.kite or not getattr(self.kite, "access_token", None):
             return
 
@@ -394,12 +449,16 @@ class CVDSingleChartDialog(QDialog):
                 if not prev_data.empty:
                     prev_close = prev_data["close"].iloc[-1]
 
-            # Filter to last 2 sessions
-            cvd_df = cvd_df[cvd_df["session"].isin(sessions[-2:])]
-
-            # Also filter price data to last 2 sessions
+            # Build price dataframe FIRST
             df["session"] = df.index.date
-            price_df = df[df["session"].isin(sessions[-2:])]
+
+            if focus_mode:
+                cvd_df = cvd_df[cvd_df["session"] == sessions[-1]]
+                price_df = df[df["session"] == sessions[-1]]
+            else:
+                cvd_df = cvd_df[cvd_df["session"].isin(sessions[-2:])]
+                price_df = df[df["session"].isin(sessions[-2:])]
+
 
             self._plot_data(cvd_df, price_df, prev_close)
 
@@ -432,7 +491,7 @@ class CVDSingleChartDialog(QDialog):
             price_y_raw = df_price_sess["close"].values
 
             # SAME rebasing logic as multi chart for CVD
-            if i == 0 and len(sessions) == 2:
+            if i == 0 and len(sessions) == 2 and not self.btn_focus.isChecked():
                 cvd_y = cvd_y_raw - prev_close
             else:
                 cvd_y = cvd_y_raw
@@ -442,9 +501,9 @@ class CVDSingleChartDialog(QDialog):
 
             # Prepend zero point for current session (fills gap from zero line)
             is_current_session = (i == len(sessions) - 1)
-            if is_current_session:
-                import numpy as np
+            if is_current_session and not self.btn_focus.isChecked():
                 cvd_y = np.insert(cvd_y, 0, 0.0)
+
                 # For price, prepend first value (not zero)
                 if len(price_y) > 0:
                     price_y = np.insert(price_y, 0, price_y[0])
@@ -533,6 +592,8 @@ class CVDSingleChartDialog(QDialog):
         QTimer.singleShot(0, self._fix_axis_after_show)
 
     def closeEvent(self, event):
+        if self.cvd_engine:
+            self.cvd_engine.set_mode(CVDMode.NORMAL)
         if hasattr(self, "refresh_timer"):
             self.refresh_timer.stop()
         if hasattr(self, "dot_timer"):

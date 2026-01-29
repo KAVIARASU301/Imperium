@@ -6,6 +6,8 @@ from typing import Dict, Iterable, Optional
 
 from PySide6.QtCore import QObject, Signal
 from core.cvd.cvd_state import CVDState
+from datetime import date
+from core.cvd.cvd_mode import CVDMode
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +24,22 @@ class CVDEngine(QObject):
         super().__init__()
         self._states: Dict[int, CVDState] = {}
         self._last_log_time: Dict[int, float] = {}
+        self.mode: CVDMode = CVDMode.NORMAL
+
+    def set_mode(self, mode: CVDMode):
+        if self.mode == mode:
+            return
+
+        self.mode = mode
+        logger.info(f"[CVD] Mode changed → {mode.value}")
+
+        if mode == CVDMode.SINGLE_DAY:
+            self._force_reset_all()
+
+    def _force_reset_all(self):
+        today = date.today()
+        for state in self._states.values():
+            state.reset_session(today)
 
     def register_token(self, token: int):
         """Explicitly register a token for CVD tracking."""
@@ -50,9 +68,16 @@ class CVDEngine(QObject):
 
         # Session management
         today = datetime.now().date()
-        if state.session_date != today:
-            state.reset_session(today)
-            logger.info(f"[CVD] Session reset for token {token}")
+
+        # NORMAL → reset only on date change
+        if self.mode == CVDMode.NORMAL:
+            if state.session_date != today:
+                state.reset_session(today)
+
+        # SINGLE DAY → always enforce today-only session
+        else:
+            if state.session_date != today:
+                state.reset_session(today)
 
         # Initialize on first tick
         if state.last_volume is None:
