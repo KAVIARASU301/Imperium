@@ -132,19 +132,24 @@ class CVDSingleChartDialog(QDialog):
         self.instrument_token = instrument_token
         self.symbol = symbol
         self.cvd_engine = cvd_engine
+        self.timeframe_minutes = 1  # default = 1 minute
 
         self.live_mode = True
         self.current_date = None
         self.previous_date = None
 
-        self.setWindowTitle(f"CVD Chart — {symbol}")
-        self.setMinimumSize(1100, 680)  # Reduced for better screen fit
+        self.setWindowTitle(f"Price & Cumulative Volume Chart — {symbol}")
+        self.setMinimumSize(1100, 680)
         self.setWindowFlags(
             Qt.Window |
             Qt.WindowMinimizeButtonHint |
             Qt.WindowMaximizeButtonHint |
             Qt.WindowCloseButtonHint
         )
+
+        # Prevent flickering during maximize
+        self.setAttribute(Qt.WA_OpaquePaintEvent, True)
+        self.setAttribute(Qt.WA_NoSystemBackground, False)
 
         self._setup_ui()
         self._connect_signals()
@@ -160,21 +165,53 @@ class CVDSingleChartDialog(QDialog):
 
     def _setup_ui(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(8, 8, 8, 8)
-        root.setSpacing(6)
+        root.setContentsMargins(8, 4, 8, 4)  # Reduced top/bottom margins (was 8,8,8,8)
+        root.setSpacing(4)  # Reduced spacing between widgets (was 6)
 
         # ================= TOP CONTROL BAR =================
         top_bar = QHBoxLayout()
         top_bar.setContentsMargins(0, 0, 0, 0)
         top_bar.setSpacing(12)
 
-        # Navigator (center-focused)
-        self.navigator = DateNavigator(self)
-        top_bar.addStretch()
-        top_bar.addWidget(self.navigator)
+        # Add stretch BEFORE timeframe buttons to push everything to center
         top_bar.addStretch()
 
-        # Focus Button (RIGHT)
+        # -------- Timeframe buttons (LEFT of center) --------
+        tf_layout = QHBoxLayout()
+        tf_layout.setSpacing(4)
+
+        self.tf_buttons = {}
+
+        for label, minutes in [("1m", 1), ("3m", 3), ("5m", 5), ("15m", 15), ("1h", 60)]:
+            btn = QPushButton(label)
+            btn.setCheckable(True)
+            btn.setFixedHeight(26)
+            btn.setStyleSheet("""
+                QPushButton {
+                    background:#1B1F2B;
+                    border:1px solid #3A4458;
+                    padding:2px 8px;
+                }
+                QPushButton:checked {
+                    background:#5B9BD5;
+                    color:#000;
+                    font-weight:600;
+                }
+            """)
+            btn.clicked.connect(lambda checked, m=minutes: self._on_timeframe_changed(m))
+            self.tf_buttons[minutes] = btn
+            tf_layout.addWidget(btn)
+
+        # Default select 1m
+        self.tf_buttons[1].setChecked(True)
+
+        top_bar.addLayout(tf_layout)
+
+        # Navigator (CENTER)
+        self.navigator = DateNavigator(self)
+        top_bar.addWidget(self.navigator)
+
+        # Focus Button (RIGHT of center)
         self.btn_focus = QPushButton("🎯 Focus (1D)")
         self.btn_focus.setCheckable(True)
         self.btn_focus.setFixedHeight(28)
@@ -196,12 +233,10 @@ class CVDSingleChartDialog(QDialog):
 
         top_bar.addWidget(self.btn_focus)
 
-        root.addLayout(top_bar)
+        # Add stretch AFTER focus button to balance
+        top_bar.addStretch()
 
-        # Status text (small, below)
-        self.status_label = QLabel("Loading...")
-        self.status_label.setStyleSheet("color:#8A9BA8; font-size:11px;")
-        root.addWidget(self.status_label)
+        root.addLayout(top_bar)
 
         # === PRICE CHART (TOP) ===
         self.price_axis = AxisItem(orientation="bottom")
@@ -211,13 +246,14 @@ class CVDSingleChartDialog(QDialog):
         self.price_plot.setBackground("#161A25")
         self.price_plot.showGrid(x=True, y=True, alpha=0.12)
         self.price_plot.setMenuEnabled(False)
-        self.price_plot.setFixedHeight(280)  # Reduced height
+        self.price_plot.setMinimumHeight(200)  # Minimum height instead of fixed
 
         # Price Y-axis styling with fixed width
         price_y_axis = self.price_plot.getAxis("left")
         price_y_axis.setWidth(70)  # Match CVD Y-axis width
         price_y_axis.setTextPen(pg.mkPen("#FFE57F"))
         price_y_axis.setPen(pg.mkPen("#8A9BA8"))
+        price_y_axis.enableAutoSIPrefix(False)  # Disable scientific notation
 
         # Price curves
         self.price_prev_curve = pg.PlotCurveItem(
@@ -244,7 +280,7 @@ class CVDSingleChartDialog(QDialog):
         self.price_crosshair.hide()
         self.price_plot.addItem(self.price_crosshair)
 
-        root.addWidget(self.price_plot)
+        root.addWidget(self.price_plot, 1)  # Stretch factor 1 = equal space
 
         # === CVD CHART (BOTTOM) ===
         self.axis = AxisItem(orientation="bottom")
@@ -258,13 +294,28 @@ class CVDSingleChartDialog(QDialog):
         # CVD Y-axis with fixed width
         cvd_y_axis = self.plot.getAxis("left")
         cvd_y_axis.setWidth(70)  # Match price Y-axis width
+        cvd_y_axis.enableAutoSIPrefix(False)  # Disable scientific notation (1e+3 etc.)
+
+        # Custom formatter for K/M values
+        def cvd_axis_formatter(values, scale, spacing):
+            labels = []
+            for v in values:
+                if abs(v) >= 1_000_000:
+                    labels.append(f'{v / 1_000_000:.1f}M')
+                elif abs(v) >= 1_000:
+                    labels.append(f'{v / 1_000:.0f}K')
+                else:
+                    labels.append(f'{int(v)}')
+            return labels
+
+        cvd_y_axis.tickStrings = cvd_axis_formatter
 
         self.plot.setBackground("#161A25")
         self.plot.showGrid(x=True, y=True, alpha=0.12)
         self.plot.setMenuEnabled(False)
-        self.plot.setFixedHeight(280)  # Reduced height
+        self.plot.setMinimumHeight(200)  # Minimum height instead of fixed
 
-        root.addWidget(self.plot)
+        root.addWidget(self.plot, 1)  # Stretch factor 1 = equal space with price chart
 
         zero_pen = pg.mkPen("#6C7386", style=Qt.DashLine, width=1)
         self.plot.addItem(pg.InfiniteLine(0, angle=0, pen=zero_pen))
@@ -323,10 +374,8 @@ class CVDSingleChartDialog(QDialog):
     def _on_focus_mode_changed(self, enabled: bool):
         self.btn_focus.setText("🎯 FOCUS ON" if enabled else "Focus (1D)")
         if enabled:
-            self.status_label.setText("LIVE · SINGLE DAY FOCUS")
             self.cvd_engine.set_mode(CVDMode.SINGLE_DAY)
         else:
-            self.status_label.setText("LIVE · NORMAL MODE")
             self.cvd_engine.set_mode(CVDMode.NORMAL)
 
         # 🔥 Clear visual state (critical)
@@ -339,7 +388,6 @@ class CVDSingleChartDialog(QDialog):
         self.price_live_dot.clear()
 
         self.all_timestamps.clear()
-
         self._load_and_plot()
 
     def _on_mouse_moved(self, pos):
@@ -396,12 +444,10 @@ class CVDSingleChartDialog(QDialog):
 
         if current_date >= today:
             self.live_mode = True
-            self.status_label.setText("LIVE mode")
             if not self.refresh_timer.isActive():
                 self.refresh_timer.start(self.REFRESH_INTERVAL_MS)
         else:
             self.live_mode = False
-            self.status_label.setText("Historical mode")
             self.refresh_timer.stop()
 
         self._load_and_plot()
@@ -434,6 +480,19 @@ class CVDSingleChartDialog(QDialog):
             df = pd.DataFrame(hist)
             df["date"] = pd.to_datetime(df["date"])
             df.set_index("date", inplace=True)
+            # -------------------------------------------------
+            # Timeframe aggregation (price + volume)
+            # -------------------------------------------------
+            if self.timeframe_minutes > 1:
+                rule = f"{self.timeframe_minutes}min"
+
+                df = df.resample(rule).agg({
+                    "open": "first",
+                    "high": "max",
+                    "low": "min",
+                    "close": "last",
+                    "volume": "sum"
+                }).dropna()
 
             # Build CVD data
             cvd_df = CVDHistoricalBuilder.build_cvd_ohlc(df)
@@ -458,7 +517,6 @@ class CVDSingleChartDialog(QDialog):
             else:
                 cvd_df = cvd_df[cvd_df["session"].isin(sessions[-2:])]
                 price_df = df[df["session"].isin(sessions[-2:])]
-
 
             self._plot_data(cvd_df, price_df, prev_close)
 
@@ -579,10 +637,42 @@ class CVDSingleChartDialog(QDialog):
         self.refresh_timer.start(self.REFRESH_INTERVAL_MS)
 
     def _fix_axis_after_show(self):
+        # Fix both chart axes properly
         bottom_axis = self.plot.getAxis("bottom")
         bottom_axis.setHeight(32)
         bottom_axis.update()
         self.plot.updateGeometry()
+
+        # Also update price chart axis
+        self.price_plot.updateGeometry()
+
+    def resizeEvent(self, event):
+        """Handle window resize/maximize without flickering"""
+        super().resizeEvent(event)
+        # Update both plots during resize
+        self.plot.update()
+        self.price_plot.update()
+
+    def _on_timeframe_changed(self, minutes: int):
+        if self.timeframe_minutes == minutes:
+            return
+
+        self.timeframe_minutes = minutes
+
+        # Toggle button states
+        for m, btn in self.tf_buttons.items():
+            btn.setChecked(m == minutes)
+
+        # Clear visuals
+        self.prev_curve.clear()
+        self.today_curve.clear()
+        self.live_dot.clear()
+        self.price_prev_curve.clear()
+        self.price_today_curve.clear()
+        self.price_live_dot.clear()
+        self.all_timestamps.clear()
+
+        self._load_and_plot()
 
     # ------------------------------------------------------------------
     def showEvent(self, event):

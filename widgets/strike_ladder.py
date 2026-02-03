@@ -32,10 +32,11 @@ class StrikeLadderWidget(QWidget):
     """Premium compact strike ladder with table design."""
 
     strike_selected = Signal(Contract)
+    chart_requested = Signal(Contract)  # New signal for chart button clicks
     interval_calculated = Signal(str, float)
     interval_changed = Signal(str, float)
 
-    CE_BTN, CE_BID, CE_ASK, CE_LTP, CE_OI, STRIKE, PE_OI, PE_LTP, PE_BID, PE_ASK, PE_BTN = 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10
+    CE_BTN, CE_CHART, CE_BID, CE_ASK, CE_LTP, CE_OI, STRIKE, PE_OI, PE_LTP, PE_BID, PE_ASK, PE_CHART, PE_BTN = 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12
     COLUMN_WEIGHTS = {
         CE_BID: 1.0,
         CE_ASK: 1.0,
@@ -75,6 +76,8 @@ class StrikeLadderWidget(QWidget):
             'volume': 0,
             'vix': 0.0
         }
+        self._index_ltp = None
+
         self.vix_value = 0.0
         self._init_ui()
         self._apply_styles()
@@ -86,7 +89,7 @@ class StrikeLadderWidget(QWidget):
         main.setSpacing(0)
 
         self.table = QTableWidget()
-        headers = ["CE", "BID", "ASK", "LTP", "OI", "STRIKE", "OI", "LTP", "BID", "ASK", "PE"]
+        headers = ["CE", "╱", "BID", "ASK", "LTP", "OI", "STRIKE", "OI", "LTP", "BID", "ASK", "╱", "PE"]
         self.table.setColumnCount(len(headers))
         self.table.setHorizontalHeaderLabels(headers)
         self.table.setMouseTracking(False)
@@ -198,10 +201,14 @@ class StrikeLadderWidget(QWidget):
 
         # Fixed columns
         h.setSectionResizeMode(self.CE_BTN, QHeaderView.Fixed)
+        h.setSectionResizeMode(self.CE_CHART, QHeaderView.Fixed)
+        h.setSectionResizeMode(self.PE_CHART, QHeaderView.Fixed)
         h.setSectionResizeMode(self.PE_BTN, QHeaderView.Fixed)
         h.setSectionResizeMode(self.STRIKE, QHeaderView.Fixed)
 
         self.table.setColumnWidth(self.CE_BTN, 32)
+        self.table.setColumnWidth(self.CE_CHART, 32)
+        self.table.setColumnWidth(self.PE_CHART, 32)
         self.table.setColumnWidth(self.PE_BTN, 32)
         self.table.setColumnWidth(self.STRIKE, 75)
 
@@ -229,11 +236,11 @@ class StrikeLadderWidget(QWidget):
                 border-bottom: 1px solid #1E2430;
                 outline: 0;
             }
-            
+
             QTableWidget::item:hover {
                 background: transparent;
             }
-            
+
             QTableWidget::item:selected:hover {
                 background: transparent;
             }
@@ -253,7 +260,7 @@ class StrikeLadderWidget(QWidget):
                 background: #041D27;
                 border-top: 1px solid #3A4458;
             }
-            
+
             #settingsBtn {
                 background: transparent;
                 color: #A9B1C3;
@@ -261,16 +268,16 @@ class StrikeLadderWidget(QWidget):
                 border-radius: 3px;
                 padding: 0px;
             }
-            
+
             #settingsBtn:hover {
                 background: #3A4458;
             }
-            
+
             #footerStat {
                 color: #A9B1C3;
                 font-size: 10.5px;
             }
-            
+
             #pcrLabel {
                 font-size: 10.5px;
                 font-weight: 700;
@@ -318,7 +325,7 @@ class StrikeLadderWidget(QWidget):
                 font-size: 10.5px;
                 font-weight: 700;
             }
-            
+
             #vixLabel {
                 font-size: 10.5px;
                 font-weight: 700;
@@ -367,7 +374,6 @@ class StrikeLadderWidget(QWidget):
     def _connect_signals(self):
         self.settings_btn.clicked.connect(self._show_settings)
         self.table.customContextMenuRequested.connect(self._show_menu)
-
 
     def _show_menu(self, pos: QPoint):
         item = self.table.itemAt(pos)
@@ -457,6 +463,7 @@ class StrikeLadderWidget(QWidget):
         is_atm = abs(strike - self.atm_strike) < 0.001
 
         self.table.setCellWidget(row, self.CE_BTN, self._make_btn(ce))
+        self.table.setCellWidget(row, self.CE_CHART, self._make_chart_btn(ce))
         self.table.setItem(row, self.CE_BID, self._make_bid_ask(ce, 'bid'))
         self.table.setItem(row, self.CE_ASK, self._make_bid_ask(ce, 'ask'))
         self.table.setItem(row, self.CE_LTP, self._make_ltp(ce, True))
@@ -466,6 +473,7 @@ class StrikeLadderWidget(QWidget):
         self.table.setItem(row, self.PE_LTP, self._make_ltp(pe, False))
         self.table.setItem(row, self.PE_BID, self._make_bid_ask(pe, 'bid'))
         self.table.setItem(row, self.PE_ASK, self._make_bid_ask(pe, 'ask'))
+        self.table.setCellWidget(row, self.PE_CHART, self._make_chart_btn(pe))
         self.table.setCellWidget(row, self.PE_BTN, self._make_btn(pe))
 
     def _make_btn(self, c: Optional[Contract]) -> QPushButton:
@@ -484,6 +492,34 @@ class StrikeLadderWidget(QWidget):
                            border: 1px solid {col}40; border-radius: 3px;
                            font-size: 9px; font-weight: 700; }}
             QPushButton:hover {{ background: {col}; color: #161A25; }}
+        """)
+        return b
+
+    def _make_chart_btn(self, c: Optional[Contract]) -> QPushButton:
+        """Create chart button for opening CVD Single Chart Dialog"""
+        b = QPushButton()
+        b.setFixedSize(28, 20)
+        if not c:
+            b.setEnabled(False)
+            b.setStyleSheet("background: transparent;")
+            return b
+        b.setText("╱")  # Minimal line chart icon
+        b.setCursor(Qt.PointingHandCursor)
+        b.clicked.connect(lambda: self.chart_requested.emit(c))
+        b.setStyleSheet("""
+            QPushButton { 
+                background: transparent; 
+                color: #A9B1C3; 
+                border: 1px solid #3A445840; 
+                border-radius: 3px;
+                font-size: 13px;
+                font-weight: 600;
+            }
+            QPushButton:hover { 
+                background: #5B9BD5; 
+                color: #161A25; 
+                border: 1px solid #5B9BD5;
+            }
         """)
         return b
 
@@ -739,13 +775,21 @@ class StrikeLadderWidget(QWidget):
         if not self.auto_adjust_enabled or not self.current_price or not self.symbol:
             return
         try:
-            idx_map = {
-                'NIFTY': 'NIFTY 50',
-                'BANKNIFTY': 'NIFTY BANK',
-                'FINNIFTY': 'NIFTY FIN SERVICE',
-                'MIDCPNIFTY': 'NIFTY MID SELECT'
+            INDEX_EXCHANGE_MAP = {
+                "NIFTY": ("NSE", "NIFTY 50"),
+                "BANKNIFTY": ("NSE", "NIFTY BANK"),
+                "FINNIFTY": ("NSE", "NIFTY FIN SERVICE"),
+                "MIDCPNIFTY": ("NSE", "NIFTY MID SELECT"),
+                "SENSEX": ("BSE", "SENSEX"),
+                "BANKEX": ("BSE", "BANKEX"),
             }
-            sym = f"NSE:{idx_map.get(self.symbol, self.symbol)}"
+
+            exchange, name = INDEX_EXCHANGE_MAP.get(
+                self.symbol,
+                ("NSE", self.symbol)
+            )
+
+            sym = f"{exchange}:{name}"
 
             # 🔥 Fetch full quote for underlying + VIX
             quote_data = self.kite.quote([sym, "NSE:INDIA VIX"])
@@ -769,6 +813,8 @@ class StrikeLadderWidget(QWidget):
 
                 self._update_underlying_display()
 
+            self._index_ltp = self.underlying_data['ltp']
+
             # --- VIX DATA ---
             vix_data = quote_data.get("NSE:INDIA VIX", {})
             if vix_data:
@@ -787,6 +833,10 @@ class StrikeLadderWidget(QWidget):
                 return
 
             if new_atm == self._last_atm_strike:
+                return
+
+            if not self._index_ltp:
+                logger.warning("Index LTP unavailable — retaining previous ATM")
                 return
 
             self._last_atm_strike = new_atm
@@ -862,6 +912,7 @@ class StrikeLadderWidget(QWidget):
         self.vix_label.setStyleSheet(
             f"color: {color}; font-weight: 700; font-size: 10.5px;"
         )
+
     def set_auto_adjust(self, enabled: bool):
         self.auto_adjust_enabled = enabled
 
@@ -893,6 +944,11 @@ class StrikeLadderWidget(QWidget):
                 'put_contract': pe
             })
         return sorted(data, key=lambda x: x['strike'])
+
+    def update_index_price(self, ltp: float):
+        if ltp and ltp > 0:
+            self._index_ltp = ltp
+            self._check_price_movement()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

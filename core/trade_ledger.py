@@ -3,7 +3,7 @@
 import sqlite3
 import logging
 from pathlib import Path
-from datetime import date
+from datetime import date, datetime
 from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -13,16 +13,29 @@ class TradeLedger:
     """
     Single Source of Truth for ALL completed trades.
 
+    Maintains separate databases for paper and live trading.
+
     Rules:
     - A trade is recorded ONLY after exit order is COMPLETE
     - Realized PnL is FINAL and never recalculated
     - All performance metrics must read from here
     """
 
-    DB_NAME = "trades.db"
+    def __init__(self, mode: str = "paper"):
+        """
+        Initialize TradeLedger with separate DB for each trading mode.
 
-    def __init__(self):
-        self.db_path = Path.home() / ".options_badger" / self.DB_NAME
+        Args:
+            mode: "paper" or "live"
+        """
+        if mode.lower() not in ["paper", "live"]:
+            raise ValueError(f"Invalid mode '{mode}'. Must be 'paper' or 'live'")
+
+        self.mode = mode.lower()
+
+        # Separate DB files: trades_paper.db and trades_live.db
+        db_name = f"trades_{self.mode}.db"
+        self.db_path = Path.home() / ".options_badger" / db_name
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
         self._conn = sqlite3.connect(
@@ -35,7 +48,7 @@ class TradeLedger:
 
         self._create_tables()
 
-        logger.info(f"TradeLedger initialized at {self.db_path}")
+        logger.info(f"TradeLedger initialized in {self.mode.upper()} mode at {self.db_path}")
 
     # ------------------------------------------------------------------
     # DB Setup
@@ -98,10 +111,22 @@ class TradeLedger:
         """
 
         try:
+            # 🔑 CRITICAL: Convert date objects to ISO strings for SQLite
+            expiry = trade.get("expiry")
+            if expiry and isinstance(expiry, (date, datetime)):
+                expiry = expiry.isoformat()
+
+            session_date = trade.get("session_date")
+            if not session_date:
+                session_date = date.today().isoformat()
+            elif isinstance(session_date, (date, datetime)):
+                session_date = session_date.isoformat()
+
             cursor = self._conn.cursor()
 
+            # 🔑 CRITICAL: Use INSERT instead of INSERT OR IGNORE to catch errors
             cursor.execute("""
-                INSERT OR IGNORE INTO trades (
+                INSERT INTO trades (
                     trade_id,
                     order_id_entry,
                     order_id_exit,
@@ -134,7 +159,7 @@ class TradeLedger:
                 trade.get("tradingsymbol"),
                 trade.get("instrument_token"),
                 trade.get("option_type"),
-                trade.get("expiry"),
+                expiry,  # Already converted to ISO string
                 trade.get("strike"),
                 trade.get("side"),
                 trade.get("quantity"),
@@ -147,24 +172,34 @@ class TradeLedger:
                 trade.get("net_pnl"),
                 trade.get("exit_reason"),
                 trade.get("strategy_tag"),
-                trade.get("trading_mode"),
-                trade.get("session_date", date.today().isoformat())
+                self.mode.upper(),  # Force consistency with ledger mode
+                session_date  # Already converted to ISO string
             ))
 
             self._conn.commit()
-            if cursor.rowcount == 0:
-                logger.warning(
-                    f"Duplicate trade ignored for order_id_exit={trade.get('order_id_exit')}"
-                )
-                return
 
             logger.info(
-                f"Trade recorded | {trade.get('tradingsymbol')} | "
+                f"[{self.mode.upper()}] ✅ Trade recorded | {trade.get('tradingsymbol')} | "
                 f"PnL: {trade.get('net_pnl'):.2f}"
             )
 
+        except sqlite3.IntegrityError as e:
+            # Handle duplicate order_id_exit (UNIQUE constraint violation)
+            if "UNIQUE constraint failed" in str(e):
+                logger.warning(
+                    f"[{self.mode.upper()}] Duplicate trade ignored for order_id_exit={trade.get('order_id_exit')}"
+                )
+            else:
+                logger.error(f"[{self.mode.upper()}] DB integrity error: {e}", exc_info=True)
+                raise
         except Exception as e:
-            logger.error("Failed to record trade", exc_info=True)
+            logger.error(
+                f"[{self.mode.upper()}] ❌ Failed to record trade | "
+                f"tradingsymbol={trade.get('tradingsymbol')} | "
+                f"order_id_exit={trade.get('order_id_exit')} | "
+                f"Error: {e}",
+                exc_info=True
+            )
             raise
 
     # ------------------------------------------------------------------
@@ -242,7 +277,14 @@ class TradeLedger:
         )
         return cur.fetchone()[0]
 
-    def get_daily_trade_stats(self, trading_day: str, mode: str):
+    def get_daily_trade_stats(self, trading_day: str, mode: str = None):
+        """
+        Get trade stats for a specific day.
+
+        Args:
+            trading_day: Date string in YYYY-MM-DD format
+            mode: Deprecated - kept for backward compatibility but ignored
+        """
         cur = self.conn.cursor()
 
         cur.execute("""
@@ -253,8 +295,7 @@ class TradeLedger:
                 COALESCE(SUM(net_pnl), 0)
             FROM trades
             WHERE session_date = ?
-              AND trading_mode = ?
-        """, (trading_day, mode.upper()))
+        """, (trading_day,))
 
         total, wins, losses, total_pnl = cur.fetchone()
         win_rate = (wins / total * 100) if total else 0.0
@@ -292,11 +333,30 @@ class TradeLedger:
         }
 
     # ------------------------------------------------------------------
+    # Debug / Utility
+    # ------------------------------------------------------------------
+
+    def get_row_count(self) -> int:
+        """Get total number of trades in this ledger."""
+        cur = self.conn.cursor()
+        return cur.execute("SELECT COUNT(*) FROM trades").fetchone()[0]
+
+    def get_last_n_trades(self, n: int = 10) -> List[Dict]:
+        """Get the last N trades for debugging."""
+        cur = self.conn.cursor()
+        rows = cur.execute(
+            "SELECT * FROM trades ORDER BY exit_time DESC LIMIT ?",
+            (n,)
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    # ------------------------------------------------------------------
     # Shutdown
     # ------------------------------------------------------------------
 
     def close(self):
         try:
             self._conn.close()
+            logger.info(f"[{self.mode.upper()}] TradeLedger closed")
         except Exception:
             pass

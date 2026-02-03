@@ -18,11 +18,11 @@ class PerformanceDialog(QDialog):
     Professional Performance Dashboard
     Single source of truth: TradeLedger
 
-    KEY IMPROVEMENTS:
-    - Properly filters by trading_mode (LIVE vs PAPER)
-    - Uses uppercase mode comparison for consistency
+    KEY IMPROVEMENTS (Updated for Separate DBs):
+    - Works with mode-specific TradeLedger instances (trades_paper.db / trades_live.db)
+    - No longer needs trading_mode filter (each DB only has its own mode's data)
+    - Uses TradeLedger's public API methods instead of direct SQL
     - Validates data at every step
-    - Clear separation between live and paper trading metrics
     """
 
     refresh_requested = Signal()
@@ -49,18 +49,26 @@ class PerformanceDialog(QDialog):
 
     # ------------------------------------------------------------------
 
-    def __init__(self, trade_ledger, mode="live", parent=None):
+    def __init__(self, trade_ledger, parent=None):
+        """
+        Initialize PerformanceDialog with a mode-specific TradeLedger instance.
+
+        Args:
+            trade_ledger: TradeLedger instance (already mode-specific)
+            parent: Parent widget
+        """
         super().__init__(parent)
 
-        # ✅ CRITICAL: Store mode in uppercase for DB consistency
-        self.mode = mode.upper()
-        self._drag_pos: QPoint | None = None
         self.trade_ledger = trade_ledger
+        self._drag_pos: QPoint | None = None
 
         # Validate trade_ledger
         if not self.trade_ledger:
             logger.error("PerformanceDialog initialized without trade_ledger!")
             raise ValueError("trade_ledger is required")
+
+        # Get mode from the ledger instance itself
+        self.mode = self.trade_ledger.mode.upper()
 
         self.setWindowTitle(f"Performance Dashboard - {self.mode}")
         self.setMinimumSize(1000, 720)
@@ -102,7 +110,7 @@ class PerformanceDialog(QDialog):
         title = QLabel("PERFORMANCE DASHBOARD")
         title.setObjectName("dialogTitle")
 
-        # Display mode badge (lowercase for display, uppercase for logic)
+        # Display mode badge
         mode_badge = QLabel(self.mode)
         mode_badge.setObjectName("modeBadge")
 
@@ -223,68 +231,64 @@ class PerformanceDialog(QDialog):
         return chart
 
     # ------------------------------------------------------------------
-    # DATA - PROPERLY FILTERED BY MODE
+    # DATA - Using TradeLedger Public API
     # ------------------------------------------------------------------
 
-    def _get_trades_from_ledger(self) -> list[dict]:
+    def _get_all_trades_from_ledger(self) -> list[dict]:
         """
-        Fetch trades for the current mode from TradeLedger.
-        ✅ CRITICAL: Uses uppercase mode for DB query
+        Fetch ALL trades from the ledger (no mode filter needed - DB is mode-specific).
+        Uses TradeLedger's public API instead of direct SQL.
         """
         try:
+            # Get all unique session dates first
             cur = self.trade_ledger.conn.cursor()
-            cur.execute("""
-                SELECT
-                    tradingsymbol,
-                    net_pnl,
-                    quantity,
-                    session_date,
-                    exit_time
-                FROM trades
-                WHERE trading_mode = ?
-                ORDER BY session_date ASC, exit_time ASC
-            """, (self.mode,))  # Already uppercase from __init__
+            cur.execute("SELECT DISTINCT session_date FROM trades ORDER BY session_date ASC")
+            dates = [row[0] for row in cur.fetchall()]
 
-            rows = cur.fetchall()
+            # Fetch trades for all dates
+            all_trades = []
+            for session_date in dates:
+                trades = self.trade_ledger.get_trades_for_date(session_date)
+                all_trades.extend(trades)
 
-            logger.debug(f"Fetched {len(rows)} trades for mode: {self.mode}")
+            logger.debug(f"[{self.mode}] Fetched {len(all_trades)} trades from ledger")
 
+            # Convert to dict format for compatibility
             return [
                 {
-                    "symbol": r[0],
-                    "pnl": r[1],
-                    "qty": r[2],
-                    "date": r[3],
-                    "exit_time": r[4],
+                    "symbol": dict(t)["tradingsymbol"],
+                    "pnl": dict(t)["net_pnl"],
+                    "qty": dict(t)["quantity"],
+                    "date": dict(t)["session_date"],
+                    "exit_time": dict(t)["exit_time"],
                 }
-                for r in rows
+                for t in all_trades
             ]
         except Exception as e:
-            logger.error(f"Error fetching trades from ledger: {e}", exc_info=True)
+            logger.error(f"[{self.mode}] Error fetching trades from ledger: {e}", exc_info=True)
             return []
 
     def _get_pnl_by_day_from_ledger(self) -> dict:
         """
         Get daily PnL aggregated by session_date.
-        ✅ CRITICAL: Filters by trading_mode
+        Uses direct SQL (no mode filter needed - DB is mode-specific).
         """
         try:
             cur = self.trade_ledger.conn.cursor()
             cur.execute("""
                 SELECT session_date, COALESCE(SUM(net_pnl), 0)
                 FROM trades
-                WHERE trading_mode = ?
                 GROUP BY session_date
                 ORDER BY session_date ASC
-            """, (self.mode,))
+            """)
 
             rows = cur.fetchall()
 
-            logger.debug(f"Fetched {len(rows)} trading days for mode: {self.mode}")
+            logger.debug(f"[{self.mode}] Fetched {len(rows)} trading days from ledger")
 
             return {row[0]: row[1] for row in rows}
         except Exception as e:
-            logger.error(f"Error fetching PnL by day: {e}", exc_info=True)
+            logger.error(f"[{self.mode}] Error fetching PnL by day: {e}", exc_info=True)
             return {}
 
     def update_metrics(self, _metrics: dict | None = None):
@@ -297,14 +301,14 @@ class PerformanceDialog(QDialog):
     def refresh(self):
         """
         Refresh performance metrics directly from TradeLedger.
-        ✅ All data is filtered by self.mode
+        No mode filtering needed - DB is already mode-specific.
         """
-        logger.info(f"Refreshing performance dialog for mode: {self.mode}")
+        logger.info(f"[{self.mode}] Refreshing performance dialog")
 
         pnl_by_day = self._get_pnl_by_day_from_ledger()
 
         if not pnl_by_day:
-            logger.info(f"No trading data found for mode: {self.mode}")
+            logger.info(f"[{self.mode}] No trading data found")
             self._clear_metrics()
             self.chart.clear()
             return
@@ -321,12 +325,12 @@ class PerformanceDialog(QDialog):
     def _update_metrics(self, pnl_by_day: dict):
         """
         Calculate and display all performance metrics.
-        ✅ Uses trade-level data filtered by mode
+        Uses trade-level data (all trades in this mode-specific DB).
         """
-        trades = self._get_trades_from_ledger()
+        trades = self._get_all_trades_from_ledger()
 
         if not trades:
-            logger.warning(f"No trades found for mode: {self.mode}")
+            logger.warning(f"[{self.mode}] No trades found")
             self._clear_metrics()
             return
 
@@ -393,54 +397,57 @@ class PerformanceDialog(QDialog):
         setv("best_day", f"₹{best_day:,.0f}", "#4CAF50")
         setv("worst_day", f"₹{worst_day:,.0f}", "#F85149")
 
-        logger.info(f"Metrics updated: {total_trades} trades, Total PnL: ₹{total_pnl:,.0f}")
+        logger.info(f"[{self.mode}] Metrics updated: {total_trades} trades, Total PnL: ₹{total_pnl:,.0f}")
 
-    def _plot_equity(self, pnl: dict):
+    def _plot_equity(self, pnl_by_day: dict):
         """
-        Plot cumulative equity curve from daily PnL data.
-        ✅ Data is already filtered by mode
+        Plots cumulative PnL using UNIX timestamps for DateAxisItem.
+        Handles single-day and multi-day data safely.
         """
         self.chart.clear()
 
-        xs, ys = [], []
-        running = 0.0
-
-        for d, p in sorted(pnl.items()):
-            running += p
-            if isinstance(d, str):
-                dt = datetime.strptime(d, "%Y-%m-%d")
-            else:
-                dt = datetime.combine(d, datetime.min.time())
-
-            xs.append(dt.timestamp())
-            ys.append(running)
-
-        if not xs:
-            logger.debug("No data points to plot")
+        if not pnl_by_day:
             return
 
-        # Zero line
-        self.chart.addItem(
-            pg.InfiniteLine(pos=0, angle=0, pen=pg.mkPen("#3A4458", style=Qt.DashLine))
-        )
+        # --- Sort dates ---
+        sorted_items = sorted(pnl_by_day.items(), key=lambda x: x[0])
 
-        # Main soft equity line
-        self.chart.plot(
-            xs, ys,
-            pen=pg.mkPen("#9ADFE0", width=1.6),
-            antialias=True
-        )
+        x_vals = []
+        y_vals = []
 
-        # Area fills for visual clarity
-        self.chart.plot(xs, [y if y > 0 else 0 for y in ys],
-                        pen=None, fillLevel=0,
-                        fillBrush=pg.mkBrush(41, 199, 201, 55))
+        cumulative_pnl = 0.0
 
-        self.chart.plot(xs, [y if y < 0 else 0 for y in ys],
-                        pen=None, fillLevel=0,
-                        fillBrush=pg.mkBrush(248, 81, 73, 55))
+        for session_date, day_pnl in sorted_items:
+            try:
+                # Convert YYYY-MM-DD → UNIX timestamp (start of day)
+                dt = datetime.strptime(session_date, "%Y-%m-%d")
+                ts = dt.timestamp()
+            except Exception:
+                logger.warning(f"Invalid session_date skipped: {session_date}")
+                continue
 
-        logger.debug(f"Equity curve plotted with {len(xs)} data points")
+            cumulative_pnl += day_pnl
+            x_vals.append(ts)
+            y_vals.append(cumulative_pnl)
+
+        if not x_vals:
+            return
+
+        # --- Plot equity curve ---
+        pen = pg.mkPen("#29C7C9", width=2)
+        self.chart.plot(x_vals, y_vals, pen=pen, symbol="o", symbolSize=6)
+
+        # --- 🔑 CRITICAL FIX: Handle single-day data ---
+        if len(x_vals) == 1:
+            # Expand ±12 hours to create visible range
+            half_day = 12 * 60 * 60
+            self.chart.setXRange(
+                x_vals[0] - half_day,
+                x_vals[0] + half_day,
+                padding=0
+            )
+        else:
+            self.chart.enableAutoRange(axis=pg.ViewBox.XYAxes, enable=True)
 
     # ------------------------------------------------------------------
     # DRAG SUPPORT

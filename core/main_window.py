@@ -4,6 +4,8 @@ import os
 from pathlib import Path
 from typing import Dict, List, Optional, Union
 from datetime import datetime, timedelta, time, date
+
+from core.cvd.cvd_mode import CVDMode
 from utils.time_utils import TRADING_DAY_START
 from uuid import uuid4
 from PySide6.QtWidgets import (QMainWindow, QApplication, QWidget, QVBoxLayout,
@@ -97,8 +99,8 @@ class ScalperMainWindow(QMainWindow):
         self.network_status = "Initializing..."
         self.cvd_engine = CVDEngine()
         self.cvd_monitor_dialog = None
-        self.cvd_single_chart_dialog = None  # Keep reference for symbol sync
-        self.trade_ledger = TradeLedger()
+        self.cvd_single_chart_dialogs = {}  # Dict[int, CVDSingleChartDialog] - token -> dialog
+        self.trade_ledger = TradeLedger(mode=self.trading_mode)
 
         # CVD monitor symbols (v1 – fixed indices)
         self.cvd_symbols = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"]
@@ -133,6 +135,12 @@ class ScalperMainWindow(QMainWindow):
         self.pending_order_refresh_timer = QTimer(self)
         self.pending_order_refresh_timer.setInterval(1000)
         self.pending_order_refresh_timer.timeout.connect(self._refresh_positions)
+
+        self._processed_live_exit_orders: set[str] = set()
+
+        self.live_order_monitor_timer = QTimer(self)
+        self.live_order_monitor_timer.timeout.connect(self._check_live_completed_orders)
+        self.live_order_monitor_timer.start(1000)  # 1s polling (safe)
 
         self.restore_window_state()
         self.statusBar().showMessage("Loading instruments...")
@@ -173,6 +181,20 @@ class ScalperMainWindow(QMainWindow):
         if self.positions_dialog and self.positions_dialog.isVisible():
             if hasattr(self.positions_dialog, 'update_market_data'):
                 self.positions_dialog.update_market_data(ticks_to_process)
+
+        # --- INDEX PRICE UPDATE ---
+        for tick in ticks_to_process:
+            token = tick.get("instrument_token")
+            if not token:
+                continue
+
+            current_symbol = self.header.get_current_settings().get("symbol")
+            if current_symbol in self.instrument_data:
+                index_token = self.instrument_data[current_symbol].get("instrument_token")
+                if token == index_token:
+                    self.strike_ladder.update_index_price(
+                        tick.get("last_price")
+                    )
 
         ladder_data = self.strike_ladder.get_ladder_data()
         if ladder_data:
@@ -308,8 +330,6 @@ class ScalperMainWindow(QMainWindow):
                 if order_data.get("_ledger_recorded"):
                     return  # 🔒 already processed
 
-                order_data["_ledger_recorded"] = True
-
                 original_position = self.position_manager.get_position(tradingsymbol)
                 if original_position:
                     self._record_completed_exit_trade(
@@ -317,6 +337,8 @@ class ScalperMainWindow(QMainWindow):
                         original_position=original_position,
                         trading_mode="PAPER"
                     )
+                    # 🔒 Mark as recorded AFTER successful write
+                    order_data["_ledger_recorded"] = True
                 return
 
             # 🔊 PLAY SOUND ONLY FOR NON-BULK, NON-MANUAL EXITS
@@ -458,12 +480,27 @@ class ScalperMainWindow(QMainWindow):
     def _show_order_history_dialog(self):
         if not hasattr(self, 'order_history_dialog') or self.order_history_dialog is None:
             self.order_history_dialog = OrderHistoryDialog(self)
+
+            # 🔥 Refresh must re-read from TradeLedger
             self.order_history_dialog.refresh_requested.connect(
-                lambda: self.order_history_dialog.update_orders(self.trade_logger.get_all_trades()))
-        all_trades = self.trade_logger.get_all_trades()
-        self.order_history_dialog.update_orders(all_trades)
+                self._refresh_order_history_from_ledger
+            )
+
+        self._refresh_order_history_from_ledger()
+
         self.order_history_dialog.show()
         self.order_history_dialog.activateWindow()
+
+    def _refresh_order_history_from_ledger(self):
+        """
+        Load finalized trades from TradeLedger (single source of truth)
+        """
+        today = date.today().isoformat()
+
+        trades = self.trade_ledger.get_trades_for_date(today)
+
+        # Ledger-based update
+        self.order_history_dialog.update_trades(trades)
 
     def _show_market_monitor_dialog(self):
         """Creates and shows a new Market Monitor dialog instance."""
@@ -496,12 +533,13 @@ class ScalperMainWindow(QMainWindow):
             QMessageBox.warning(self, "CVD Chart", f"No token found for {symbol}.")
             return
 
-        # If dialog already exists, update it instead of creating new one
-        if self.cvd_single_chart_dialog and not self.cvd_single_chart_dialog.isHidden():
-            self._update_cvd_chart_symbol(symbol, cvd_token, suffix)
-            self.cvd_single_chart_dialog.raise_()
-            self.cvd_single_chart_dialog.activateWindow()
-            return
+        # If dialog already exists for this token, just raise it
+        if cvd_token in self.cvd_single_chart_dialogs:
+            existing_dialog = self.cvd_single_chart_dialogs[cvd_token]
+            if existing_dialog and not existing_dialog.isHidden():
+                existing_dialog.raise_()
+                existing_dialog.activateWindow()
+                return
 
         # Register with CVD engine
         self.cvd_engine.register_token(cvd_token)
@@ -528,18 +566,19 @@ class ScalperMainWindow(QMainWindow):
                         "The chart may not update in real-time."
                     )
 
-            # Open dialog and store reference
-            self.cvd_single_chart_dialog = CVDSingleChartDialog(
+            # Create new dialog and store reference by token
+            dialog = CVDSingleChartDialog(
                 kite=self.real_kite_client,
                 instrument_token=cvd_token,
                 symbol=f"{symbol}{suffix}",
                 cvd_engine=self.cvd_engine,
                 parent=self
             )
-            self.cvd_single_chart_dialog.destroyed.connect(lambda: self._on_cvd_single_chart_closed(cvd_token))
-            self.cvd_single_chart_dialog.show()
-            self.cvd_single_chart_dialog.raise_()
-            self.cvd_single_chart_dialog.activateWindow()
+            dialog.destroyed.connect(lambda: self._on_cvd_single_chart_closed(cvd_token))
+            self.cvd_single_chart_dialogs[cvd_token] = dialog
+            dialog.show()
+            dialog.raise_()
+            dialog.activateWindow()
 
             logger.info(f"[CVD] Chart opened for token {cvd_token} ({symbol}{suffix})")
 
@@ -572,7 +611,8 @@ class ScalperMainWindow(QMainWindow):
 
     def _on_cvd_single_chart_closed(self, token):
         """Handle CVD single chart dialog close."""
-        self.cvd_single_chart_dialog = None
+        if token in self.cvd_single_chart_dialogs:
+            del self.cvd_single_chart_dialogs[token]
         QTimer.singleShot(0, self._update_market_subscriptions)
 
     def _update_cvd_chart_symbol(self, symbol: str, cvd_token: int, suffix: str = ""):
@@ -703,6 +743,7 @@ class ScalperMainWindow(QMainWindow):
         self.inline_positions_table.refresh_requested.connect(self._refresh_positions)
         self.inline_positions_table.portfolio_sl_tp_requested.connect(self.position_manager.set_portfolio_sl_tp)
         self.inline_positions_table.portfolio_sl_tp_cleared.connect(self.position_manager.clear_portfolio_sl_tp)
+        self.strike_ladder.chart_requested.connect(self._on_strike_chart_requested)
 
     def _setup_keyboard_shortcuts(self):
         """
@@ -852,28 +893,46 @@ class ScalperMainWindow(QMainWindow):
         QMessageBox.critical(self, "Error", f"Failed to load instruments:\n{error}")
 
     def _get_current_price(self, symbol: str) -> Optional[float]:
-        if not self.real_kite_client: return None
+        if not self.real_kite_client:
+            return None
+
         try:
             index_map = {
-                'NIFTY': 'NIFTY 50',
-                'BANKNIFTY': 'NIFTY BANK',
-                'FINNIFTY': 'NIFTY FIN SERVICE',
-                'MIDCPNIFTY': 'NIFTY MID SELECT'
+                "NIFTY": ("NSE", "NIFTY 50"),
+                "BANKNIFTY": ("NSE", "NIFTY BANK"),
+                "FINNIFTY": ("NSE", "NIFTY FIN SERVICE"),
+                "MIDCPNIFTY": ("NSE", "NIFTY MID SELECT"),
+                "SENSEX": ("BSE", "SENSEX"),
+                "BANKEX": ("BSE", "BANKEX"),
             }
-            underlying_instrument_name = index_map.get(symbol.upper(), symbol.upper())
-            instrument_for_ltp = f"NSE:{underlying_instrument_name}"
-            ltp_data = self.real_kite_client.ltp(instrument_for_ltp)
-            if ltp_data and instrument_for_ltp in ltp_data:
-                return ltp_data[instrument_for_ltp]['last_price']
-            else:
-                logger.warning(f"LTP data not found for {instrument_for_ltp}. Response: {ltp_data}")
-                return None
+
+            exchange, name = index_map.get(
+                symbol.upper(),
+                ("NSE", symbol.upper())
+            )
+
+            instrument = f"{exchange}:{name}"
+            ltp_data = self.real_kite_client.ltp(instrument)
+
+            if ltp_data and instrument in ltp_data:
+                return ltp_data[instrument]["last_price"]
+
+            logger.warning(f"LTP data not found for {instrument}. Response: {ltp_data}")
+            return None
+
         except Exception as e:
             logger.error(f"Failed to get current price for {symbol}: {e}")
             return None
 
     def _update_market_subscriptions(self):
         tokens_to_subscribe = set()
+        # --- INDEX TOKEN SUBSCRIPTION ---
+        current_symbol = self.header.get_current_settings().get("symbol")
+
+        if current_symbol and current_symbol in self.instrument_data:
+            index_token = self.instrument_data[current_symbol].get("instrument_token")
+            if index_token:
+                tokens_to_subscribe.add(index_token)
 
         # 1. Get tokens from the strike ladder (existing logic)
         if self.strike_ladder and self.strike_ladder.contracts:
@@ -1134,7 +1193,11 @@ class ScalperMainWindow(QMainWindow):
 
     def _show_pnl_history_dialog(self):
         if not hasattr(self, 'pnl_history_dialog') or self.pnl_history_dialog is None:
-            self.pnl_history_dialog = PnlHistoryDialog(mode=self.trading_mode, parent=self)
+            self.pnl_history_dialog = PnlHistoryDialog(
+                trade_ledger=self.trade_ledger,
+                parent=self
+            )
+
         self.pnl_history_dialog.show()
         self.pnl_history_dialog.activateWindow()
         self.pnl_history_dialog.raise_()
@@ -1143,7 +1206,6 @@ class ScalperMainWindow(QMainWindow):
         if self.performance_dialog is None:
             self.performance_dialog = PerformanceDialog(
                 trade_ledger=self.trade_ledger,
-                mode=self.trading_mode,
                 parent=self
             )
 
@@ -1254,11 +1316,7 @@ class ScalperMainWindow(QMainWindow):
             symbol_has_changed = (symbol != self.current_symbol)
             self.current_symbol = symbol
 
-            # 🎯 Sync CVD single chart if open
-            if symbol_has_changed and self.cvd_single_chart_dialog and not self.cvd_single_chart_dialog.isHidden():
-                cvd_token, is_equity, suffix = self._get_cvd_token(symbol)
-                if cvd_token:
-                    QTimer.singleShot(100, lambda: self._update_cvd_chart_symbol(symbol, cvd_token, suffix))
+            # Multiple CVD charts now supported - no auto-update
 
             today = datetime.now().date()
 
@@ -1647,12 +1705,6 @@ class ScalperMainWindow(QMainWindow):
                 else:
                     realized_pnl = (entry_price - exit_price) * filled_qty
 
-                # 🔒 USE SNAPSHOT POSITION (never re-fetch)
-                self._record_completed_exit_trade(
-                    confirmed_order=confirmed_order,
-                    original_position=original_position,
-                    trading_mode="LIVE"
-                )
 
                 self.statusBar().showMessage(
                     f"Exit confirmed. Realized P&L: ₹{realized_pnl:,.2f}",
@@ -1994,13 +2046,7 @@ class ScalperMainWindow(QMainWindow):
                             self.trade_logger.log_trade(confirmed_order_api_data)
                             action_msg = "bought"
                         else:
-                            original_position = self.position_manager.get_position(contract_to_trade.tradingsymbol)
-                            if original_position:
-                                self._record_completed_exit_trade(
-                                    confirmed_order_api_data,
-                                    original_position,
-                                    trading_mode="LIVE"
-                                )
+                            # Ledger will be handled by _check_live_completed_orders()
                             action_msg = "sold"
 
                         self._play_sound(success=True)
@@ -2045,13 +2091,6 @@ class ScalperMainWindow(QMainWindow):
             return
 
         trading_mode = trading_mode.upper()
-
-        # --------------------------------------------------
-        # 🔒 Prevent duplicate PAPER ledger writes
-        # --------------------------------------------------
-        if trading_mode == "PAPER" and confirmed_order.get("_ledger_recorded") is True:
-            logger.warning("Blocked duplicate paper trade ledger write")
-            return
 
         exit_price = confirmed_order.get("average_price", 0.0)
         filled_qty = confirmed_order.get(
@@ -2113,12 +2152,6 @@ class ScalperMainWindow(QMainWindow):
         # Record trade atomically
         # --------------------------------------------------
         self.trade_ledger.record_trade(trade)
-
-        # --------------------------------------------------
-        # 🔒 Mark PAPER order as recorded
-        # --------------------------------------------------
-        if trading_mode == "PAPER":
-            confirmed_order["_ledger_recorded"] = True
 
         logger.info(
             f"Trade recorded | {trade['tradingsymbol']} | "
@@ -2343,8 +2376,7 @@ class ScalperMainWindow(QMainWindow):
         trading_day = date.today().isoformat()
         # 1️⃣ TODAY'S realized stats (LEDGER)
         stats = self.trade_ledger.get_daily_trade_stats(
-            trading_day=trading_day,
-            mode=self.trading_mode
+            trading_day=trading_day
         )
 
         realized_pnl = stats["total_pnl"]
@@ -2725,3 +2757,112 @@ class ScalperMainWindow(QMainWindow):
 
         # ✅ EXACT same behavior as clicking ONE ladder row
         self._on_single_strike_selected(contract)
+
+    def _check_live_completed_orders(self):
+        if self.trading_mode != "live":
+            return
+
+        try:
+            orders = self.real_kite_client.orders()
+        except Exception as e:
+            logger.debug(f"Live order fetch failed: {e}")
+            return
+
+        for order in orders:
+            if order.get("status") != "COMPLETE":
+                continue
+
+            if order.get("transaction_type") != "SELL":
+                continue
+
+            order_id = order.get("order_id")
+            if not order_id:
+                continue
+
+            # 🔒 Prevent duplicate ledger writes
+            if order_id in self._processed_live_exit_orders:
+                continue
+
+            tradingsymbol = order.get("tradingsymbol")
+
+            # NOTE:
+            # We intentionally snapshot the CURRENT Position object at exit time.
+            # For LIVE trading, each completed SELL order is treated as an independent exit trade.
+            # This design correctly supports partial exits and scaling out.
+            # Do NOT replace this with cached entry data or dict snapshots.
+
+            original_position = self.position_manager.get_position(tradingsymbol)
+
+            if not original_position:
+                continue  # Not an exit we care about
+
+            self._record_completed_exit_trade(
+                confirmed_order=order,
+                original_position=original_position,
+                trading_mode="LIVE"
+            )
+
+            self._processed_live_exit_orders.add(order_id)
+
+    def _on_strike_chart_requested(self, contract: Contract):
+        """Open CVD Single Chart Dialog for the selected strike"""
+        if not contract:
+            logger.warning("Chart requested but contract data is missing.")
+            return
+
+        try:
+            cvd_token = contract.instrument_token
+            symbol = contract.tradingsymbol
+
+            # If dialog already exists for this token, just raise it
+            if cvd_token in self.cvd_single_chart_dialogs:
+                existing_dialog = self.cvd_single_chart_dialogs[cvd_token]
+                try:
+                    if existing_dialog and not existing_dialog.isHidden():
+                        existing_dialog.raise_()
+                        existing_dialog.activateWindow()
+                        return
+                except RuntimeError:
+                    # Dialog was already destroyed
+                    del self.cvd_single_chart_dialogs[cvd_token]
+
+            # Subscribe to market data for this token
+            if self.cvd_engine:
+                try:
+                    self.cvd_engine.set_mode(CVDMode.SINGLE_CHART)
+                    success = self.cvd_engine.subscribe_instruments([cvd_token])
+                    if not success:
+                        QMessageBox.warning(
+                            self,
+                            "Subscription Failed",
+                            f"Failed to subscribe to market data for {symbol}.\n"
+                            "The chart may not update in real-time."
+                        )
+                except Exception as e:
+                    logger.error(f"Failed to subscribe to CVD data: {e}")
+
+            # Create new CVD Single Chart Dialog
+            dialog = CVDSingleChartDialog(
+                kite=self.real_kite_client,
+                instrument_token=cvd_token,
+                symbol=symbol,
+                cvd_engine=self.cvd_engine,
+                parent=self
+            )
+            dialog.destroyed.connect(
+                lambda: self._on_cvd_single_chart_closed(cvd_token)
+            )
+            self.cvd_single_chart_dialogs[cvd_token] = dialog
+            dialog.show()
+            dialog.raise_()
+            dialog.activateWindow()
+
+            logger.info(f"[CVD] Chart opened for strike {symbol} (token: {cvd_token})")
+
+        except Exception as e:
+            logger.error(f"Failed to open chart for strike: {e}")
+            QMessageBox.critical(
+                self,
+                "Chart Error",
+                f"Failed to open chart for {contract.tradingsymbol}:\n{str(e)}"
+            )

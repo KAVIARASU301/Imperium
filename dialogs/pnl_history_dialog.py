@@ -1,12 +1,13 @@
 # dialogs/pnl_history_dialog.py
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QTableWidget, QWidget, QHeaderView, QAbstractItemView
 )
 from PySide6.QtCore import Qt
 from utils.pnl_logger import PnlLogger
+from core.trade_ledger import TradeLedger
 
 logger = logging.getLogger(__name__)
 
@@ -17,10 +18,10 @@ class PnlHistoryDialog(QDialog):
     with the application's consistent rich and modern dark theme.
     """
 
-    def __init__(self, mode: str = 'live', parent=None):
+    def __init__(self, trade_ledger: TradeLedger, parent=None):
         super().__init__(parent)
-        self.pnl_logger = PnlLogger(mode=mode)
-        self.pnl_data = self.pnl_logger.get_all_pnl()
+
+        self.trade_ledger = trade_ledger
         self.current_date = datetime.today()
         self._drag_pos = None
 
@@ -28,6 +29,11 @@ class PnlHistoryDialog(QDialog):
         self._setup_ui()
         self._apply_styles()
         self._populate_calendar()
+
+        if not isinstance(trade_ledger, TradeLedger):
+            raise TypeError(
+                f"PnlHistoryDialog expects TradeLedger, got {type(trade_ledger)}"
+            )
 
     def _setup_window(self):
         self.setWindowTitle("P&L History")
@@ -106,6 +112,7 @@ class PnlHistoryDialog(QDialog):
         self._populate_calendar()
 
     def _populate_calendar(self):
+        self._reload_pnl_data()
         self.month_year_label.setText(self.current_date.strftime('%B %Y').upper())
         self.calendar_table.clearContents()
 
@@ -165,6 +172,49 @@ class PnlHistoryDialog(QDialog):
 
         return widget
 
+    def _reload_pnl_data(self):
+        """
+        Builds {YYYY-MM-DD: net_pnl} map from TradeLedger
+        ALWAYS includes today's session.
+        """
+        self.pnl_data = {}
+
+        # Month range
+        year = self.current_date.year
+        month = self.current_date.month
+
+        start_date = datetime(year, month, 1).date()
+
+        if month == 12:
+            end_date = datetime(year + 1, 1, 1).date()
+        else:
+            end_date = datetime(year, month + 1, 1).date()
+
+        # 🔑 FORCE include today
+        today = date.today()
+        if today < start_date:
+            start_date = today
+        if today >= end_date:
+            end_date = today + timedelta(days=1)
+
+        cur = self.trade_ledger.conn.cursor()
+        cur.execute(
+            """
+            SELECT session_date, SUM(net_pnl) AS day_pnl
+            FROM trades
+            WHERE session_date >= ? AND session_date < ?
+            GROUP BY session_date
+            """,
+            (start_date.isoformat(), end_date.isoformat())
+        )
+
+        for row in cur.fetchall():
+            session_date = row["session_date"]
+            if isinstance(session_date, date):
+                session_date = session_date.isoformat()
+
+            self.pnl_data[session_date] = row["day_pnl"] or 0.0
+
     def _apply_styles(self):
         """Applies a premium, modern dark theme."""
         self.setStyleSheet("""
@@ -205,6 +255,13 @@ class PnlHistoryDialog(QDialog):
 
             #pnlLabel { font-size: 16px; font-weight: 600; }
         """)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+
+        # 🔥 Always refresh today when dialog opens
+        self.current_date = datetime.today()
+        self._populate_calendar()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:

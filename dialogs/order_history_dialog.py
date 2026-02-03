@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime
 from typing import List, Dict
 
 from PySide6.QtWidgets import (
@@ -144,6 +145,45 @@ class OrderHistoryTable(QTableWidget):
                 else:
                     item.setTextAlignment(Qt.AlignCenter)
 
+    def update_trades(self, trades: list):
+        self.setRowCount(0)
+
+        trades = sorted(trades, key=lambda t: t["exit_time"])
+
+        for trade in map(dict, trades):
+            row = self.rowCount()
+            self.insertRow(row)
+
+            self.setItem(row, 0, QTableWidgetItem(""))
+            raw_ts = trade.get("exit_time", "")
+
+            try:
+                # ISO 8601 → datetime
+                dt = datetime.fromisoformat(raw_ts)
+                display_ts = dt.strftime("%d %b %H:%M:%S")
+            except Exception:
+                display_ts = raw_ts  # fallback (never crash UI)
+
+            self.setItem(row, 1, QTableWidgetItem(display_ts))
+            self.setItem(row, 2, QTableWidgetItem(trade.get("tradingsymbol", "")))
+            self.setItem(row, 3, QTableWidgetItem(str(trade.get("quantity", 0))))
+            self.setItem(row, 4, QTableWidgetItem(f'{trade.get("entry_price", 0):.2f}'))
+
+            pnl = trade.get("net_pnl", 0.0)
+            pnl_item = QTableWidgetItem(f"{pnl:,.2f}")
+            pnl_item.setForeground(
+                QColor("#29C7C9") if pnl >= 0 else QColor("#F85149")
+            )
+            pnl_item.setTextAlignment(Qt.AlignCenter)
+            self.setItem(row, 5, pnl_item)
+
+            self.setItem(row, 6, QTableWidgetItem(trade.get("exit_reason", "")))
+            self.setItem(row, 7, QTableWidgetItem(trade.get("trade_id", "")))
+
+        if self.rowCount() > 0:
+            self.scrollToBottom()
+            self.selectRow(self.rowCount() - 1)
+
 
 # ---------------------------------------------------------
 # Order History Dialog (Draggable)
@@ -227,6 +267,10 @@ class OrderHistoryDialog(QDialog):
         h.addStretch()
         h.addWidget(refresh_btn)
         return h
+
+    def update_trades(self, trades: list[dict]):
+        self.orders_table.update_trades(trades)
+        self.trade_count_label.setText(f"{len(trades)} TRADES")
 
     # -----------------------------------------------------
     def update_orders(self, orders: List[Dict]):
