@@ -40,6 +40,7 @@ from dialogs.pending_orders_dialog import PendingOrdersDialog
 from widgets.order_status_widget import OrderStatusWidget
 from core.paper_trading_manager import PaperTradingManager
 from dialogs.option_chain_dialog import OptionChainDialog
+from dialogs.strategy_builder_dialog import StrategyBuilderDialog
 from dialogs.order_confirmation_dialog import OrderConfirmationDialog
 from dialogs.market_monitor_dialog import MarketMonitorDialog
 from core.cvd.cvd_engine import CVDEngine
@@ -51,6 +52,7 @@ from core.trade_ledger import TradeLedger
 from utils.title_bar import TitleBar
 from utils.api_circuit_breaker import APICircuitBreaker
 from utils.about import show_about
+from utils.shortcuts import show_shortcuts
 from dialogs.fii_dii_dialog import FIIDIIDialog
 from PySide6.QtCore import QTimer
 
@@ -97,6 +99,7 @@ class ScalperMainWindow(QMainWindow):
         self.pnl_history_dialog = None
         self.pending_orders_dialog = None
         self.option_chain_dialog = None
+        self.strategy_builder_dialog = None
         self.fii_dii_dialog = None
 
         self.pending_order_widgets = {}
@@ -477,7 +480,9 @@ class ScalperMainWindow(QMainWindow):
         menu_actions['performance'].triggered.connect(self._show_performance_dialog)
         menu_actions['settings'].triggered.connect(self._show_settings)
         menu_actions['option_chain'].triggered.connect(self._show_option_chain_dialog)
+        menu_actions['strategy_builder'].triggered.connect(self._show_strategy_builder_dialog)
         menu_actions['refresh_positions'].triggered.connect(self._refresh_positions)
+        menu_actions['shortcuts'].triggered.connect(self._show_shortcuts)
         menu_actions['about'].triggered.connect(self._show_about)
         menu_actions['market_monitor'].triggered.connect(self._show_market_monitor_dialog)
         menu_actions['cvd_chart'].triggered.connect(self._show_cvd_chart_dialog)
@@ -735,6 +740,42 @@ class ScalperMainWindow(QMainWindow):
         self.option_chain_dialog.show()
         self.option_chain_dialog.activateWindow()
         self.option_chain_dialog.raise_()
+
+    def _show_strategy_builder_dialog(self):
+        if not self.instrument_data:
+            QMessageBox.warning(self, "Data Not Ready",
+                                "Instrument data is still loading. Please try again in a moment.")
+            return
+
+        current_settings = self.header.get_current_settings()
+        symbol = current_settings.get("symbol")
+        expiry = current_settings.get("expiry")
+        default_lots = current_settings.get("lot_size", 1)
+
+        if not symbol:
+            QMessageBox.warning(self, "Symbol Missing", "Select a symbol before opening the strategy builder.")
+            return
+
+        if self.strategy_builder_dialog is not None:
+            self.strategy_builder_dialog.close()
+
+        self.strategy_builder_dialog = StrategyBuilderDialog(
+            instrument_data=self.instrument_data,
+            strike_ladder=self.strike_ladder,
+            symbol=symbol,
+            expiry=expiry,
+            default_lots=default_lots,
+            product=self.settings.get("default_product", self.trader.PRODUCT_MIS),
+            on_execute=self._execute_strategy_orders,
+            parent=None,
+        )
+        self.strategy_builder_dialog.finished.connect(
+            lambda: setattr(self, 'strategy_builder_dialog', None)
+        )
+
+        self.strategy_builder_dialog.show()
+        self.strategy_builder_dialog.activateWindow()
+        self.strategy_builder_dialog.raise_()
 
     def _connect_signals(self):
         self.header.settings_changed.connect(self._on_settings_changed)
@@ -1270,6 +1311,9 @@ class ScalperMainWindow(QMainWindow):
 
     def _show_about(self):
         show_about(self)
+
+    def _show_shortcuts(self):
+        show_shortcuts(self)
 
     def _show_settings(self):
         """
@@ -2086,10 +2130,28 @@ class ScalperMainWindow(QMainWindow):
                          exc_info=True)
             self._handle_order_error(e, order_params)
             self._show_order_results([], [{'symbol': contract_to_trade.tradingsymbol, 'error': str(e)}])
-        finally:
-            # Only refresh for live trading, paper trading already scheduled refresh above
-            if not isinstance(self.trader, PaperTradingManager):
-                self._refresh_positions()
+
+    def _execute_strategy_orders(self, order_params_list: List[dict]):
+        if not order_params_list:
+            return
+
+        for order_params in order_params_list:
+            side = order_params.get("side", "BUY")
+            transaction_type = (
+                self.trader.TRANSACTION_TYPE_BUY
+                if side.upper() == "BUY"
+                else self.trader.TRANSACTION_TYPE_SELL
+            )
+            mapped_params = {
+                **order_params,
+                "transaction_type": transaction_type,
+                "order_type": self.trader.ORDER_TYPE_MARKET,
+                "product": order_params.get("product", self.settings.get("default_product", self.trader.PRODUCT_MIS)),
+            }
+            self._execute_single_strike_order(mapped_params)
+        # Only refresh for live trading, paper trading already scheduled refresh above
+        if not isinstance(self.trader, PaperTradingManager):
+            self._refresh_positions()
 
     def _record_completed_exit_trade(
             self,

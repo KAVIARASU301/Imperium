@@ -101,6 +101,7 @@ class LoginManager(QDialog):
         self.api_secret = ""
         self.access_token = None
         self.trading_mode = 'live'
+        self.login_url = ""
 
         self.token_server: Optional[RequestTokenServer] = None
 
@@ -209,6 +210,10 @@ class LoginManager(QDialog):
         self.api_secret_input.setEchoMode(QLineEdit.EchoMode.Password)
         layout.addWidget(self.api_secret_input)
 
+        self.show_secret_checkbox = QCheckBox("Show API Secret")
+        self.show_secret_checkbox.toggled.connect(self._toggle_secret_visibility)
+        layout.addWidget(self.show_secret_checkbox)
+
         self.save_creds_checkbox = QCheckBox("Save Credentials Securely")
         self.save_creds_checkbox.setChecked(True)
         layout.addWidget(self.save_creds_checkbox)
@@ -216,17 +221,21 @@ class LoginManager(QDialog):
 
         button_layout = QHBoxLayout()
         button_layout.setSpacing(10)
-        paper_button = QPushButton("Paper Trading")
-        paper_button.setObjectName("secondaryButton")
-        live_button = QPushButton("Live Trading")
-        live_button.setObjectName("primaryButton")
+        self.paper_button = QPushButton("Paper Trading")
+        self.paper_button.setObjectName("secondaryButton")
+        self.live_button = QPushButton("Live Trading")
+        self.live_button.setObjectName("primaryButton")
 
-        button_layout.addWidget(paper_button)
-        button_layout.addWidget(live_button)
+        button_layout.addWidget(self.paper_button)
+        button_layout.addWidget(self.live_button)
         layout.addLayout(button_layout)
 
-        live_button.clicked.connect(lambda: self._on_mode_selected('live'))
-        paper_button.clicked.connect(lambda: self._on_mode_selected('paper'))
+        self.api_key_input.textChanged.connect(self._update_login_buttons)
+        self.api_secret_input.textChanged.connect(self._update_login_buttons)
+        self._update_login_buttons()
+
+        self.live_button.clicked.connect(lambda: self._on_mode_selected('live'))
+        self.paper_button.clicked.connect(lambda: self._on_mode_selected('paper'))
         return page
 
     def _create_token_input_page(self) -> QWidget:
@@ -253,7 +262,7 @@ class LoginManager(QDialog):
         # ---- Input container (visual grouping) ----
         input_container = QWidget()
         input_layout = QVBoxLayout(input_container)
-        input_layout.setContentsMargins(20, 16, 20, 16)
+        input_layout.setContentsMargins(16, 12, 16, 12)
         input_layout.setSpacing(8)
 
         input_label = QLabel("Session Token")
@@ -269,6 +278,10 @@ class LoginManager(QDialog):
         input_layout.addWidget(self.request_token_input)
 
         input_container.setObjectName("inputContainer")
+
+        self.token_status_label = QLabel("Waiting for browser authentication…")
+        self.token_status_label.setObjectName("infoLabel")
+        self.token_status_label.setAlignment(Qt.AlignCenter)
 
         # ---- Action button ----
         self.generate_button = QPushButton("Start Trading")
@@ -288,6 +301,8 @@ class LoginManager(QDialog):
         layout.addSpacing(10)
         layout.addWidget(input_container)
         layout.addSpacing(12)
+        layout.addWidget(self.token_status_label)
+        layout.addSpacing(6)
         layout.addWidget(self.generate_button, 0, Qt.AlignCenter)
         layout.addSpacing(6)
         layout.addWidget(back_button, 0, Qt.AlignCenter)
@@ -295,18 +310,8 @@ class LoginManager(QDialog):
         return page
 
     def _go_back_to_credentials(self):
-        # Stop token server if running
-        if self.token_server:
-            self.token_server.quit()
-            self.token_server = None
-
-        if hasattr(self, "_token_timeout_timer") and self._token_timeout_timer.isActive():
-            self._token_timeout_timer.stop()
-
-        self._login_in_progress = False
-        self.request_token_input.clear()
-        self.generate_button.setText("Start Trading")
-        self.generate_button.setEnabled(False)
+        self._stop_token_server()
+        self._reset_token_state(clear_login_url=True)
 
         self.stacked_widget.setCurrentIndex(1)  # Credentials page
 
@@ -357,6 +362,7 @@ class LoginManager(QDialog):
 
             self.access_token = token_data['access_token']
             self.trading_mode = token_data.get('trading_mode', 'live')
+            self._update_auto_login_message(token_data)
             self.stacked_widget.setCurrentIndex(0)
         else:
             # Token expired or doesn't exist - clear it and force re-login
@@ -394,6 +400,8 @@ class LoginManager(QDialog):
         if self.save_creds_checkbox.isChecked():
             self.token_manager.save_credentials(self.api_key, self.api_secret)
 
+        self._reset_token_state(clear_login_url=False)
+
         # ---- Start local server to capture request_token ----
         try:
             self.token_server = RequestTokenServer(parent=self)
@@ -422,7 +430,7 @@ class LoginManager(QDialog):
         # ---- Validate API key before opening browser ----
         try:
             kite = KiteConnect(api_key=self.api_key)
-            login_url = kite.login_url()
+            self.login_url = kite.login_url()
         except Exception:
             show_message(
                 self,
@@ -435,8 +443,10 @@ class LoginManager(QDialog):
             self._go_back_to_credentials()
             return
 
-        webbrowser.open_new(login_url)
+        webbrowser.open_new(self.login_url)
+        self.token_status_label.setText("Waiting for browser authentication…")
         self.stacked_widget.setCurrentIndex(2)
+        self.request_token_input.setFocus()
 
     def _token_timeout_check(self):
         if not self.request_token_input.text().strip():
@@ -453,6 +463,8 @@ class LoginManager(QDialog):
 
     def _on_token_server_error(self, msg: str):
         logger.error(f"RequestTokenServer error: {msg}")
+        if self.stacked_widget.currentIndex() == 2:
+            self.token_status_label.setText("Waiting for manual token entry…")
 
     def _on_request_token_auto(self, token: str):
         if not token:
@@ -527,13 +539,63 @@ class LoginManager(QDialog):
         )
 
         self.generate_button.setText("Start Trading")
-        self.generate_button.setEnabled(True)
+        self.generate_button.setEnabled(bool(self.request_token_input.text().strip()))
         self.setCursor(Qt.ArrowCursor)
 
     def _select_mode_and_accept(self, mode: str):
         self.trading_mode = mode
         logger.info(f"User selected {mode.upper()} mode during auto-login.")
         self.accept()
+
+    def _update_login_buttons(self):
+        has_creds = bool(self.api_key_input.text().strip() and self.api_secret_input.text().strip())
+        self.live_button.setEnabled(has_creds)
+        self.paper_button.setEnabled(has_creds)
+
+    def _toggle_secret_visibility(self, checked: bool):
+        self.api_secret_input.setEchoMode(
+            QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password
+        )
+
+    def _update_auto_login_message(self, token_data: dict):
+        created_at_text = token_data.get("created_at")
+        if not created_at_text:
+            return
+
+        try:
+            created_at = datetime.fromisoformat(created_at_text)
+        except (ValueError, TypeError):
+            return
+
+        timestamp = created_at.strftime("%b %d, %Y %I:%M %p")
+        self.info_label.setText(
+            "An active access session for today was detected.\n"
+            f"Last verified: {timestamp}"
+        )
+
+    def _reset_token_state(self, clear_login_url: bool):
+        if hasattr(self, "_token_timeout_timer") and self._token_timeout_timer.isActive():
+            self._token_timeout_timer.stop()
+
+        self._login_in_progress = False
+        self.request_token_input.clear()
+        self.generate_button.setText("Start Trading")
+        self.generate_button.setEnabled(False)
+        self.token_status_label.setText("Waiting for browser authentication…")
+        if clear_login_url:
+            self.login_url = ""
+
+    def _stop_token_server(self):
+        if self.token_server:
+            self.token_server.quit()
+            self.token_server.wait(1000)
+            self.token_server = None
+
+    def closeEvent(self, event):
+        self._stop_token_server()
+        if hasattr(self, "_token_timeout_timer") and self._token_timeout_timer.isActive():
+            self._token_timeout_timer.stop()
+        super().closeEvent(event)
 
     def get_api_creds(self) -> Optional[Dict[str, str]]:
         if self.api_key and self.api_secret:

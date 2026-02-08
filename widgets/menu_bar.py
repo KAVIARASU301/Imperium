@@ -118,6 +118,9 @@ def create_menu_bar(parent) -> Tuple[QMenuBar, Dict[str, QAction]]:
 
     tools_menu.addAction(menu_actions["option_chain"])
 
+    menu_actions["strategy_builder"] = tools_menu.addAction("Strategy Builder")
+    menu_actions["strategy_builder"].setShortcut("Ctrl+Shift+B")
+
     tools_menu.addSeparator()
 
     menu_actions["fii_dii_data"] = tools_menu.addAction("FII DII Data")
@@ -128,6 +131,7 @@ def create_menu_bar(parent) -> Tuple[QMenuBar, Dict[str, QAction]]:
 
     # -------- HELP --------
     help_menu = menubar.addMenu("&Help")
+    menu_actions["shortcuts"] = help_menu.addAction("Keyboard Shortcuts")
     menu_actions["about"] = help_menu.addAction("About")
 
     return menubar, menu_actions

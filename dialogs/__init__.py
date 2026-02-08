@@ -9,6 +9,7 @@ from .performance_dialog import PerformanceDialog
 from .pnl_history_dialog import PnlHistoryDialog
 from .quick_order_dialog import QuickOrderDialog
 from .settings_dialog import SettingsDialog
+from .strategy_builder_dialog import StrategyBuilderDialog
 
 __all__ = [
     'MarketMonitorDialog',
@@ -20,5 +21,6 @@ __all__ = [
     'PerformanceDialog',
     'PnlHistoryDialog',
     'QuickOrderDialog',
-    'SettingsDialog'
+    'SettingsDialog',
+    'StrategyBuilderDialog'
 ]
