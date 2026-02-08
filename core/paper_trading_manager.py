@@ -103,26 +103,39 @@ class PaperTradingManager(QObject):
 
     def place_order(self, variety, exchange, tradingsymbol, transaction_type, quantity, product, order_type, price=None,
                     **kwargs):
+        # 🔒 Resolve price safely (paper trading)
+        if price is None:
+            token = self.tradingsymbol_to_token.get(tradingsymbol)
+            if token and token in self.market_data:
+                price = self.market_data[token].get("last_price")
+
+        # If still no price → reject cleanly
+        if price is None:
+            reason = "Price unavailable for margin calculation"
+            logger.warning(f"RMS rejected order: {reason}")
+
+            self.order_rejected.emit({
+                "reason": reason,
+                "tradingsymbol": tradingsymbol,
+                "quantity": quantity
+            })
+            return None
+
+        position = self._positions.get(tradingsymbol)
+        opening_qty = 0
         if transaction_type == self.TRANSACTION_TYPE_BUY:
-            # 🔒 Resolve price safely (paper trading)
-            if price is None:
-                token = self.tradingsymbol_to_token.get(tradingsymbol)
-                if token and token in self.market_data:
-                    price = self.market_data[token].get("last_price")
+            if position and position["quantity"] < 0:
+                opening_qty = max(0, quantity - abs(position["quantity"]))
+            else:
+                opening_qty = quantity
+        else:
+            if position and position["quantity"] > 0:
+                opening_qty = max(0, quantity - position["quantity"])
+            else:
+                opening_qty = quantity
 
-            # If still no price → reject cleanly
-            if price is None:
-                reason = "Price unavailable for margin calculation"
-                logger.warning(f"RMS rejected order: {reason}")
-
-                self.order_rejected.emit({
-                    "reason": reason,
-                    "tradingsymbol": tradingsymbol,
-                    "quantity": quantity
-                })
-                return None
-
-            allowed, reason = self.rms.can_place_order(price, quantity)
+        if opening_qty > 0:
+            allowed, reason = self.rms.can_place_order(price, opening_qty)
             if not allowed:
                 logger.warning(f"RMS rejected order: {reason}")
 
@@ -247,6 +260,9 @@ class PaperTradingManager(QObject):
 
         qty = position["quantity"]
         avg_price = position["average_price"]
+        exit_transaction_type = (
+            self.TRANSACTION_TYPE_SELL if qty > 0 else self.TRANSACTION_TYPE_BUY
+        )
 
         logger.info(f"📌 Placing protective orders for {tradingsymbol}: SL={sl_price}, TP={tp_price}")
 
@@ -257,7 +273,7 @@ class PaperTradingManager(QObject):
                     variety=self.VARIETY_REGULAR,
                     exchange=position["exchange"],
                     tradingsymbol=tradingsymbol,
-                    transaction_type=self.TRANSACTION_TYPE_SELL,  # Close the position
+                    transaction_type=exit_transaction_type,  # Close the position
                     quantity=abs(qty),
                     product=position["product"],
                     order_type=self.ORDER_TYPE_SLM,
@@ -274,7 +290,7 @@ class PaperTradingManager(QObject):
                     variety=self.VARIETY_REGULAR,
                     exchange=position["exchange"],
                     tradingsymbol=tradingsymbol,
-                    transaction_type=self.TRANSACTION_TYPE_SELL,  # Close the position
+                    transaction_type=exit_transaction_type,  # Close the position
                     quantity=abs(qty),
                     product=position["product"],
                     order_type=self.ORDER_TYPE_LIMIT,
@@ -349,68 +365,98 @@ class PaperTradingManager(QObject):
         order["exchange_timestamp"] = datetime.now().isoformat()
 
         position = self._positions.get(tradingsymbol)
+        exit_qty = 0
+        entry_qty = 0
+        realized = 0.0
 
         if side == self.TRANSACTION_TYPE_BUY:
-            self.rms.reserve_margin(price, qty)
-
-            if not position:
-                self._positions[tradingsymbol] = {
-                    "tradingsymbol": tradingsymbol,
-                    "quantity": qty,
-                    "average_price": price,
-                    "last_price": price,
-                    "realized_pnl": 0.0,
-                    "unrealized_pnl": 0.0,
-                    "product": order["product"],
-                    "exchange": order["exchange"],
-                    "timestamp": order["exchange_timestamp"]
-                }
-            else:
-                total_qty = position["quantity"] + qty
-                position["average_price"] = (
-                        (position["average_price"] * position["quantity"] + price * qty)
-                        / total_qty
+            if position and position["quantity"] < 0:
+                cover_qty = min(qty, abs(position["quantity"]))
+                entry_price = position["average_price"]
+                realized = (entry_price - price) * cover_qty
+                exit_qty = cover_qty
+                position["realized_pnl"] += realized
+                self.balance += realized
+                self.rms.release_margin(entry_price, cover_qty)
+                logger.info(
+                    f"RMS release | price={entry_price} qty={cover_qty} "
+                    f"used={self.rms.used_margin:.2f}"
                 )
-                position["quantity"] = total_qty
+                position["quantity"] += cover_qty
+                if position["quantity"] == 0:
+                    del self._positions[tradingsymbol]
+                    position = None
+                qty -= cover_qty
 
+            if qty > 0:
+                entry_qty = qty
+                self.rms.reserve_margin(price, qty)
+                if not position:
+                    self._positions[tradingsymbol] = {
+                        "tradingsymbol": tradingsymbol,
+                        "quantity": qty,
+                        "average_price": price,
+                        "last_price": price,
+                        "realized_pnl": 0.0,
+                        "unrealized_pnl": 0.0,
+                        "product": order["product"],
+                        "exchange": order["exchange"],
+                        "timestamp": order["exchange_timestamp"]
+                    }
+                else:
+                    total_qty = position["quantity"] + qty
+                    position["average_price"] = (
+                            (position["average_price"] * position["quantity"] + price * qty)
+                            / total_qty
+                    )
+                    position["quantity"] = total_qty
 
         else:  # SELL
+            if position and position["quantity"] > 0:
+                close_qty = min(qty, position["quantity"])
+                entry_price = position["average_price"]
+                realized = (price - entry_price) * close_qty
+                exit_qty = close_qty
+                position["realized_pnl"] += realized
+                self.balance += realized
+                self.rms.release_margin(entry_price, close_qty)
+                logger.info(
+                    f"RMS release | price={entry_price} qty={close_qty} "
+                    f"used={self.rms.used_margin:.2f}"
+                )
+                position["quantity"] -= close_qty
+                if position["quantity"] == 0:
+                    del self._positions[tradingsymbol]
+                    position = None
+                qty -= close_qty
 
-            if not position:
-                logger.error("Sell executed without position — ignoring")
+            if qty > 0:
+                entry_qty = qty
+                self.rms.reserve_margin(price, qty)
+                if not position:
+                    self._positions[tradingsymbol] = {
+                        "tradingsymbol": tradingsymbol,
+                        "quantity": -qty,
+                        "average_price": price,
+                        "last_price": price,
+                        "realized_pnl": 0.0,
+                        "unrealized_pnl": 0.0,
+                        "product": order["product"],
+                        "exchange": order["exchange"],
+                        "timestamp": order["exchange_timestamp"]
+                    }
+                else:
+                    total_qty = abs(position["quantity"]) + qty
+                    position["average_price"] = (
+                            (position["average_price"] * abs(position["quantity"]) + price * qty)
+                            / total_qty
+                    )
+                    position["quantity"] = -total_qty
 
-                return
-
-            entry_price = position["average_price"]
-
-            # 1️⃣ Calculate realized PnL
-
-            realized = (price - entry_price) * qty
-
-            position["realized_pnl"] += realized
-
-            # 2️⃣ UPDATE ACCOUNT BALANCE (IMPORTANT)
-
-            self.balance += realized
-
-            # 3️⃣ RELEASE RMS MARGIN (⬅️ THIS IS THE LINE YOU ASKED ABOUT)
-
-            self.rms.release_margin(entry_price, qty)
-            logger.info(
-                f"RMS release | price={entry_price} qty={qty} "
-                f"used={self.rms.used_margin:.2f}"
-            )
-
-            # 4️⃣ Update / close position
-
-            position["quantity"] -= qty
-
-            if position["quantity"] <= 0:
-                del self._positions[tradingsymbol]
-
-            # 5️⃣ Attach realized PnL to order (for ledger/UI)
-
+        if exit_qty > 0:
             order["realized_pnl"] = realized
+        order["exit_qty"] = exit_qty
+        order["entry_qty"] = entry_qty
 
         self._save_state()
         self.order_update.emit(order)

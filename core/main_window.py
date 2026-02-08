@@ -52,6 +52,7 @@ from core.trade_ledger import TradeLedger
 from utils.title_bar import TitleBar
 from utils.api_circuit_breaker import APICircuitBreaker
 from utils.about import show_about
+from utils.expiry_days import show_expiry_days
 from utils.shortcuts import show_shortcuts
 from dialogs.fii_dii_dialog import FIIDIIDialog
 from PySide6.QtCore import QTimer
@@ -333,29 +334,27 @@ class ScalperMainWindow(QMainWindow):
         self._processed_paper_exit_orders.add(order_id)
 
         if order_data and order_data.get('status') == 'COMPLETE':
-            transaction_type = order_data.get('transaction_type')
             tradingsymbol = order_data.get('tradingsymbol')
+            exit_qty = order_data.get("exit_qty", 0)
 
-            if transaction_type == self.trader.TRANSACTION_TYPE_SELL:
+            if exit_qty > 0:
                 if order_data.get("_ledger_recorded"):
                     return  # 🔒 already processed
 
                 original_position = self.position_manager.get_position(tradingsymbol)
                 if original_position:
+                    confirmed_order = {
+                        **order_data,
+                        "filled_quantity": exit_qty
+                    }
                     self._record_completed_exit_trade(
-                        confirmed_order=order_data,
+                        confirmed_order=confirmed_order,
                         original_position=original_position,
                         trading_mode="PAPER"
                     )
                     # 🔒 Mark as recorded AFTER successful write
                     order_data["_ledger_recorded"] = True
                 return
-
-            # 🔊 PLAY SOUND ONLY FOR NON-BULK, NON-MANUAL EXITS
-            if transaction_type == self.trader.TRANSACTION_TYPE_SELL:
-                # Sound should NOT be played here for bulk exits
-                # Bulk exit sound is handled centrally in _finalize_bulk_exit_result()
-                pass
 
             logger.debug("Paper trade complete, triggering immediate account info refresh.")
             self._update_account_info()
@@ -483,6 +482,7 @@ class ScalperMainWindow(QMainWindow):
         menu_actions['strategy_builder'].triggered.connect(self._show_strategy_builder_dialog)
         menu_actions['refresh_positions'].triggered.connect(self._refresh_positions)
         menu_actions['shortcuts'].triggered.connect(self._show_shortcuts)
+        menu_actions['expiry_days'].triggered.connect(self._show_expiry_days)
         menu_actions['about'].triggered.connect(self._show_about)
         menu_actions['market_monitor'].triggered.connect(self._show_market_monitor_dialog)
         menu_actions['cvd_chart'].triggered.connect(self._show_cvd_chart_dialog)
@@ -793,6 +793,7 @@ class ScalperMainWindow(QMainWindow):
         self.inline_positions_table.portfolio_sl_tp_requested.connect(self.position_manager.set_portfolio_sl_tp)
         self.inline_positions_table.portfolio_sl_tp_cleared.connect(self.position_manager.clear_portfolio_sl_tp)
         self.strike_ladder.chart_requested.connect(self._on_strike_chart_requested)
+        self.strike_ladder.visible_tokens_changed.connect(self._update_market_subscriptions)
 
     def _setup_keyboard_shortcuts(self):
         """
@@ -983,12 +984,15 @@ class ScalperMainWindow(QMainWindow):
             if index_token:
                 tokens_to_subscribe.add(index_token)
 
-        # 1. Get tokens from the strike ladder (existing logic)
-        if self.strike_ladder and self.strike_ladder.contracts:
-            for strike_val_dict in self.strike_ladder.contracts.values():
-                for contract_obj in strike_val_dict.values():
-                    if contract_obj and contract_obj.instrument_token:
-                        tokens_to_subscribe.add(contract_obj.instrument_token)
+        # 1. Get tokens from the strike ladder (visible rows only)
+        if self.strike_ladder:
+            if hasattr(self.strike_ladder, "get_visible_contract_tokens"):
+                tokens_to_subscribe.update(self.strike_ladder.get_visible_contract_tokens())
+            elif self.strike_ladder.contracts:
+                for strike_val_dict in self.strike_ladder.contracts.values():
+                    for contract_obj in strike_val_dict.values():
+                        if contract_obj and contract_obj.instrument_token:
+                            tokens_to_subscribe.add(contract_obj.instrument_token)
 
         # 2. Get the underlying index token (existing logic)
         current_settings = self.header.get_current_settings()
@@ -1314,6 +1318,9 @@ class ScalperMainWindow(QMainWindow):
 
     def _show_shortcuts(self):
         show_shortcuts(self)
+
+    def _show_expiry_days(self):
+        show_expiry_days(self)
 
     def _show_settings(self):
         """

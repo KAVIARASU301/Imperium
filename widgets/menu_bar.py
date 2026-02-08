@@ -132,6 +132,7 @@ def create_menu_bar(parent) -> Tuple[QMenuBar, Dict[str, QAction]]:
     # -------- HELP --------
     help_menu = menubar.addMenu("&Help")
     menu_actions["shortcuts"] = help_menu.addAction("Keyboard Shortcuts")
+    menu_actions["expiry_days"] = help_menu.addAction("Expiry Days")
     menu_actions["about"] = help_menu.addAction("About")
 
     return menubar, menu_actions

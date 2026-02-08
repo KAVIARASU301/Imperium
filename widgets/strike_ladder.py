@@ -33,6 +33,7 @@ class StrikeLadderWidget(QWidget):
 
     strike_selected = Signal(Contract)
     chart_requested = Signal(Contract)  # New signal for chart button clicks
+    visible_tokens_changed = Signal()
     interval_calculated = Signal(str, float)
     interval_changed = Signal(str, float)
 
@@ -77,6 +78,10 @@ class StrikeLadderWidget(QWidget):
             'vix': 0.0
         }
         self._index_ltp = None
+        self._visible_tokens_timer = QTimer(self)
+        self._visible_tokens_timer.setSingleShot(True)
+        self._visible_tokens_timer.setInterval(120)
+        self._visible_tokens_timer.timeout.connect(self._emit_visible_tokens_changed)
 
         self.vix_value = 0.0
         self._init_ui()
@@ -104,6 +109,12 @@ class StrikeLadderWidget(QWidget):
         )
         self.table.verticalScrollBar().valueChanged.connect(
             lambda: setattr(self, "_user_scrolling", True)
+        )
+        self.table.verticalScrollBar().valueChanged.connect(
+            self._schedule_visible_tokens_emit
+        )
+        self.table.verticalScrollBar().sliderReleased.connect(
+            self._schedule_visible_tokens_emit
         )
 
         # Create footer
@@ -450,6 +461,7 @@ class StrikeLadderWidget(QWidget):
         self._update_stats()
         QTimer.singleShot(120, self._force_center_atm)
         QTimer.singleShot(0, self._apply_weighted_column_widths)
+        self._schedule_visible_tokens_emit()
 
     def _add_row(self, strike: float):
         row = self.table.rowCount()
@@ -949,8 +961,38 @@ class StrikeLadderWidget(QWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._apply_weighted_column_widths()
+        self._schedule_visible_tokens_emit()
 
     def _force_center_atm(self):
         self._user_scrolling = False
         self._last_centered_atm = None
         self._jump_to_atm()
+        self._schedule_visible_tokens_emit()
+
+    def _schedule_visible_tokens_emit(self):
+        if self._visible_tokens_timer.isActive():
+            self._visible_tokens_timer.stop()
+        self._visible_tokens_timer.start()
+
+    def _emit_visible_tokens_changed(self):
+        self.visible_tokens_changed.emit()
+
+    def get_visible_contract_tokens(self) -> set[int]:
+        if not hasattr(self, "table") or self.table.rowCount() == 0:
+            return set()
+        viewport = self.table.viewport()
+        top_row = self.table.rowAt(0)
+        bottom_row = self.table.rowAt(max(0, viewport.height() - 1))
+        if top_row < 0:
+            top_row = 0
+        if bottom_row < 0:
+            bottom_row = self.table.rowCount() - 1
+        tokens: set[int] = set()
+        for row in range(top_row, bottom_row + 1):
+            strike = self._get_strike_from_row(row)
+            if strike is None:
+                continue
+            for contract in self.contracts.get(strike, {}).values():
+                if contract and contract.instrument_token:
+                    tokens.add(contract.instrument_token)
+        return tokens
