@@ -89,7 +89,7 @@ class StrikeLadderWidget(QWidget):
         main.setSpacing(0)
 
         self.table = QTableWidget()
-        headers = ["CE", "╱", "BID", "ASK", "LTP", "OI", "STRIKE", "OI", "LTP", "BID", "ASK", "╱", "PE"]
+        headers = ["CE", "🗠", "BID", "ASK", "LTP", "OI", "STRIKE", "OI", "LTP", "BID", "ASK", "🗠", "PE"]
         self.table.setColumnCount(len(headers))
         self.table.setHorizontalHeaderLabels(headers)
         self.table.setMouseTracking(False)
@@ -134,9 +134,9 @@ class StrikeLadderWidget(QWidget):
         self.underlying_lbl.setObjectName("underlyingLabel")
         self.underlying_lbl.setToolTip("Underlying LTP & Change")
 
-        self.range_lbl = QLabel("Range: —")
-        self.range_lbl.setObjectName("footerStat")
-        self.range_lbl.setToolTip("Day High/Low")
+        # self.range_lbl = QLabel("Range: —")
+        # self.range_lbl.setObjectName("footerStat")
+        # self.range_lbl.setToolTip("Day High/Low")
 
         self.vol_lbl = QLabel("Vol: —")
         self.vol_lbl.setObjectName("footerStat")
@@ -156,7 +156,7 @@ class StrikeLadderWidget(QWidget):
         self.vix_label.setObjectName("vixLabel")
 
         # Alignment
-        for lbl in [self.underlying_lbl, self.range_lbl, self.vol_lbl,
+        for lbl in [self.underlying_lbl, self.vol_lbl,
                     self.call_oi_lbl, self.put_oi_lbl, self.pcr_label, self.vix_label]:
             lbl.setAlignment(Qt.AlignVCenter)
 
@@ -166,8 +166,6 @@ class StrikeLadderWidget(QWidget):
 
         # Underlying section
         layout.addWidget(self.underlying_lbl)
-        layout.addWidget(self._footer_sep())
-        layout.addWidget(self.range_lbl)
         layout.addWidget(self._footer_sep())
         layout.addWidget(self.vol_lbl)
         layout.addWidget(self._footer_sep())
@@ -503,7 +501,7 @@ class StrikeLadderWidget(QWidget):
             b.setEnabled(False)
             b.setStyleSheet("background: transparent;")
             return b
-        b.setText("╱")  # Minimal line chart icon
+        b.setText("🗠")  # Minimal line chart icon
         b.setCursor(Qt.PointingHandCursor)
         b.clicked.connect(lambda: self.chart_requested.emit(c))
         b.setStyleSheet("""
@@ -872,8 +870,6 @@ class StrikeLadderWidget(QWidget):
             f"color: {color}; font-weight: 700; font-size: 10.5px;"
         )
 
-        # Update range
-        self.range_lbl.setText(f"Range: {d['day_low']:.2f}–{d['day_high']:.2f}")
 
         # Update volume (abbreviated)
         vol_str = self._format_volume(d['volume'])

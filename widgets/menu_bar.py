@@ -120,6 +120,9 @@ def create_menu_bar(parent) -> Tuple[QMenuBar, Dict[str, QAction]]:
 
     tools_menu.addSeparator()
 
+    menu_actions["fii_dii_data"] = tools_menu.addAction("FII DII Data")
+    menu_actions["fii_dii_data"].setShortcut("Ctrl+F")
+
     menu_actions["settings"] = tools_menu.addAction("Settings")
     menu_actions["settings"].setShortcut("Ctrl+,")
 

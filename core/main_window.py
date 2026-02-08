@@ -51,6 +51,8 @@ from core.trade_ledger import TradeLedger
 from utils.title_bar import TitleBar
 from utils.api_circuit_breaker import APICircuitBreaker
 from utils.about import show_about
+from dialogs.fii_dii_dialog import FIIDIIDialog
+from PySide6.QtCore import QTimer
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +74,7 @@ class ScalperMainWindow(QMainWindow):
         self.real_kite_client = real_kite_client
         self.trading_mode = 'paper' if isinstance(trader, PaperTradingManager) else 'live'
         self.trade_logger = TradeLogger(mode=self.trading_mode)
+
         self.position_manager = PositionManager(self.trader, self.trade_logger)
         self.config_manager = ConfigManager()
         self.instrument_data = {}
@@ -85,6 +88,7 @@ class ScalperMainWindow(QMainWindow):
         self.api_health_check_timer = QTimer(self)
         self.api_health_check_timer.timeout.connect(self._periodic_api_health_check)
         self.api_health_check_timer.start(30000)
+
         self.active_quick_order_dialog: Optional[QuickOrderDialog] = None
         self.active_order_confirmation_dialog: Optional[OrderConfirmationDialog] = None
         self.positions_dialog = None
@@ -93,6 +97,8 @@ class ScalperMainWindow(QMainWindow):
         self.pnl_history_dialog = None
         self.pending_orders_dialog = None
         self.option_chain_dialog = None
+        self.fii_dii_dialog = None
+
         self.pending_order_widgets = {}
         self.market_monitor_dialogs = []
         self.current_symbol = ""
@@ -138,6 +144,11 @@ class ScalperMainWindow(QMainWindow):
 
         self._processed_live_exit_orders: set[str] = set()
 
+        # 🔥 FIX: Cache position snapshots before exit to preserve entry data
+        # When a SELL order completes, the position may already be gone from API
+        # This cache maps tradingsymbol → Position snapshot at exit time
+        self._position_snapshots_for_exit: Dict[str, object] = {}
+
         self.live_order_monitor_timer = QTimer(self)
         self.live_order_monitor_timer.timeout.connect(self._check_live_completed_orders)
         self.live_order_monitor_timer.start(1000)  # 1s polling (safe)
@@ -146,14 +157,10 @@ class ScalperMainWindow(QMainWindow):
         self.statusBar().showMessage("Loading instruments...")
 
     def _on_market_data(self, data: list):
-        """
-        FIXED: Direct CVD processing BEFORE throttling.
-        This ensures CVD gets EVERY tick immediately.
-        """
-        # 1️⃣ Feed ticks to CVD engine FIRST (non-throttled)
+        # 1️⃣ CVD FIRST
         self.cvd_engine.process_ticks(data)
 
-        # 2️⃣ Then do throttle UI updates
+        # 3️⃣ Existing throttling logic
         for tick in data:
             if 'instrument_token' in tick:
                 self._latest_market_data[tick['instrument_token']] = tick
@@ -476,6 +483,7 @@ class ScalperMainWindow(QMainWindow):
         menu_actions['cvd_chart'].triggered.connect(self._show_cvd_chart_dialog)
         menu_actions['cvd_market_monitor'].triggered.connect(self._show_cvd_market_monitor_dialog)
         menu_actions['cvd_symbol_sets'].triggered.connect(self._show_cvd_symbol_set_dialog)
+        menu_actions['fii_dii_data'].triggered.connect(self._show_fii_dii_dialog)
 
     def _show_order_history_dialog(self):
         if not hasattr(self, 'order_history_dialog') or self.order_history_dialog is None:
@@ -1532,6 +1540,11 @@ class ScalperMainWindow(QMainWindow):
             try:
                 pos.is_exiting = True  # UI hint only, not state mutation
 
+                # 🔥 FIX: Snapshot position BEFORE exit for live trading
+                if self.trading_mode == "live":
+                    self._position_snapshots_for_exit[pos.tradingsymbol] = pos
+                    logger.debug(f"Cached position snapshot for {pos.tradingsymbol} (Bulk exit)")
+
                 order_id = self.trader.place_order(
                     variety=self.trader.VARIETY_REGULAR,
                     exchange=pos.exchange,
@@ -1681,6 +1694,12 @@ class ScalperMainWindow(QMainWindow):
                 f"(Qty: {exit_quantity}) | Order ID: {order_id}"
             )
 
+            # 🔥 FIX: Snapshot position IMMEDIATELY after placing order
+            # This preserves entry data before the position is removed from the API
+            if self.trading_mode == "live":
+                self._position_snapshots_for_exit[tradingsymbol] = original_position
+                logger.debug(f"Cached position snapshot for {tradingsymbol} (Live exit)")
+
             # --------------------------------------------------
             # PAPER MODE → UI only, no confirmation loop
             # --------------------------------------------------
@@ -1704,7 +1723,6 @@ class ScalperMainWindow(QMainWindow):
                     realized_pnl = (exit_price - entry_price) * filled_qty
                 else:
                     realized_pnl = (entry_price - exit_price) * filled_qty
-
 
                 self.statusBar().showMessage(
                     f"Exit confirmed. Realized P&L: ₹{realized_pnl:,.2f}",
@@ -1810,7 +1828,8 @@ class ScalperMainWindow(QMainWindow):
 
     def _get_contract_from_ladder(self, strike: float, option_type: OptionType) -> Optional[Contract]:
         if strike in self.strike_ladder.contracts:
-            return self.strike_ladder.contracts[strike].get(option_type.value)
+            ladder_key = self._option_type_to_ladder_key(option_type)
+            return self.strike_ladder.contracts[strike].get(ladder_key)
         return None
 
     @staticmethod
@@ -1951,7 +1970,6 @@ class ScalperMainWindow(QMainWindow):
         dialog.order_placed.connect(self._execute_single_strike_order)
         dialog.refresh_requested.connect(self._on_quick_order_refresh_request)
         dialog.finished.connect(lambda: setattr(self, 'active_quick_order_dialog', None))
-
 
     def _execute_single_strike_order(self, order_params: dict):
         contract_to_trade: Contract = order_params.get('contract')
@@ -2216,22 +2234,186 @@ class ScalperMainWindow(QMainWindow):
         return None
 
     def _play_sound(self, success: bool = True):
+        """
+        Play notification sound with guaranteed volume level.
+        Temporarily sets system volume to 80% to ensure audibility.
+        """
         try:
+            # Save current system volume
+            original_volume = self._get_system_volume()
+
+            if original_volume is not None:
+                # Set to 80% for notification
+                self._set_system_volume(80)
+
+            # Play sound
             sound_effect = QSoundEffect(self)
-            filename = "success.wav" if success else "fail.wav"
+            filename = "Pop.wav" if success else "fail.wav"
             base_path = os.path.dirname(os.path.abspath(__file__))
             assets_dir = os.path.join(base_path, "..", "assets")
             if not os.path.exists(assets_dir):
                 assets_dir = os.path.join(base_path, "assets")
             sound_path = os.path.join(assets_dir, filename)
+
             if os.path.exists(sound_path):
                 sound_effect.setSource(QUrl.fromLocalFile(sound_path))
-                sound_effect.setVolume(0.8)
+                sound_effect.setVolume(1.0)  # Max app volume since we control system volume
                 sound_effect.play()
+
+                # Restore original volume after sound plays (~1 second)
+                if original_volume is not None:
+                    QTimer.singleShot(1200, lambda: self._set_system_volume(original_volume))
             else:
                 logger.warning(f"Sound file not found: {sound_path}")
+
         except Exception as e:
             logger.error(f"Error playing sound: {e}")
+
+    def _get_system_volume(self) -> Optional[int]:
+        """Get current system volume (0-100). Returns None if unable to detect."""
+        try:
+            import platform
+            import subprocess
+
+            system = platform.system()
+
+            if system == "Linux":
+                # Try PulseAudio (most common)
+                try:
+                    result = subprocess.run(
+                        ['pactl', 'get-sink-volume', '@DEFAULT_SINK@'],
+                        capture_output=True,
+                        text=True,
+                        timeout=1
+                    )
+                    if result.returncode == 0:
+                        # Parse output: "Volume: front-left: 13107 /  20% / -41.79 dB"
+                        for part in result.stdout.split():
+                            if '%' in part:
+                                return int(part.rstrip('%'))
+                except (FileNotFoundError, subprocess.TimeoutExpired):
+                    pass
+
+                # Try ALSA as fallback
+                try:
+                    result = subprocess.run(
+                        ['amixer', 'get', 'Master'],
+                        capture_output=True,
+                        text=True,
+                        timeout=1
+                    )
+                    if result.returncode == 0:
+                        # Parse: "[20%]"
+                        import re
+                        match = re.search(r'\[(\d+)%\]', result.stdout)
+                        if match:
+                            return int(match.group(1))
+                except (FileNotFoundError, subprocess.TimeoutExpired):
+                    pass
+
+            elif system == "Windows":
+                # Windows volume control via comtypes
+                try:
+                    from comtypes import CLSCTX_ALL
+                    from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+
+                    devices = AudioUtilities.GetSpeakers()
+                    interface = devices.Activate(
+                        IAudioEndpointVolume._iid_, CLSCTX_ALL, None
+                    )
+                    volume = interface.QueryInterface(IAudioEndpointVolume)
+                    current_volume = volume.GetMasterVolumeLevelScalar()
+                    return int(current_volume * 100)
+                except ImportError:
+                    logger.debug("pycaw not installed - install with: pip install pycaw comtypes")
+                except Exception:
+                    pass
+
+            elif system == "Darwin":  # macOS
+                try:
+                    result = subprocess.run(
+                        ['osascript', '-e', 'output volume of (get volume settings)'],
+                        capture_output=True,
+                        text=True,
+                        timeout=1
+                    )
+                    if result.returncode == 0:
+                        return int(result.stdout.strip())
+                except (FileNotFoundError, subprocess.TimeoutExpired):
+                    pass
+
+            return None
+
+        except Exception as e:
+            logger.debug(f"Could not get system volume: {e}")
+            return None
+
+    def _set_system_volume(self, volume: int):
+        """Set system volume to percentage (0-100)."""
+        try:
+            import platform
+            import subprocess
+
+            volume = max(0, min(100, volume))  # Clamp to 0-100
+            system = platform.system()
+
+            if system == "Linux":
+                # Try PulseAudio
+                try:
+                    subprocess.run(
+                        ['pactl', 'set-sink-volume', '@DEFAULT_SINK@', f'{volume}%'],
+                        timeout=1,
+                        check=False
+                    )
+                    logger.debug(f"Set system volume to {volume}% (PulseAudio)")
+                    return
+                except (FileNotFoundError, subprocess.TimeoutExpired):
+                    pass
+
+                # Try ALSA
+                try:
+                    subprocess.run(
+                        ['amixer', 'set', 'Master', f'{volume}%'],
+                        timeout=1,
+                        check=False
+                    )
+                    logger.debug(f"Set system volume to {volume}% (ALSA)")
+                    return
+                except (FileNotFoundError, subprocess.TimeoutExpired):
+                    pass
+
+            elif system == "Windows":
+                try:
+                    from comtypes import CLSCTX_ALL
+                    from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+
+                    devices = AudioUtilities.GetSpeakers()
+                    interface = devices.Activate(
+                        IAudioEndpointVolume._iid_, CLSCTX_ALL, None
+                    )
+                    volume_interface = interface.QueryInterface(IAudioEndpointVolume)
+                    volume_interface.SetMasterVolumeLevelScalar(volume / 100.0, None)
+                    logger.debug(f"Set system volume to {volume}% (Windows)")
+                    return
+                except ImportError:
+                    logger.debug("pycaw not installed")
+                except Exception:
+                    pass
+
+            elif system == "Darwin":  # macOS
+                try:
+                    subprocess.run(
+                        ['osascript', '-e', f'set volume output volume {volume}'],
+                        timeout=1,
+                        check=False
+                    )
+                    logger.debug(f"Set system volume to {volume}% (macOS)")
+                    return
+                except (FileNotFoundError, subprocess.TimeoutExpired):
+                    pass
+
+        except Exception as e:
+            logger.debug(f"Could not set system volume: {e}")
 
     @staticmethod
     def _calculate_smart_limit_price(contract: Contract) -> float:
@@ -2745,7 +2927,10 @@ class ScalperMainWindow(QMainWindow):
         target_strike = atm_strike + (offset * strike_step)
         option_type = self.buy_exit_panel.option_type
 
-        contract = self.strike_ladder.contracts.get(target_strike, {}).get(option_type.value)
+        ladder_key = self._option_type_to_ladder_key(option_type)
+        contract = self.strike_ladder.contracts.get(
+            target_strike, {}
+        ).get(ladder_key)
 
         if not contract:
             QMessageBox.warning(
@@ -2791,10 +2976,20 @@ class ScalperMainWindow(QMainWindow):
             # This design correctly supports partial exits and scaling out.
             # Do NOT replace this with cached entry data or dict snapshots.
 
-            original_position = self.position_manager.get_position(tradingsymbol)
+            # 🔥 FIX: Try cached snapshot first, then current position
+            # The position may already be removed from API after order completion
+            original_position = self._position_snapshots_for_exit.get(tradingsymbol)
 
             if not original_position:
-                continue  # Not an exit we care about
+                # Fallback: Try getting current position (may still exist for partial exits)
+                original_position = self.position_manager.get_position(tradingsymbol)
+
+            if not original_position:
+                logger.warning(
+                    f"[LIVE] Cannot record exit trade for {tradingsymbol} - "
+                    f"no position snapshot or current position found (order_id: {order_id})"
+                )
+                continue
 
             self._record_completed_exit_trade(
                 confirmed_order=order,
@@ -2803,6 +2998,11 @@ class ScalperMainWindow(QMainWindow):
             )
 
             self._processed_live_exit_orders.add(order_id)
+
+            # 🔥 FIX: Clean up snapshot after successful recording
+            if tradingsymbol in self._position_snapshots_for_exit:
+                del self._position_snapshots_for_exit[tradingsymbol]
+                logger.debug(f"Removed position snapshot for {tradingsymbol}")
 
     def _on_strike_chart_requested(self, contract: Contract):
         """Open CVD Single Chart Dialog for the selected strike"""
@@ -2866,3 +3066,18 @@ class ScalperMainWindow(QMainWindow):
                 "Chart Error",
                 f"Failed to open chart for {contract.tradingsymbol}:\n{str(e)}"
             )
+
+    @staticmethod
+    def _option_type_to_ladder_key(option_type: OptionType) -> str:
+        return "CE" if option_type == OptionType.CALL else "PE"
+
+    def _show_fii_dii_dialog(self):
+        """Show FII/DII data dialog"""
+        if self.fii_dii_dialog is None:
+            self.fii_dii_dialog = FIIDIIDialog(parent=self)
+
+        if self.fii_dii_dialog.isVisible():
+            self.fii_dii_dialog.raise_()
+            self.fii_dii_dialog.activateWindow()
+        else:
+            self.fii_dii_dialog.show()

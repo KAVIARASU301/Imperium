@@ -82,7 +82,7 @@ class PerformanceDialog(QDialog):
         # Initial data load
         self.refresh()
 
-        logger.info(f"PerformanceDialog initialized for mode: {self.mode}")
+        logger.debug(f"PerformanceDialog initialized for mode: {self.mode}")
 
     # ------------------------------------------------------------------
     # UI
@@ -284,9 +284,11 @@ class PerformanceDialog(QDialog):
 
             rows = cur.fetchall()
 
-            logger.debug(f"[{self.mode}] Fetched {len(rows)} trading days from ledger")
+            if not rows:
+                logger.debug(f"[{self.mode}] No trading data found")
 
             return {row[0]: row[1] for row in rows}
+
         except Exception as e:
             logger.error(f"[{self.mode}] Error fetching PnL by day: {e}", exc_info=True)
             return {}
@@ -303,18 +305,32 @@ class PerformanceDialog(QDialog):
         Refresh performance metrics directly from TradeLedger.
         No mode filtering needed - DB is already mode-specific.
         """
-        logger.info(f"[{self.mode}] Refreshing performance dialog")
-
         pnl_by_day = self._get_pnl_by_day_from_ledger()
 
         if not pnl_by_day:
-            logger.info(f"[{self.mode}] No trading data found")
+            logger.debug(f"[{self.mode}] No trading data found")
             self._clear_metrics()
             self.chart.clear()
+            self._show_empty_chart_message()
             return
 
         self._update_metrics(pnl_by_day)
         self._plot_equity(pnl_by_day)
+
+    def _show_empty_chart_message(self):
+        """Display a message when there's no data to plot"""
+        self.chart.clear()
+        text_item = pg.TextItem(
+            "No trading data available yet.\nComplete some trades to see your performance!",
+            anchor=(0.5, 0.5),
+            color='#A9B1C3'
+        )
+        # Position text in center
+        self.chart.addItem(text_item)
+        view_range = self.chart.viewRange()
+        x_center = sum(view_range[0]) / 2
+        y_center = sum(view_range[1]) / 2
+        text_item.setPos(x_center, y_center)
 
     def _clear_metrics(self):
         """Reset all metrics to default values"""
@@ -397,8 +413,6 @@ class PerformanceDialog(QDialog):
         setv("best_day", f"₹{best_day:,.0f}", "#4CAF50")
         setv("worst_day", f"₹{worst_day:,.0f}", "#F85149")
 
-        logger.info(f"[{self.mode}] Metrics updated: {total_trades} trades, Total PnL: ₹{total_pnl:,.0f}")
-
     def _plot_equity(self, pnl_by_day: dict):
         """
         Plots cumulative PnL using UNIX timestamps for DateAxisItem.
@@ -409,35 +423,56 @@ class PerformanceDialog(QDialog):
         if not pnl_by_day:
             return
 
-        # --- Sort dates ---
+        # Sort dates
         sorted_items = sorted(pnl_by_day.items(), key=lambda x: x[0])
 
         x_vals = []
         y_vals = []
-
         cumulative_pnl = 0.0
 
         for session_date, day_pnl in sorted_items:
             try:
-                # Convert YYYY-MM-DD → UNIX timestamp (start of day)
-                dt = datetime.strptime(session_date, "%Y-%m-%d")
+                # Handle different date formats
+                if isinstance(session_date, str):
+                    # String date: YYYY-MM-DD
+                    if len(session_date) == 10 and session_date.count('-') == 2:
+                        dt = datetime.strptime(session_date, "%Y-%m-%d")
+                    else:
+                        logger.warning(f"Unexpected date format: {session_date}")
+                        continue
+                elif isinstance(session_date, datetime):
+                    # Already a datetime object
+                    dt = session_date
+                elif hasattr(session_date, 'year') and hasattr(session_date, 'month'):
+                    # datetime.date object (from SQLite with PARSE_DECLTYPES)
+                    from datetime import date as date_type
+                    if isinstance(session_date, date_type):
+                        dt = datetime.combine(session_date, datetime.min.time())
+                    else:
+                        logger.warning(f"Unknown date-like object: {type(session_date)} - {session_date}")
+                        continue
+                else:
+                    logger.warning(f"Unknown date type: {type(session_date)} - {session_date}")
+                    continue
+
                 ts = dt.timestamp()
-            except Exception:
-                logger.warning(f"Invalid session_date skipped: {session_date}")
+                cumulative_pnl += day_pnl
+                x_vals.append(ts)
+                y_vals.append(cumulative_pnl)
+
+            except Exception as e:
+                logger.error(f"Error processing date {session_date}: {e}", exc_info=True)
                 continue
 
-            cumulative_pnl += day_pnl
-            x_vals.append(ts)
-            y_vals.append(cumulative_pnl)
-
         if not x_vals:
+            logger.warning(f"[{self.mode}] No valid data points to plot")
             return
 
-        # --- Plot equity curve ---
+        # Plot equity curve
         pen = pg.mkPen("#29C7C9", width=2)
         self.chart.plot(x_vals, y_vals, pen=pen, symbol="o", symbolSize=6)
 
-        # --- 🔑 CRITICAL FIX: Handle single-day data ---
+        # Handle single-day vs multi-day display
         if len(x_vals) == 1:
             # Expand ±12 hours to create visible range
             half_day = 12 * 60 * 60
