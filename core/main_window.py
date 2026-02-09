@@ -421,7 +421,6 @@ class ScalperMainWindow(QMainWindow):
         self._setup_menu_bar()
 
         QTimer.singleShot(3000, self._update_account_info)
-        QTimer.singleShot(1500, self._show_startup_journal)
 
     def _create_main_widgets(self):
         self.buy_exit_panel = BuyExitPanel(self.trader)
