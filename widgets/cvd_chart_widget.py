@@ -73,8 +73,8 @@ class CVDChartWidget(QWidget):
 
         self._setup_ui()
         self._setup_crosshair()
-        # self._load_historical()
-        # self._start_refresh_timer()
+        if self.instrument_token and isinstance(self.instrument_token, int):
+            self._start_refresh_timer()
 
         # Pulse animation timer (smooth decay)
         self.pulse_timer = QTimer(self)
@@ -350,6 +350,9 @@ class CVDChartWidget(QWidget):
         """
 
         # --- Hard guards ---
+        if not self.instrument_token or not isinstance(self.instrument_token, int):
+            return
+
         if self._historical_failed:
             return
 

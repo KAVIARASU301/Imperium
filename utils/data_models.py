@@ -58,6 +58,7 @@ class Position:
     trailing_stop_loss: Optional[float] = field(default=None)
     stop_loss_order_id: Optional[str] = field(default=None)
     target_order_id: Optional[str] = field(default=None)
+    group_name: Optional[str] = field(default=None)
 
     def update_pnl(self, new_ltp: float):
         """Recalculate P&L based on updated LTP"""

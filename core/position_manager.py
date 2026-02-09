@@ -136,6 +136,7 @@ class PositionManager(QObject):
                 pos.stop_loss_price = existing_pos.stop_loss_price
                 pos.target_price = existing_pos.target_price
                 pos.trailing_stop_loss = existing_pos.trailing_stop_loss
+                pos.group_name = getattr(existing_pos, "group_name", None)
 
                 # --------------------------------------------------
                 # 🔥 TRUE averaging → quantity increase ONLY
@@ -264,7 +265,8 @@ class PositionManager(QObject):
                 # 🔥 FIX: Initialize SL/TP fields as None (will be preserved from existing if available)
                 stop_loss_price=None,
                 target_price=None,
-                trailing_stop_loss=None
+                trailing_stop_loss=None,
+                group_name=None
             )
         except KeyError as e:
             logger.error(f"Missing key {e} in position data: {api_pos}")

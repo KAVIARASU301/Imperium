@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
     QMessageBox,
+    QLineEdit,
 )
 
 from utils.data_models import Contract
@@ -44,7 +45,7 @@ class StrategyBuilderDialog(QDialog):
         expiry: str,
         default_lots: int,
         product: str,
-        on_execute: Callable[[List[dict]], None],
+        on_execute: Callable[[List[dict], Optional[str]], None],
         parent: Optional[QWidget] = None,
     ):
         super().__init__(parent)
@@ -72,6 +73,15 @@ class StrategyBuilderDialog(QDialog):
         header = QLabel("Strategy Builder")
         header.setFont(QFont("Segoe UI", 16, QFont.Weight.Bold))
         layout.addWidget(header)
+
+        name_row = QHBoxLayout()
+        name_label = QLabel("Strategy Name")
+        name_label.setStyleSheet("color: #C3CAD8; font-weight: 600;")
+        self.strategy_name_input = QLineEdit()
+        self.strategy_name_input.setPlaceholderText("Optional name for grouping positions")
+        name_row.addWidget(name_label)
+        name_row.addWidget(self.strategy_name_input, 1)
+        layout.addLayout(name_row)
 
         meta_layout = QHBoxLayout()
         self.symbol_label = QLabel(f"Symbol: {self.symbol}")
@@ -425,5 +435,8 @@ class StrategyBuilderDialog(QDialog):
                 "side": leg.side,
             })
 
-        self.on_execute(order_params_list)
+        strategy_name = self.strategy_name_input.text().strip()
+        if not strategy_name:
+            strategy_name = self.template_combo.currentText()
+        self.on_execute(order_params_list, strategy_name)
         self.accept()

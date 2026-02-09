@@ -2032,6 +2032,7 @@ class ScalperMainWindow(QMainWindow):
         stop_loss_price = order_params.get('stop_loss_price')
         target_price = order_params.get('target_price')
         trailing_stop_loss = order_params.get('trailing_stop_loss')
+        group_name = order_params.get('group_name')
 
         if not contract_to_trade or not quantity:
             logger.error("Invalid parameters for single strike order.")
@@ -2109,7 +2110,8 @@ class ScalperMainWindow(QMainWindow):
                                 product=product,
                                 stop_loss_price=stop_loss_price,
                                 target_price=target_price,
-                                trailing_stop_loss=trailing_stop_loss if trailing_stop_loss and trailing_stop_loss > 0 else None
+                                trailing_stop_loss=trailing_stop_loss if trailing_stop_loss and trailing_stop_loss > 0 else None,
+                                group_name=group_name
                             )
                             self.position_manager.add_position(new_position)
                             self.trade_logger.log_trade(confirmed_order_api_data)
@@ -2138,7 +2140,7 @@ class ScalperMainWindow(QMainWindow):
             self._handle_order_error(e, order_params)
             self._show_order_results([], [{'symbol': contract_to_trade.tradingsymbol, 'error': str(e)}])
 
-    def _execute_strategy_orders(self, order_params_list: List[dict]):
+    def _execute_strategy_orders(self, order_params_list: List[dict], strategy_name: Optional[str] = None):
         if not order_params_list:
             return
 
@@ -2154,6 +2156,7 @@ class ScalperMainWindow(QMainWindow):
                 "transaction_type": transaction_type,
                 "order_type": self.trader.ORDER_TYPE_MARKET,
                 "product": order_params.get("product", self.settings.get("default_product", self.trader.PRODUCT_MIS)),
+                "group_name": strategy_name or order_params.get("group_name"),
             }
             self._execute_single_strike_order(mapped_params)
         # Only refresh for live trading, paper trading already scheduled refresh above
@@ -2591,7 +2594,8 @@ class ScalperMainWindow(QMainWindow):
             'option_type': position.contract.option_type,
             'stop_loss_price': position.stop_loss_price,
             'target_price': position.target_price,
-            'trailing_stop_loss': position.trailing_stop_loss
+            'trailing_stop_loss': position.trailing_stop_loss,
+            'group_name': position.group_name
         }
 
     def _refresh_orders(self):

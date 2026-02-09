@@ -1,11 +1,11 @@
 import logging
 import json
 import os
-from typing import Dict, List
+from typing import Dict, List, Optional
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QTableWidget, QTableWidgetItem, QHeaderView, QApplication,
-    QMenu, QAbstractItemView, QDialog, QFormLayout, QDoubleSpinBox, QPushButton
+    QMenu, QAbstractItemView, QDialog, QFormLayout, QDoubleSpinBox, QPushButton, QInputDialog
 )
 from PySide6.QtCore import Qt, Signal, QPoint, QTimer, QEvent
 from PySide6.QtGui import QColor, QFont, QFontMetrics
@@ -39,6 +39,10 @@ class PositionsTable(QWidget):
         self.table_name = "positions_table"
         self.positions: Dict[str, dict] = {}
         self.position_row_map: Dict[str, int] = {}
+        self.group_row_map: Dict[str, int] = {}
+        self.group_members: Dict[str, List[str]] = {}
+        self.group_order: List[str] = []
+        self.group_sl_tp: Dict[str, Dict[str, float]] = {}
 
         self._hovered_row = -1
 
@@ -53,7 +57,7 @@ class PositionsTable(QWidget):
         self._portfolio_tp = None
         self._drag_active = False
         self.visual_order: List[str] = []
-        self.visual_order = self._load_visual_order()
+        self._load_table_state()
 
     # ------------------------------------------------------------------
     # UI
@@ -203,37 +207,78 @@ class PositionsTable(QWidget):
             return
 
         row = item.row()
+        row_kind = self._row_kind(row)
+        if row_kind == "GROUP_SLTP":
+            row_kind = "GROUP"
+        if row_kind == "SLTP":
+            row_kind = "POSITION"
+        selected_symbols = self._selected_position_symbols()
 
-        # ✅ Context menu ONLY for main position rows
-        if row not in self.position_row_map.values():
+        if not row_kind:
             return
-
-        symbol_item = self.table.item(row, self.SYMBOL_COL)
-        if not symbol_item:
-            return
-
-        symbol = symbol_item.text().split()[0]
-        if symbol not in self.positions:
-            return
-
-        pos_data = self.positions[symbol]
 
         menu = QMenu(self)
 
-        # --- Modify SL / TP ---
-        modify_action = menu.addAction("Modify SL / Target")
-        modify_action.triggered.connect(
-            lambda: self.modify_sl_tp_requested.emit(symbol)
-        )
+        if selected_symbols:
+            create_group_action = menu.addAction("Create Group from Selected")
+            create_group_action.triggered.connect(
+                lambda: self._create_group_from_selection(selected_symbols)
+            )
 
-        menu.addSeparator()
+            if self.group_order:
+                add_to_group = menu.addMenu("Add Selected to Group")
+                for group_name in self.group_order:
+                    action = add_to_group.addAction(group_name)
+                    action.triggered.connect(
+                        lambda _, g=group_name: self._add_symbols_to_group(selected_symbols, g)
+                    )
+            menu.addSeparator()
 
-        # --- Exit Position (danger action) ---
-        exit_action = menu.addAction("Exit Position")
-        exit_action.setObjectName("exitAction")
-        exit_action.triggered.connect(
-            lambda: self.exit_requested.emit(pos_data)
-        )
+        if row_kind == "GROUP":
+            group_name = self._row_group(row)
+            if not group_name:
+                return
+            alter = group_name in self.group_sl_tp
+            set_text = "Alter Group SL / Target" if alter else "Set Group SL / Target"
+            set_action = menu.addAction(set_text)
+            set_action.triggered.connect(
+                lambda: self._open_group_sl_tp_dialog(group_name, alter=alter)
+            )
+            clear_action = menu.addAction("Clear Group SL / Target")
+            clear_action.setEnabled(group_name in self.group_sl_tp)
+            clear_action.triggered.connect(lambda: self._clear_group_sl_tp(group_name))
+
+            menu.addSeparator()
+            ungroup_action = menu.addAction("Ungroup Positions")
+            ungroup_action.triggered.connect(lambda: self._ungroup_group(group_name))
+
+        if row_kind == "POSITION":
+            symbol = self._row_symbol(row)
+            if not symbol or symbol not in self.positions:
+                return
+
+            pos_data = self.positions[symbol]
+
+            modify_action = menu.addAction("Modify SL / Target")
+            modify_action.triggered.connect(
+                lambda: self.modify_sl_tp_requested.emit(symbol)
+            )
+
+            menu.addSeparator()
+
+            exit_action = menu.addAction("Exit Position")
+            exit_action.setObjectName("exitAction")
+            exit_action.triggered.connect(
+                lambda: self.exit_requested.emit(pos_data)
+            )
+
+            group_name = self._symbol_group(symbol)
+            if group_name:
+                menu.addSeparator()
+                remove_group_action = menu.addAction("Remove from Group")
+                remove_group_action.triggered.connect(
+                    lambda: self._remove_symbol_from_group(symbol, group_name)
+                )
 
         menu.exec_(self.table.viewport().mapToGlobal(pos))
 
@@ -298,33 +343,35 @@ class PositionsTable(QWidget):
 
     def update_positions(self, positions_data: List[dict]):
         self.positions = {p['tradingsymbol']: p for p in positions_data}
+        live_symbols = set(self.positions.keys())
+
+        self._sync_group_memberships(positions_data, live_symbols)
 
         if not self.visual_order:
-            # First run, no saved order
-            self.visual_order = list(self.positions.keys())
+            self.visual_order = [s for s in self.positions.keys() if not self._symbol_group(s)]
         else:
-            # Merge saved order with live positions
-            live = list(self.positions.keys())
-
-            # Keep existing order for still-open positions
-            self.visual_order = [s for s in self.visual_order if s in live]
-
-            # Append any new positions at the end
-            for s in live:
-                if s not in self.visual_order:
+            self.visual_order = [s for s in self.visual_order if s in live_symbols and not self._symbol_group(s)]
+            for s in self.positions.keys():
+                if s not in self.visual_order and not self._symbol_group(s):
                     self.visual_order.append(s)
 
+        self._prune_empty_groups()
         self._rebuild_table_from_order()
 
     def _rebuild_table_from_order(self):
         self.table.setRowCount(0)
         self.position_row_map.clear()
+        self.group_row_map.clear()
+
+        for group_name in self.group_order:
+            members = self.group_members.get(group_name, [])
+            if not members:
+                continue
+            self._add_group_rows(group_name, members)
 
         for symbol in self.visual_order:
-            pos = self.positions.get(symbol)
-            if not pos:
-                continue
-            self._add_position_rows(pos)
+            if symbol in self.positions:
+                self._add_position_rows(self.positions[symbol])
 
         self._update_footer()
 
@@ -338,6 +385,8 @@ class PositionsTable(QWidget):
         self.table.setRowHeight(main_row, 32)
         self.table.setProperty(f"row_pid_{main_row}", symbol)
         self.table.setProperty(f"row_role_{main_row}", "MAIN")
+        self.table.setProperty(f"row_kind_{main_row}", "POSITION")
+        self.table.setProperty(f"row_group_{main_row}", self._symbol_group(symbol))
 
         self._set_symbol_item(main_row, pos_data)
         self._set_item(main_row, self.QUANTITY_COL, pos_data.get('quantity', 0))
@@ -357,6 +406,32 @@ class PositionsTable(QWidget):
             self._set_sltp_row(sltp_row, pos_data)
             self.table.setProperty(f"row_pid_{sltp_row}", symbol)
             self.table.setProperty(f"row_role_{sltp_row}", "SLTP")
+            self.table.setProperty(f"row_kind_{sltp_row}", "SLTP")
+
+    def _add_group_rows(self, group_name: str, members: List[str]):
+        group_row = self.table.rowCount()
+        self.table.insertRow(group_row)
+        self.table.setRowHeight(group_row, 30)
+        self.group_row_map[group_name] = group_row
+        self.table.setProperty(f"row_kind_{group_row}", "GROUP")
+        self.table.setProperty(f"row_group_{group_row}", group_name)
+
+        group_pnl = sum(self.positions.get(symbol, {}).get('pnl', 0.0) for symbol in members)
+        self._set_group_header_items(group_row, group_name, group_pnl)
+
+        if group_name in self.group_sl_tp:
+            sltp_row = self.table.rowCount()
+            self.table.insertRow(sltp_row)
+            self.table.setRowHeight(sltp_row, 30)
+            self.table.setProperty(f"row_kind_{sltp_row}", "GROUP_SLTP")
+            self.table.setProperty(f"row_group_{sltp_row}", group_name)
+            self._set_group_sltp_row(sltp_row, self.group_sl_tp[group_name])
+
+        for symbol in members:
+            pos = self.positions.get(symbol)
+            if not pos:
+                continue
+            self._add_position_rows(pos)
 
     # ------------------------------------------------------------------
     # Helpers (UNCHANGED)
@@ -364,11 +439,13 @@ class PositionsTable(QWidget):
 
     def _update_footer(self):
         total_pnl = sum(pos.get('pnl', 0.0) for pos in self.positions.values())
-        self.total_pnl_value.setText(f"{total_pnl:,.0f}")
+        sign = "" if total_pnl >= 0 else "-"
+        formatted = f"₹ {sign}{abs(total_pnl):,.0f}"
+        self.total_pnl_value.setText(formatted)
 
         color = "#1DE9B6" if total_pnl >= 0 else "#F85149"
         self.total_pnl_value.setStyleSheet(
-            f"color: {color}; font-weight: 700; font-size: 14px;"
+            f"color: {color}; font-weight: 700; font-size: 13px;"
         )
 
     def _set_item(self, row, col, data, is_price=False):
@@ -445,32 +522,293 @@ class PositionsTable(QWidget):
         self.table.setCellWidget(row, self.SYMBOL_COL, container)
         self.table.setSpan(row, self.SYMBOL_COL, 1, self.table.columnCount())
 
+    def _set_group_header_items(self, row: int, group_name: str, group_pnl: float):
+        label = f"📦 {group_name}"
+        symbol_item = QTableWidgetItem(label)
+        symbol_item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        symbol_font = QFont()
+        symbol_font.setBold(True)
+        symbol_item.setFont(symbol_font)
+        symbol_item.setForeground(QColor("#E5E7EB"))
+        symbol_item.setBackground(QColor("#0E2533"))
+        self.table.setItem(row, self.SYMBOL_COL, symbol_item)
+
+        for col in (self.QUANTITY_COL, self.AVG_PRICE_COL, self.LTP_COL):
+            placeholder = QTableWidgetItem("")
+            placeholder.setFlags(placeholder.flags() ^ Qt.ItemIsEditable)
+            placeholder.setBackground(QColor("#0E2533"))
+            self.table.setItem(row, col, placeholder)
+
+        pnl_item = QTableWidgetItem(f"{group_pnl:,.0f}")
+        pnl_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        pnl_item.setForeground(QColor("#1DE9B6") if group_pnl >= 0 else QColor("#F85149"))
+        pnl_font = QFont()
+        pnl_font.setBold(True)
+        pnl_item.setFont(pnl_font)
+        pnl_item.setBackground(QColor("#0E2533"))
+        self.table.setItem(row, self.PNL_COL, pnl_item)
+
+    def _set_group_sltp_row(self, row: int, sltp_data: Dict[str, float]):
+        sl = sltp_data.get("sl")
+        tp = sltp_data.get("tp")
+
+        parts = []
+        if sl is not None:
+            parts.append(
+                f"<span style='color:#F87171;'>Group SL</span> "
+                f"<span style='color:#E5E7EB;'>₹{abs(sl):,.0f}</span>"
+            )
+        if tp is not None:
+            parts.append(
+                f"<span style='color:#34D399;'>Group TP</span> "
+                f"<span style='color:#E5E7EB;'>₹{tp:,.0f}</span>"
+            )
+
+        label = QLabel("  •  ".join(parts) if parts else "Group SL/TP: —")
+        label.setTextFormat(Qt.RichText)
+        label.setAlignment(Qt.AlignRight | Qt.AlignTop)
+        label.setStyleSheet("""
+            QLabel {
+                font-family: Segoe UI;
+                font-size: 12px;
+                font-weight: 500;
+                color: #9CA3AF;
+            }
+        """)
+
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 2, 6, 0)
+        layout.addWidget(label)
+        layout.setAlignment(Qt.AlignTop | Qt.AlignRight)
+
+        self.table.setCellWidget(row, self.SYMBOL_COL, container)
+        self.table.setSpan(row, self.SYMBOL_COL, 1, self.table.columnCount())
+
+    def _row_kind(self, row: int) -> Optional[str]:
+        return self.table.property(f"row_kind_{row}")
+
+    def _row_group(self, row: int) -> Optional[str]:
+        return self.table.property(f"row_group_{row}")
+
+    def _row_symbol(self, row: int) -> Optional[str]:
+        return self.table.property(f"row_pid_{row}")
+
+    def _selected_position_symbols(self) -> List[str]:
+        selected_symbols = []
+        for selection_range in self.table.selectedRanges():
+            for row in range(selection_range.topRow(), selection_range.bottomRow() + 1):
+                if self._row_kind(row) != "POSITION":
+                    continue
+                symbol = self._row_symbol(row)
+                if symbol and symbol not in selected_symbols:
+                    selected_symbols.append(symbol)
+        return selected_symbols
+
+    def _create_group_from_selection(self, symbols: List[str]):
+        if not symbols:
+            return
+        group_name, ok = QInputDialog.getText(self, "Create Group", "Group name:")
+        if not ok or not group_name.strip():
+            return
+        group_name = group_name.strip()
+        self._add_symbols_to_group(symbols, group_name)
+
+    def _add_symbols_to_group(self, symbols: List[str], group_name: str):
+        for symbol in symbols:
+            self._assign_symbol_to_group(symbol, group_name, append=True)
+        self._rebuild_table_from_order()
+        self._save_table_state()
+
+    def _remove_symbol_from_group(self, symbol: str, group_name: str):
+        if group_name not in self.group_members:
+            return
+        self.group_members[group_name] = [s for s in self.group_members[group_name] if s != symbol]
+        if symbol not in self.visual_order:
+            self.visual_order.append(symbol)
+        if not self.group_members[group_name]:
+            self.group_members.pop(group_name, None)
+            self.group_sl_tp.pop(group_name, None)
+            self.group_order = [g for g in self.group_order if g != group_name]
+        self._rebuild_table_from_order()
+        self._save_table_state()
+
+    def _ungroup_group(self, group_name: str):
+        members = self.group_members.pop(group_name, [])
+        self.group_sl_tp.pop(group_name, None)
+        self.group_order = [g for g in self.group_order if g != group_name]
+        for symbol in members:
+            if symbol not in self.visual_order:
+                self.visual_order.append(symbol)
+        self._rebuild_table_from_order()
+        self._save_table_state()
+
+    def _open_group_sl_tp_dialog(self, group_name: str, alter: bool = False):
+        if not group_name:
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Alter Group Risk" if alter else "Set Group Risk")
+        dialog.setFixedWidth(360)
+
+        existing = self.group_sl_tp.get(group_name, {})
+        default_sl = abs(existing.get("sl")) if alter and existing.get("sl") is not None else 0
+        default_tp = abs(existing.get("tp")) if alter and existing.get("tp") is not None else 0
+
+        main_layout = QVBoxLayout(dialog)
+        main_layout.setSpacing(14)
+
+        title = QLabel(f"{group_name} SL / TP")
+        title.setStyleSheet("font-size: 15px; font-weight: 700;")
+        main_layout.addWidget(title)
+
+        form = QFormLayout()
+        form.setSpacing(10)
+
+        sl_spin = QDoubleSpinBox()
+        sl_spin.setRange(0, 1_000_000)
+        sl_spin.setDecimals(0)
+        sl_spin.setSingleStep(500)
+        sl_spin.setValue(default_sl)
+        sl_spin.setPrefix("₹ ")
+
+        tp_spin = QDoubleSpinBox()
+        tp_spin.setRange(0, 5_000_000)
+        tp_spin.setDecimals(0)
+        tp_spin.setSingleStep(500)
+        tp_spin.setValue(default_tp)
+        tp_spin.setPrefix("₹ ")
+
+        form.addRow("Stop Loss (₹)", sl_spin)
+        form.addRow("Target (₹)", tp_spin)
+
+        main_layout.addLayout(form)
+
+        btn = QPushButton("SAVE GROUP SL / TP")
+        btn.setFixedHeight(34)
+        btn.clicked.connect(
+            lambda: (
+                self._set_group_sl_tp(group_name, sl_spin.value(), tp_spin.value()),
+                dialog.accept()
+            )
+        )
+
+        main_layout.addWidget(btn)
+        self._position_dialog_above_footer(dialog)
+        dialog.exec()
+
+    def _set_group_sl_tp(self, group_name: str, sl: float, tp: float):
+        sl_value = -abs(sl) if sl > 0 else None
+        tp_value = abs(tp) if tp > 0 else None
+        if sl_value is None and tp_value is None:
+            self.group_sl_tp.pop(group_name, None)
+        else:
+            self.group_sl_tp[group_name] = {"sl": sl_value, "tp": tp_value}
+        self._rebuild_table_from_order()
+        self._save_table_state()
+
+    def _clear_group_sl_tp(self, group_name: str):
+        if group_name in self.group_sl_tp:
+            self.group_sl_tp.pop(group_name, None)
+            self._rebuild_table_from_order()
+            self._save_table_state()
+
+    def _symbol_group(self, symbol: str) -> Optional[str]:
+        for group_name, members in self.group_members.items():
+            if symbol in members:
+                return group_name
+        return None
+
+    def _sync_group_memberships(self, positions_data: List[dict], live_symbols: set):
+        for group_name, members in list(self.group_members.items()):
+            self.group_members[group_name] = [s for s in members if s in live_symbols]
+            if not self.group_members[group_name]:
+                self.group_members.pop(group_name, None)
+                self.group_sl_tp.pop(group_name, None)
+
+        self.group_order = [g for g in self.group_order if g in self.group_members]
+
+        for pos in positions_data:
+            symbol = pos.get('tradingsymbol')
+            group_name = pos.get('group_name')
+            if not symbol or not group_name:
+                continue
+            self._assign_symbol_to_group(symbol, group_name, append=True)
+
+        self._prune_empty_groups()
+
+    def _assign_symbol_to_group(self, symbol: str, group_name: str, append: bool = True):
+        current_group = self._symbol_group(symbol)
+        if current_group == group_name:
+            return
+
+        if current_group and symbol in self.group_members.get(current_group, []):
+            self.group_members[current_group] = [s for s in self.group_members[current_group] if s != symbol]
+            if not self.group_members[current_group]:
+                self.group_members.pop(current_group, None)
+                self.group_sl_tp.pop(current_group, None)
+                self.group_order = [g for g in self.group_order if g != current_group]
+
+        if group_name not in self.group_members:
+            self.group_members[group_name] = []
+            self.group_order.append(group_name)
+
+        if symbol in self.visual_order:
+            self.visual_order.remove(symbol)
+
+        if symbol in self.group_members[group_name]:
+            self.group_members[group_name].remove(symbol)
+
+        if append:
+            self.group_members[group_name].append(symbol)
+        else:
+            self.group_members[group_name].insert(0, symbol)
+
+    def _prune_empty_groups(self):
+        for group_name in list(self.group_members.keys()):
+            if not self.group_members[group_name]:
+                self.group_members.pop(group_name, None)
+                self.group_sl_tp.pop(group_name, None)
+        self.group_order = [g for g in self.group_order if g in self.group_members]
+
     # ------------------------------------------------------------------
     # Column persistence (UNCHANGED)
     # ------------------------------------------------------------------
-    def _load_visual_order(self):
+    def _load_table_state(self):
         try:
             path = os.path.expanduser("~/.options_scalper/positions_table_order.json")
             if not os.path.exists(path):
-                return []
+                return
 
             with open(path, "r") as f:
-                order = json.load(f)
+                data = json.load(f)
 
-            if isinstance(order, list):
-                return order
+            if isinstance(data, list):
+                self.visual_order = data
+                return
+
+            if isinstance(data, dict):
+                self.visual_order = data.get("ungrouped", [])
+                self.group_members = data.get("groups", {})
+                self.group_order = data.get("group_order", list(self.group_members.keys()))
+                self.group_sl_tp = data.get("group_sl_tp", {})
         except Exception as e:
             logger.warning(f"Failed to load position order: {e}")
 
-        return []
-
-    def _save_visual_order(self):
+    def _save_table_state(self):
         try:
             path = os.path.expanduser("~/.options_scalper/positions_table_order.json")
             os.makedirs(os.path.dirname(path), exist_ok=True)
 
+            payload = {
+                "ungrouped": self.visual_order,
+                "groups": self.group_members,
+                "group_order": self.group_order,
+                "group_sl_tp": self.group_sl_tp,
+            }
+
             with open(path, "w") as f:
-                json.dump(self.visual_order, f, indent=2)
+                json.dump(payload, f, indent=2)
         except Exception as e:
             logger.warning(f"Failed to save position order: {e}")
 
@@ -665,10 +1003,10 @@ class PositionsTable(QWidget):
         dialog.move(x, y)
 
     def _is_main_position_row(self, row: int) -> bool:
-        return row in self.position_row_map.values()
+        return self._row_kind(row) == "POSITION"
 
     def _is_sltp_row(self, row):
-        return self.table.property(f"row_type_{row}") == "SLTP"
+        return self._row_kind(row) in {"SLTP", "GROUP_SLTP"}
 
 
     def _on_item_pressed(self, item: QTableWidgetItem):
@@ -688,12 +1026,10 @@ class PositionsTable(QWidget):
             self.table.setCurrentCell(-1, -1)  # 🔥 Clear here
             return
 
-        source_item = self.table.item(source_row, self.SYMBOL_COL)
-        if not source_item:
-            self.table.setCurrentCell(-1, -1)  # 🔥 Clear here
+        source_kind = self._row_kind(source_row)
+        if source_kind in {None, "SLTP", "GROUP_SLTP"}:
+            self.table.setCurrentCell(-1, -1)
             return
-
-        symbol = source_item.text().split()[0]
 
         pos = event.position().toPoint()
         target_row = self.table.rowAt(pos.y())
@@ -701,35 +1037,99 @@ class PositionsTable(QWidget):
             self.table.setCurrentCell(-1, -1)  # 🔥 Clear here
             return
 
-        target_item = self.table.item(target_row, self.SYMBOL_COL)
-        if not target_item:
-            self.table.setCurrentCell(-1, -1)  # 🔥 Clear here
+        target_kind = self._row_kind(target_row)
+        if target_kind in {None, "SLTP", "GROUP_SLTP"}:
+            self.table.setCurrentCell(-1, -1)
             return
 
-        target_symbol = target_item.text().split()[0]
+        if source_kind == "GROUP":
+            source_group = self._row_group(source_row)
+            if target_kind == "GROUP":
+                target_group = self._row_group(target_row)
+            elif target_kind == "POSITION":
+                target_symbol = self._row_symbol(target_row)
+                target_group = self._symbol_group(target_symbol) if target_symbol else None
+            else:
+                target_group = None
 
-        if symbol == target_symbol:
-            self.table.setCurrentCell(-1, -1)  # 🔥 Clear here
-            return
+            if not source_group or not target_group or source_group == target_group:
+                self.table.setCurrentCell(-1, -1)
+                return
 
-        if symbol not in self.visual_order or target_symbol not in self.visual_order:
-            self.table.setCurrentCell(-1, -1)  # 🔥 Clear here
-            return
+            if source_group not in self.group_order or target_group not in self.group_order:
+                self.table.setCurrentCell(-1, -1)
+                return
 
-        src_idx = self.visual_order.index(symbol)
-        tgt_idx = self.visual_order.index(target_symbol)
+            src_idx = self.group_order.index(source_group)
+            tgt_idx = self.group_order.index(target_group)
+            self.group_order.remove(source_group)
+            if src_idx < tgt_idx:
+                insert_at = self.group_order.index(target_group) + 1
+            else:
+                insert_at = self.group_order.index(target_group)
+            self.group_order.insert(insert_at, source_group)
 
-        self.visual_order.remove(symbol)
+        if source_kind == "POSITION":
+            symbol = self._row_symbol(source_row)
+            if not symbol:
+                self.table.setCurrentCell(-1, -1)
+                return
 
-        if src_idx < tgt_idx:
-            insert_at = self.visual_order.index(target_symbol) + 1
-        else:
-            insert_at = self.visual_order.index(target_symbol)
+            source_group = self._symbol_group(symbol)
 
-        self.visual_order.insert(insert_at, symbol)
+            if target_kind == "GROUP":
+                target_group = self._row_group(target_row)
+                if not target_group:
+                    self.table.setCurrentCell(-1, -1)
+                    return
+                if source_group != target_group:
+                    self._assign_symbol_to_group(symbol, target_group, append=True)
+                else:
+                    if symbol in self.group_members.get(target_group, []):
+                        self.group_members[target_group].remove(symbol)
+                        self.group_members[target_group].append(symbol)
+
+            elif target_kind == "POSITION":
+                target_symbol = self._row_symbol(target_row)
+                if not target_symbol or target_symbol == symbol:
+                    self.table.setCurrentCell(-1, -1)
+                    return
+                target_group = self._symbol_group(target_symbol)
+
+                if source_group == target_group:
+                    order_list = self.group_members.get(source_group, []) if source_group else self.visual_order
+                    if symbol not in order_list or target_symbol not in order_list:
+                        self.table.setCurrentCell(-1, -1)
+                        return
+                    src_idx = order_list.index(symbol)
+                    tgt_idx = order_list.index(target_symbol)
+                    order_list.remove(symbol)
+                    if src_idx < tgt_idx:
+                        insert_at = order_list.index(target_symbol) + 1
+                    else:
+                        insert_at = order_list.index(target_symbol)
+                    order_list.insert(insert_at, symbol)
+                else:
+                    if source_group:
+                        self.group_members[source_group] = [
+                            s for s in self.group_members.get(source_group, []) if s != symbol
+                        ]
+                    else:
+                        if symbol in self.visual_order:
+                            self.visual_order.remove(symbol)
+                    if target_group:
+                        if target_group not in self.group_members:
+                            self.group_members[target_group] = []
+                            self.group_order.append(target_group)
+                        target_list = self.group_members[target_group]
+                        insert_at = target_list.index(target_symbol) if target_symbol in target_list else len(target_list)
+                        target_list.insert(insert_at, symbol)
+                    else:
+                        insert_at = self.visual_order.index(target_symbol) if target_symbol in self.visual_order else len(self.visual_order)
+                        self.visual_order.insert(insert_at, symbol)
 
         self._rebuild_table_from_order()
-        self._save_visual_order()
+        self._save_table_state()
 
         self.table.setCurrentCell(-1, -1)  # 🔥 Clear selection after successful drop
 
@@ -738,7 +1138,7 @@ class PositionsTable(QWidget):
 
     def closeEvent(self, event):
         self._save_column_widths()
-        self._save_visual_order()
+        self._save_table_state()
         super().closeEvent(event)
 
     def _apply_styles(self):
@@ -748,7 +1148,7 @@ class PositionsTable(QWidget):
         self.table.setFocusPolicy(Qt.StrongFocus)
 
         # IMPORTANT: enable row selection (used for hover)
-        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setCurrentCell(-1, -1)
 
