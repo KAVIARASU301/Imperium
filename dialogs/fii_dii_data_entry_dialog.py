@@ -2,7 +2,7 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QFormLayout, QHBoxLayout,
     QDateEdit, QLineEdit, QLabel, QPushButton, QMessageBox
 )
-from PySide6.QtCore import QDate, Qt
+from PySide6.QtCore import QDate, Qt, Signal
 from PySide6.QtGui import QColor
 from datetime import date
 
@@ -15,6 +15,8 @@ class FIIDIIDataDialog(QDialog):
     User enters Gross Buy & Gross Sell
     Net is auto-calculated and color-coded
     """
+
+    data_saved = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -162,8 +164,8 @@ class FIIDIIDataDialog(QDialog):
                 }
             )
 
-            QMessageBox.information(self, "Saved", "FII/DII data saved successfully.")
-            self.accept()
+            self._load_for_date()
+            self.data_saved.emit()
 
         except ValueError:
             QMessageBox.warning(self, "Invalid Input", "Please enter valid numeric values.")

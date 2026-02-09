@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QLabel, QHBoxLayout,
     QPushButton, QWidget, QCheckBox
 )
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import Qt, QTimer, Signal, QEvent
 from pyqtgraph import AxisItem, TextItem
 
 from kiteconnect import KiteConnect
@@ -883,8 +883,15 @@ class CVDSingleChartDialog(QDialog):
 
     def _start_refresh_timer(self):
         self.refresh_timer = QTimer(self)
-        self.refresh_timer.timeout.connect(self._load_and_plot)
+        self.refresh_timer.timeout.connect(self._refresh_if_live)
         self.refresh_timer.start(self.REFRESH_INTERVAL_MS)
+
+    def _refresh_if_live(self):
+        if not self.live_mode:
+            return
+        if not self.isVisible() or not self.isActiveWindow():
+            return
+        self._load_and_plot()
 
     def _fix_axis_after_show(self):
         bottom_axis = self.plot.getAxis("bottom")
@@ -947,3 +954,13 @@ class CVDSingleChartDialog(QDialog):
         if hasattr(self, "dot_timer"):
             self.dot_timer.stop()
         super().closeEvent(event)
+
+    def changeEvent(self, event):
+        if event.type() == QEvent.Type.ActivationChange:
+            if self.isActiveWindow():
+                if hasattr(self, "refresh_timer") and not self.refresh_timer.isActive():
+                    self.refresh_timer.start(self.REFRESH_INTERVAL_MS)
+            else:
+                if hasattr(self, "refresh_timer"):
+                    self.refresh_timer.stop()
+        super().changeEvent(event)

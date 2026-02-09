@@ -3,7 +3,7 @@ import math
 from datetime import date, datetime
 from typing import Dict, Optional
 
-from PySide6.QtCore import Qt, QTimer, QPoint
+from PySide6.QtCore import Qt, QTimer, QPoint, QEvent
 from PySide6.QtGui import (QBrush, QColor, QCloseEvent, QFont, QLinearGradient, QMouseEvent, QShowEvent)
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QFrame, QHBoxLayout,
                                QHeaderView, QLabel, QPushButton, QStyledItemDelegate, QTableWidget,
@@ -204,6 +204,15 @@ class OptionChainDialog(QDialog):
         logger.info("Closing Option Chain dialog. Stopping update timer.")
         self.update_timer.stop()
         super().closeEvent(event)
+
+    def changeEvent(self, event):
+        if event.type() == QEvent.Type.ActivationChange:
+            if self.isActiveWindow():
+                if self._is_initialized and not self.update_timer.isActive():
+                    self.update_timer.start(2000)
+            else:
+                self.update_timer.stop()
+        super().changeEvent(event)
 
     def _setup_window(self):
         self.setWindowTitle("Live Option Chain")

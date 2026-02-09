@@ -6,12 +6,12 @@ Displays institutional trading data entered manually
 import logging
 from typing import List, Dict
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QPropertyAnimation, QParallelAnimationGroup
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
-    QPushButton, QLabel, QHeaderView, QWidget, QComboBox
+    QPushButton, QLabel, QHeaderView, QWidget, QComboBox, QGraphicsOpacityEffect
 )
-from PySide6.QtGui import QPainter, QColor
+from PySide6.QtGui import QPainter, QColor, QLinearGradient
 from PySide6.QtCharts import (
     QChart, QChartView, QBarSet, QBarSeries,
     QBarCategoryAxis, QValueAxis
@@ -53,10 +53,19 @@ class FIIDIIDialog(QDialog):
 
         self.chart_view = QChartView()
         self.chart_view.setRenderHint(QPainter.Antialiasing)
+        self.chart_view.setStyleSheet("""
+            QChartView {
+                background: #101318;
+                border: 1px solid #1f2937;
+                border-radius: 12px;
+            }
+        """)
         layout.addWidget(self.chart_view, stretch=3)
 
         self.table = self._create_table()
         layout.addWidget(self.table, stretch=2)
+
+        self._prepare_load_animation()
 
     def _create_header(self) -> QWidget:
         header = QWidget()
@@ -111,6 +120,7 @@ class FIIDIIDialog(QDialog):
     # ------------------------------------------------------------------
 
     def _load_data(self):
+        self.store.load()
         raw = self.store.get_all()  # <- SAFE API
         self.data.clear()
 
@@ -128,6 +138,7 @@ class FIIDIIDialog(QDialog):
 
         self._populate_table()
         self._update_chart()
+        self._run_load_animation()
 
     # ------------------------------------------------------------------
     # TABLE
@@ -169,22 +180,33 @@ class FIIDIIDialog(QDialog):
         chart = QChart()
         chart.setTitle("FII / DII Net Cash Flow (₹ Cr)")
         chart.setTheme(QChart.ChartThemeDark)
+        chart.setAnimationOptions(QChart.SeriesAnimations)
+        chart.setBackgroundVisible(True)
+        chart.setBackgroundRoundness(12)
+        gradient = QLinearGradient(0, 0, 0, 1)
+        gradient.setCoordinateMode(QLinearGradient.ObjectBoundingMode)
+        gradient.setColorAt(0.0, QColor("#121826"))
+        gradient.setColorAt(1.0, QColor("#0b0f17"))
+        chart.setBackgroundBrush(gradient)
 
         display = self.data[-30:]
         participant = self.participant_combo.currentText()
 
         series = QBarSeries()
+        series.setBarWidth(0.62)
 
         if participant in ("Both FII & DII", "FII Only"):
             fii = QBarSet("FII")
-            fii.setColor(QColor("#5a8be0"))
+            fii.setColor(QColor("#6ea8ff"))
+            fii.setBorderColor(QColor("#93b9ff"))
             for d in display:
                 fii.append(d["fii_net"])
             series.append(fii)
 
         if participant in ("Both FII & DII", "DII Only"):
             dii = QBarSet("DII")
-            dii.setColor(QColor("#ff9800"))
+            dii.setColor(QColor("#ffb74d"))
+            dii.setBorderColor(QColor("#ffd08a"))
             for d in display:
                 dii.append(d["dii_net"])
             series.append(dii)
@@ -197,6 +219,9 @@ class FIIDIIDialog(QDialog):
         series.attachAxis(axis_x)
 
         axis_y = QValueAxis()
+        axis_y.setGridLineColor(QColor("#243041"))
+        axis_y.setLabelsColor(QColor("#b0bec5"))
+        axis_x.setLabelsColor(QColor("#b0bec5"))
         chart.addAxis(axis_y, Qt.AlignLeft)
         series.attachAxis(axis_y)
 
@@ -209,6 +234,7 @@ class FIIDIIDialog(QDialog):
 
     def _open_entry_dialog(self):
         dlg = FIIDIIDataDialog(self)
+        dlg.data_saved.connect(self._load_data)
         if dlg.exec():
             self._load_data()
 
@@ -222,3 +248,27 @@ class FIIDIIDialog(QDialog):
             QTableWidget { background:#1a1a1a; gridline-color:#2a2a2a; }
             QHeaderView::section { background:#2a2a2a; padding:6px; }
         """)
+
+    def _prepare_load_animation(self):
+        self._fade_targets = [self.chart_view, self.table]
+        self._fade_effects = []
+        for target in self._fade_targets:
+            effect = QGraphicsOpacityEffect(target)
+            effect.setOpacity(0.0)
+            target.setGraphicsEffect(effect)
+            self._fade_effects.append(effect)
+        self._load_anim = QParallelAnimationGroup(self)
+        for effect in self._fade_effects:
+            anim = QPropertyAnimation(effect, b"opacity", self)
+            anim.setDuration(600)
+            anim.setStartValue(0.0)
+            anim.setEndValue(1.0)
+            self._load_anim.addAnimation(anim)
+
+    def _run_load_animation(self):
+        if not self._fade_effects:
+            return
+        for effect in self._fade_effects:
+            effect.setOpacity(0.0)
+        self._load_anim.stop()
+        self._load_anim.start()

@@ -37,7 +37,8 @@ class CVDChartWidget(QWidget):
             kite,
             instrument_token,
             symbol: str,
-            parent=None
+            parent=None,
+            auto_refresh: bool = True,
     ):
         super().__init__(parent)
 
@@ -70,10 +71,11 @@ class CVDChartWidget(QWidget):
         self.external_update = False  # Flag to prevent feedback loop
 
         self.axis = pg.AxisItem(orientation="bottom")
+        self._auto_refresh = auto_refresh
 
         self._setup_ui()
         self._setup_crosshair()
-        if self.instrument_token and isinstance(self.instrument_token, int):
+        if self._auto_refresh and self.instrument_token and isinstance(self.instrument_token, int):
             self._start_refresh_timer()
 
         # Pulse animation timer (smooth decay)
@@ -183,7 +185,7 @@ class CVDChartWidget(QWidget):
         self._last_hist_range = None
 
         # ✅ Start ALL timers (refresh, pulse, blink)
-        if not hasattr(self, "timer") or not self.timer.isActive():
+        if self._auto_refresh and (not hasattr(self, "timer") or not self.timer.isActive()):
             self._start_refresh_timer()
 
         # Restart pulse and blink timers if they were stopped
@@ -564,7 +566,22 @@ class CVDChartWidget(QWidget):
 
     def _refresh_if_live(self):
         """Refresh only if in live mode."""
-        if self.live_mode:
+        if self.live_mode and self._is_refresh_allowed():
+            self._load_historical()
+
+    def _is_refresh_allowed(self) -> bool:
+        if not self.isVisible():
+            return False
+        window = self.window()
+        if window is None:
+            return False
+        return window.isActiveWindow()
+
+    def refresh_if_live(self, force: bool = False):
+        """External refresh hook for shared timers."""
+        if not self.live_mode:
+            return
+        if force or self._is_refresh_allowed():
             self._load_historical()
 
     def stop_updates(self):
@@ -577,7 +594,7 @@ class CVDChartWidget(QWidget):
 
     def start_updates(self):
         """Start all timers (called when activating widget)."""
-        if hasattr(self, "timer") and not self.timer.isActive():
+        if self._auto_refresh and hasattr(self, "timer") and not self.timer.isActive():
             self.timer.start(self.REFRESH_INTERVAL_MS)
         if hasattr(self, "pulse_timer") and not self.pulse_timer.isActive():
             self.pulse_timer.start(40)

@@ -8,7 +8,7 @@ import pyqtgraph as pg
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QWidget,
                                QLabel, QLineEdit, QPushButton, QMessageBox, QComboBox,
                                QSizePolicy, QFrame, QSpacerItem)
-from PySide6.QtCore import Qt, QByteArray, QTimer, Signal
+from PySide6.QtCore import Qt, QByteArray, QTimer, Signal, QEvent
 from PySide6.QtGui import QFont
 from kiteconnect import KiteConnect
 
@@ -169,10 +169,22 @@ class MarketChartWidget(QWidget):
 
     def _throttled_update(self):
         """Batched update - process all pending ticks at once"""
+        if not self.isVisible():
+            return
+        window = self.window()
+        if window is None or not window.isActiveWindow():
+            return
         if self._data_is_dirty:
             self._plot_chart_data(full_redraw=False)
             self._data_is_dirty = False
             self._pending_ticks.clear()
+
+    def set_updates_enabled(self, enabled: bool):
+        if enabled:
+            if not self.update_timer.isActive():
+                self.update_timer.start(250)
+        else:
+            self.update_timer.stop()
 
     def set_data(self, symbol: str, data: pd.DataFrame, day_separator_pos: int | None = None,
                  cpr_levels: Dict | None = None):
@@ -744,3 +756,10 @@ class MarketMonitorDialog(QDialog):
 
         self.market_data_worker.data_received.disconnect(self._on_ticks_received)
         super().closeEvent(event)
+
+    def changeEvent(self, event):
+        if event.type() == QEvent.Type.ActivationChange:
+            is_active = self.isActiveWindow()
+            for chart in self.charts:
+                chart.set_updates_enabled(is_active)
+        super().changeEvent(event)

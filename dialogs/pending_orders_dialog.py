@@ -29,7 +29,7 @@ class PendingOrdersDialog(QDialog):
     # ------------------------------------------------------------------
     def _setup_window(self):
         self.setWindowTitle("Pending Orders")
-        self.setMinimumSize(820, 420)
+        self.setMinimumSize(1000, 720)
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
         self.setAttribute(Qt.WA_TranslucentBackground)
 

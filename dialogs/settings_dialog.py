@@ -2,7 +2,7 @@ import logging
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTabWidget,
     QWidget, QGroupBox, QGridLayout, QLabel, QLineEdit,
-    QSpinBox, QComboBox, QCheckBox, QPushButton, QMessageBox, QStyle
+    QSpinBox, QComboBox, QCheckBox, QPushButton, QMessageBox
 )
 from PySide6.QtCore import Qt, Signal
 
@@ -87,11 +87,9 @@ class SettingsDialog(QDialog):
         title.setObjectName("dialogTitle")
 
         # Close button
-        close_btn = QPushButton()
+        close_btn = QPushButton("✕")
         close_btn.setObjectName("closeButton")
         close_btn.setFixedSize(32, 32)
-        close_btn.setIcon(self.style().standardIcon(QStyle.SP_TitleBarCloseButton))
-        close_btn.setIconSize(close_btn.size() * 0.6)
         close_btn.setToolTip("Close (Esc)")
         close_btn.clicked.connect(self._on_close_requested)
 
@@ -289,20 +287,21 @@ class SettingsDialog(QDialog):
             }
 
             #closeButton {
-                background: rgba(255, 255, 255, 0.04);
-                border: 1px solid #3A4458;
+                background: transparent;
+                border: none;
+                color: #A9B1C3;
+                font-family: "Segoe UI Symbol";
+                font-size: 16px;
                 border-radius: 6px;
-
+                padding: 0;
             }
             
             #closeButton:hover {
-                background: rgba(248, 81, 73, 0.15);
-                border-color: #F85149;
-                color: #F85149;
+                color: #FFFFFF;
             }
             
             #closeButton:pressed {
-                background: rgba(248, 81, 73, 0.25);
+                color: #F85149;
             }
 
 

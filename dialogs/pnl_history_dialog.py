@@ -37,7 +37,7 @@ class PnlHistoryDialog(QDialog):
 
     def _setup_window(self):
         self.setWindowTitle("P&L History")
-        self.setMinimumSize(900, 650)
+        self.setMinimumSize(1000, 720)
         # --- Use FramelessWindowHint for custom styling ---
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
         self.setAttribute(Qt.WA_TranslucentBackground)

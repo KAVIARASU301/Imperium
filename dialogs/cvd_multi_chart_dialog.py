@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (
     QDialog, QGridLayout, QHBoxLayout, QVBoxLayout,
     QPushButton, QLabel, QWidget
 )
-from PySide6.QtCore import Qt, Signal, QTimer
+from PySide6.QtCore import Qt, Signal, QTimer, QEvent
 from PySide6.QtGui import QFont
 
 from widgets.cvd_chart_widget import CVDChartWidget
@@ -141,6 +141,7 @@ class CVDMultiChartDialog(QDialog):
 
         self._setup_ui()
         self._connect_crosshairs()
+        self._setup_refresh_timer()
 
         # Initialize with current dates
         current_date, previous_date = self.navigator.get_dates()
@@ -185,7 +186,8 @@ class CVDMultiChartDialog(QDialog):
                     kite=self.kite,
                     instrument_token=instrument_token,
                     symbol=f"{symbol} FUT",
-                    parent=self
+                    parent=self,
+                    auto_refresh=False,
                 )
 
                 row = idx // 2
@@ -213,6 +215,17 @@ class CVDMultiChartDialog(QDialog):
         status_layout.addStretch()
 
         parent_layout.addLayout(status_layout)
+
+    def _setup_refresh_timer(self):
+        self.refresh_timer = QTimer(self)
+        self.refresh_timer.timeout.connect(self._refresh_live_charts)
+        self.refresh_timer.start(CVDChartWidget.REFRESH_INTERVAL_MS)
+
+    def _refresh_live_charts(self):
+        if not self.isVisible() or not self.isActiveWindow():
+            return
+        for widget in self.chart_widgets:
+            widget.refresh_if_live(force=True)
 
     def _connect_crosshairs(self):
         """Connect crosshair signals between all charts."""
@@ -260,5 +273,16 @@ class CVDMultiChartDialog(QDialog):
         for widget in self.chart_widgets:
             if hasattr(widget, 'stop_updates'):
                 widget.stop_updates()
+        if hasattr(self, "refresh_timer"):
+            self.refresh_timer.stop()
 
         super().closeEvent(event)
+
+    def changeEvent(self, event):
+        if event.type() == QEvent.Type.ActivationChange:
+            if self.isActiveWindow():
+                if not self.refresh_timer.isActive():
+                    self.refresh_timer.start(CVDChartWidget.REFRESH_INTERVAL_MS)
+            else:
+                self.refresh_timer.stop()
+        super().changeEvent(event)

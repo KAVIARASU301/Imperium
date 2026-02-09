@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QPushButton, QDialog,
     QLabel, QWidget, QFrame
 )
-from PySide6.QtCore import QTimer, Qt, Signal, QByteArray
+from PySide6.QtCore import QTimer, Qt, Signal, QByteArray, QEvent
 from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor
 
 from widgets.open_positions_table import OpenPositionsTable
@@ -39,7 +39,7 @@ class OpenPositionsDialog(QDialog):
 
     def _setup_window(self):
         self.setWindowTitle("Open Positions")
-        self.setMinimumSize(1000, 600)
+        self.setMinimumSize(1000, 720)
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
 
     def _setup_ui(self):
@@ -371,6 +371,15 @@ class OpenPositionsDialog(QDialog):
         )
         self.update_timer.stop()
         super().closeEvent(event)
+
+    def changeEvent(self, event):
+        if event.type() == QEvent.Type.ActivationChange:
+            if self.isActiveWindow():
+                if not self.update_timer.isActive():
+                    self.update_timer.start(1000)
+            else:
+                self.update_timer.stop()
+        super().changeEvent(event)
 
     # Drag support
     def mousePressEvent(self, event):
