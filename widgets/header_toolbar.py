@@ -105,6 +105,7 @@ class HeaderToolbar(QFrame):
     settings_changed = Signal(dict)
     exit_all_clicked = Signal()
     lot_size_changed = Signal(int)
+    journal_clicked = Signal()
 
     def __init__(self):
         super().__init__()
@@ -142,6 +143,11 @@ class HeaderToolbar(QFrame):
         main_layout.addWidget(self._create_separator())
         main_layout.addLayout(self._create_status_layout())
 
+        self.journal_button = AnimatedButton("JOURNAL")
+        self.journal_button.setObjectName("journalButton")
+        self.journal_button.setToolTip("Open trading journal")
+        main_layout.addWidget(self.journal_button)
+
         self.settings_button = AnimatedButton("⚙️")
         self.settings_button.setObjectName("iconButton")
         self.settings_button.setToolTip("Settings")
@@ -156,6 +162,7 @@ class HeaderToolbar(QFrame):
         self.lot_size_spin.valueChanged.connect(self._on_major_setting_changed)
         self.lot_size_spin.valueChanged.connect(self.lot_size_changed.emit)
         self.exit_all_button.clicked.connect(self.exit_all_clicked.emit)
+        self.journal_button.clicked.connect(self.journal_clicked.emit)
 
     def _create_status_layout(self) -> QVBoxLayout:
         """Enhanced status display with pulsing market indicator."""
@@ -454,6 +461,25 @@ class HeaderToolbar(QFrame):
 
             #iconButton:hover {
                 color: #29C7C9;
+            }
+
+            #journalButton {
+                background: qlineargradient(
+                    x1:0, y1:0, x2:0, y2:1,
+                    stop:0 rgba(41, 199, 201, 0.12),
+                    stop:1 rgba(41, 199, 201, 0.05)
+                );
+                color: #E0F6F6;
+                border: 1px solid rgba(41, 199, 201, 0.4);
+                border-radius: 6px;
+                padding: 6px 12px;
+                font-size: 11px;
+                font-weight: 700;
+            }
+
+            #journalButton:hover {
+                border-color: rgba(41, 199, 201, 0.7);
+                color: #FFFFFF;
             }
 
             #dangerButton {

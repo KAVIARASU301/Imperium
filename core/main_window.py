@@ -56,7 +56,7 @@ from utils.expiry_days import show_expiry_days
 from utils.shortcuts import show_shortcuts
 from dialogs.fii_dii_dialog import FIIDIIDialog
 from dialogs.watchlist_dialog import WatchlistDialog
-from PySide6.QtCore import QTimer
+from dialogs.journal_dialog import JournalDialog
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +104,7 @@ class ScalperMainWindow(QMainWindow):
         self.strategy_builder_dialog = None
         self.fii_dii_dialog = None
         self.watchlist_dialog = None
+        self.journal_dialog = None
 
         self.pending_order_widgets = {}
         self.market_monitor_dialogs = []
@@ -420,6 +421,7 @@ class ScalperMainWindow(QMainWindow):
         self._setup_menu_bar()
 
         QTimer.singleShot(3000, self._update_account_info)
+        QTimer.singleShot(1500, self._show_startup_journal)
 
     def _create_main_widgets(self):
         self.buy_exit_panel = BuyExitPanel(self.trader)
@@ -506,6 +508,26 @@ class ScalperMainWindow(QMainWindow):
 
         self.order_history_dialog.show()
         self.order_history_dialog.activateWindow()
+
+    def _show_journal_dialog(self, enforce_read_time: bool = False):
+        if self.journal_dialog is None:
+            self.journal_dialog = JournalDialog(
+                config_manager=self.config_manager,
+                parent=self,
+                enforce_read_time=enforce_read_time
+            )
+            self.journal_dialog.finished.connect(
+                lambda: setattr(self, 'journal_dialog', None)
+            )
+        else:
+            if enforce_read_time:
+                self.journal_dialog._enforce_read_time = True
+        self.journal_dialog.show()
+        self.journal_dialog.activateWindow()
+        self.journal_dialog.raise_()
+
+    def _show_startup_journal(self):
+        self._show_journal_dialog(enforce_read_time=True)
 
     def _refresh_order_history_from_ledger(self):
         """
@@ -801,6 +823,7 @@ class ScalperMainWindow(QMainWindow):
         self.header.lot_size_changed.connect(self._on_lot_size_changed)
         self.header.exit_all_clicked.connect(self._exit_all_positions)
         self.header.settings_button.clicked.connect(self._show_settings)
+        self.header.journal_clicked.connect(self._show_journal_dialog)
         self.buy_exit_panel.buy_clicked.connect(self._place_order)
         self.buy_exit_panel.exit_clicked.connect(self._exit_option_positions)
         self.strike_ladder.strike_selected.connect(self._on_single_strike_selected)

@@ -24,6 +24,7 @@ class ConfigManager:
         self.table_states_file = self.config_dir / "table_states.json"
         # --- ADD THIS LINE for the new state file ---
         self.dialog_states_file = self.config_dir / "dialog_states.json"
+        self.journal_file = self.config_dir / "journal_entries.json"
 
         self.default_settings = {
             'trading_mode': 'live',
@@ -175,6 +176,30 @@ class ConfigManager:
         except (IOError, json.JSONDecodeError) as e:
             logger.error(f"Error loading dialog state for {dialog_name}: {e}")
             return None
+
+    def load_journal_entries(self) -> List[Dict[str, Any]]:
+        """Load journal entries from disk."""
+        if not self.journal_file.exists():
+            return []
+        try:
+            with open(self.journal_file, "r") as f:
+                entries = json.load(f)
+            if isinstance(entries, list):
+                return entries
+            return []
+        except (IOError, json.JSONDecodeError) as e:
+            logger.error(f"Error loading journal entries: {e}")
+            return []
+
+    def save_journal_entries(self, entries: List[Dict[str, Any]]) -> bool:
+        """Save journal entries to disk."""
+        try:
+            with open(self.journal_file, "w") as f:
+                json.dump(entries, f, indent=4)
+            return True
+        except IOError as e:
+            logger.error(f"Error saving journal entries: {e}")
+            return False
 
 
     def load_market_monitor_sets(self) -> List[Dict[str, Any]]:
