@@ -55,6 +55,7 @@ from utils.about import show_about
 from utils.expiry_days import show_expiry_days
 from utils.shortcuts import show_shortcuts
 from dialogs.fii_dii_dialog import FIIDIIDialog
+from dialogs.watchlist_dialog import WatchlistDialog
 from PySide6.QtCore import QTimer
 
 logger = logging.getLogger(__name__)
@@ -102,6 +103,7 @@ class ScalperMainWindow(QMainWindow):
         self.option_chain_dialog = None
         self.strategy_builder_dialog = None
         self.fii_dii_dialog = None
+        self.watchlist_dialog = None
 
         self.pending_order_widgets = {}
         self.market_monitor_dialogs = []
@@ -477,6 +479,7 @@ class ScalperMainWindow(QMainWindow):
         menu_actions['pending_orders'].triggered.connect(self._show_pending_orders_dialog)
         menu_actions['orders'].triggered.connect(self._show_order_history_dialog)
         menu_actions['performance'].triggered.connect(self._show_performance_dialog)
+        menu_actions['watchlist'].triggered.connect(self._show_watchlist_dialog)
         menu_actions['settings'].triggered.connect(self._show_settings)
         menu_actions['option_chain'].triggered.connect(self._show_option_chain_dialog)
         menu_actions['strategy_builder'].triggered.connect(self._show_strategy_builder_dialog)
@@ -532,6 +535,22 @@ class ScalperMainWindow(QMainWindow):
         except Exception as e:
             logger.error(f"Failed to create Market Monitor dialog: {e}", exc_info=True)
             QMessageBox.critical(self, "Error", f"Could not open Market Monitor:\n{e}")
+
+    def _show_watchlist_dialog(self):
+        if self.watchlist_dialog is None:
+            symbols = sorted(self.instrument_data.keys()) if self.instrument_data else []
+            self.watchlist_dialog = WatchlistDialog(symbols=symbols, parent=self)
+            self.watchlist_dialog.symbol_selected.connect(self._on_watchlist_symbol_selected)
+            self.watchlist_dialog.finished.connect(lambda: setattr(self, "watchlist_dialog", None))
+        self.watchlist_dialog.show()
+        self.watchlist_dialog.raise_()
+        self.watchlist_dialog.activateWindow()
+
+    def _on_watchlist_symbol_selected(self, symbol: str):
+        if symbol and symbol in self.instrument_data:
+            self.header.set_active_symbol(symbol)
+        else:
+            logger.warning("Watchlist selected symbol not available: %s", symbol)
 
     def _show_cvd_chart_dialog(self):
         current_settings = self.header.get_current_settings()
@@ -919,6 +938,8 @@ class ScalperMainWindow(QMainWindow):
 
         symbols = sorted(data.keys())
         self.header.set_symbols(symbols)
+        if self.watchlist_dialog:
+            self.watchlist_dialog.set_symbols(symbols)
 
         default_symbol = self.settings.get('default_symbol', 'NIFTY')
         default_lots = self.settings.get('default_lots', 1)

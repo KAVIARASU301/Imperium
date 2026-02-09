@@ -92,6 +92,8 @@ def create_menu_bar(parent) -> Tuple[QMenuBar, Dict[str, QAction]]:
 
     # -------- VIEW --------
     view_menu = menubar.addMenu("&View")
+    menu_actions["watchlist"] = view_menu.addAction("Watchlist")
+    menu_actions["watchlist"].setShortcut("Ctrl+Shift+W")
     menu_actions["positions"] = view_menu.addAction("Open Positions")
     menu_actions["pending_orders"] = view_menu.addAction("Pending Orders")
     menu_actions["orders"] = view_menu.addAction("Order History")
