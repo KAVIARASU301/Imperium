@@ -113,6 +113,7 @@ class ScalperMainWindow(QMainWindow):
         self.cvd_engine = CVDEngine()
         self.cvd_monitor_dialog = None
         self.cvd_single_chart_dialogs = {}  # Dict[int, CVDSingleChartDialog] - token -> dialog
+        self.header_linked_cvd_token: Optional[int] = None
         self.trade_ledger = TradeLedger(mode=self.trading_mode)
 
         # CVD monitor symbols (v1 – fixed indices)
@@ -586,6 +587,28 @@ class ScalperMainWindow(QMainWindow):
             QMessageBox.warning(self, "CVD Chart", f"No token found for {symbol}.")
             return
 
+        # If a menu-opened (header-linked) CVD chart already exists,
+        # keep reusing that one and retarget it to the current header symbol.
+        if self.header_linked_cvd_token is not None:
+            linked_dialog = self.cvd_single_chart_dialogs.get(self.header_linked_cvd_token)
+            if linked_dialog and not linked_dialog.isHidden():
+                if self.header_linked_cvd_token == cvd_token:
+                    linked_dialog.raise_()
+                    linked_dialog.activateWindow()
+                    return
+
+                self._retarget_cvd_dialog(
+                    dialog=linked_dialog,
+                    old_token=self.header_linked_cvd_token,
+                    new_token=cvd_token,
+                    symbol=symbol,
+                    suffix=suffix
+                )
+                self.header_linked_cvd_token = cvd_token
+                linked_dialog.raise_()
+                linked_dialog.activateWindow()
+                return
+
         # If dialog already exists for this token, just raise it
         if cvd_token in self.cvd_single_chart_dialogs:
             existing_dialog = self.cvd_single_chart_dialogs[cvd_token]
@@ -602,10 +625,16 @@ class ScalperMainWindow(QMainWindow):
         self._update_market_subscriptions()
 
         # Wait then open dialog
-        QTimer.singleShot(500, lambda: self._open_cvd_chart_after_subscription(cvd_token, symbol, suffix))
+        QTimer.singleShot(500, lambda: self._open_cvd_chart_after_subscription(cvd_token, symbol, suffix, True))
         QTimer.singleShot(1000, self._log_active_subscriptions)
 
-    def _open_cvd_chart_after_subscription(self, cvd_token: int, symbol: str, suffix: str = ""):
+    def _open_cvd_chart_after_subscription(
+        self,
+        cvd_token: int,
+        symbol: str,
+        suffix: str = "",
+        link_to_header: bool = False
+    ):
         """Helper to open CVD chart after subscription is confirmed."""
         try:
             # Verify subscription happened
@@ -629,6 +658,8 @@ class ScalperMainWindow(QMainWindow):
             )
             dialog.destroyed.connect(lambda: self._on_cvd_single_chart_closed(cvd_token))
             self.cvd_single_chart_dialogs[cvd_token] = dialog
+            if link_to_header:
+                self.header_linked_cvd_token = cvd_token
             dialog.show()
             dialog.raise_()
             dialog.activateWindow()
@@ -666,39 +697,67 @@ class ScalperMainWindow(QMainWindow):
         """Handle CVD single chart dialog close."""
         if token in self.cvd_single_chart_dialogs:
             del self.cvd_single_chart_dialogs[token]
+        if self.header_linked_cvd_token == token:
+            self.header_linked_cvd_token = None
         QTimer.singleShot(0, self._update_market_subscriptions)
 
     def _update_cvd_chart_symbol(self, symbol: str, cvd_token: int, suffix: str = ""):
-        """Update CVD single chart dialog with new symbol."""
-        if not self.cvd_single_chart_dialog or self.cvd_single_chart_dialog.isHidden():
+        """Update menu-opened (header-linked) CVD single chart dialog with new symbol."""
+        if self.header_linked_cvd_token is None:
+            return
+
+        dialog = self.cvd_single_chart_dialogs.get(self.header_linked_cvd_token)
+        if not dialog or dialog.isHidden():
+            self.header_linked_cvd_token = None
+            return
+
+        self._retarget_cvd_dialog(
+            dialog=dialog,
+            old_token=self.header_linked_cvd_token,
+            new_token=cvd_token,
+            symbol=symbol,
+            suffix=suffix
+        )
+        self.header_linked_cvd_token = cvd_token
+
+    def _retarget_cvd_dialog(
+        self,
+        dialog: CVDSingleChartDialog,
+        old_token: int,
+        new_token: int,
+        symbol: str,
+        suffix: str = ""
+    ):
+        """Retarget an existing CVD dialog from one token/symbol to another."""
+        if old_token == new_token:
             return
 
         try:
-            # Get old token to unregister
-            old_token = self.cvd_single_chart_dialog.instrument_token
-
             # Register new token
-            self.cvd_engine.register_token(cvd_token)
-            self.active_cvd_tokens.add(cvd_token)
+            self.cvd_engine.register_token(new_token)
+            self.active_cvd_tokens.add(new_token)
 
             # Unregister old token if different
-            if old_token and old_token != cvd_token:
+            if old_token and old_token != new_token:
                 self.active_cvd_tokens.discard(old_token)
 
             # Update dialog
-            self.cvd_single_chart_dialog.instrument_token = cvd_token
-            self.cvd_single_chart_dialog.symbol = f"{symbol}{suffix}"
-            self.cvd_single_chart_dialog.setWindowTitle(f"CVD Chart — {symbol}{suffix}")
+            if old_token in self.cvd_single_chart_dialogs:
+                del self.cvd_single_chart_dialogs[old_token]
+            self.cvd_single_chart_dialogs[new_token] = dialog
+
+            dialog.instrument_token = new_token
+            dialog.symbol = f"{symbol}{suffix}"
+            dialog.setWindowTitle(f"Price & Cumulative Volume Chart — {symbol}{suffix}")
 
             # Reset and reload data
-            self.cvd_single_chart_dialog.current_date, self.cvd_single_chart_dialog.previous_date = \
-                self.cvd_single_chart_dialog.navigator.get_dates()
-            self.cvd_single_chart_dialog._load_and_plot()
+            dialog.current_date, dialog.previous_date = dialog.navigator.get_dates()
+            dialog._load_and_plot()
 
             # Update subscriptions
             self._update_market_subscriptions()
 
-            logger.info(f"[CVD] Updated chart from token {old_token} to {cvd_token} ({symbol}{suffix})")
+            logger.info(f"[CVD] Updated chart from token {old_token} to {new_token} ({symbol}{suffix})")
 
         except Exception as e:
             logger.error(f"Failed to update CVD chart symbol: {e}", exc_info=True)
@@ -1418,7 +1477,10 @@ class ScalperMainWindow(QMainWindow):
             symbol_has_changed = (symbol != self.current_symbol)
             self.current_symbol = symbol
 
-            # Multiple CVD charts now supported - no auto-update
+            if symbol_has_changed:
+                cvd_token, _, suffix = self._get_cvd_token(symbol)
+                if cvd_token:
+                    self._update_cvd_chart_symbol(symbol, cvd_token, suffix)
 
             today = datetime.now().date()
 
@@ -1610,7 +1672,7 @@ class ScalperMainWindow(QMainWindow):
 
     def _execute_bulk_exit(self, positions_list: List[Position]):
         """
-        Executes bulk exit by placing SELL orders.
+        Executes bulk exit by placing opposite-side orders for each position.
         Execution → order_update → ledger → position update.
         """
 
@@ -1639,11 +1701,17 @@ class ScalperMainWindow(QMainWindow):
                     self._position_snapshots_for_exit[pos.tradingsymbol] = pos
                     logger.debug(f"Cached position snapshot for {pos.tradingsymbol} (Bulk exit)")
 
+                transaction_type = (
+                    self.trader.TRANSACTION_TYPE_SELL
+                    if pos.quantity > 0
+                    else self.trader.TRANSACTION_TYPE_BUY
+                )
+
                 order_id = self.trader.place_order(
                     variety=self.trader.VARIETY_REGULAR,
                     exchange=pos.exchange,
                     tradingsymbol=pos.tradingsymbol,
-                    transaction_type=self.trader.TRANSACTION_TYPE_SELL,
+                    transaction_type=transaction_type,
                     quantity=abs(pos.quantity),
                     product=pos.product,
                     order_type=self.trader.ORDER_TYPE_MARKET,

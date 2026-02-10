@@ -458,7 +458,7 @@ class MarketMonitorDialog(QDialog):
         controls_layout.addWidget(self.symbols_entry, 3)
 
         self.timeframe_combo = QComboBox()
-        self.timeframe_combo.addItems(["1minute", "3minute", "5minute", "10minute", "15minute", "30minute", "60minute"])
+        self.timeframe_combo.addItems(["minute", "3minute", "5minute", "10minute", "15minute", "30minute", "60minute"])
         self.timeframe_combo.setCurrentText("5minute")
         controls_layout.addWidget(QLabel("Timeframe:"))
         controls_layout.addWidget(self.timeframe_combo, 1)

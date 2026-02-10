@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QTableWidget, QTableWidgetItem, QPushButton,
     QHeaderView, QAbstractItemView
 )
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QFont
 from utils.data_models import Position
 import logging
@@ -53,6 +53,7 @@ class OpenPositionsTable(QWidget):
         super().__init__()
         self._positions: Dict[str, Position] = {}
         self._row_map: Dict[str, int] = {}
+        self._last_render_signature: List[tuple] = []
         self._setup_ui()
         self._setup_styling()
 
@@ -70,7 +71,8 @@ class OpenPositionsTable(QWidget):
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setAlternatingRowColors(True)
-        self.table.setSortingEnabled(True)
+        # Keep disabled because divider rows are structural, not sortable records.
+        self.table.setSortingEnabled(False)
 
         header = self.table.horizontalHeader()
 
@@ -140,30 +142,59 @@ class OpenPositionsTable(QWidget):
 
     def update_positions(self, positions: List[Position]):
         """
-        Intelligently updates the table. It only rebuilds when the set of
-        positions changes, otherwise it performs a flicker-free data update.
+        Updates the table and inserts a compact divider row at each group end.
+        Falls back to "General Positions" when a position has no group name.
         """
         new_positions_map = {p.symbol: p for p in positions}
+        new_render_signature = [(p.symbol, self._group_key(p)) for p in positions]
 
-        if set(self._positions.keys()) != set(new_positions_map.keys()):
+        # Rebuild whenever symbols or group allocation/order changes.
+        if (
+            set(self._positions.keys()) != set(new_positions_map.keys()) or
+            self._last_render_signature != new_render_signature
+        ):
             self._positions = new_positions_map
-            self._rebuild_table()
+            self._last_render_signature = new_render_signature
+            self._rebuild_table(positions)
         else:
             self._positions = new_positions_map
             self._update_rows_data()
 
-    def _rebuild_table(self):
-        """Completely rebuilds the table. Used when positions are added/removed."""
-        self.table.setSortingEnabled(False)
+    def _group_key(self, position: Position) -> str:
+        """Return a stable group label for each position."""
+        return (position.group_name or "").strip() or "General Positions"
+
+    def _is_last_in_group(self, grouped_positions: List[Position], index: int) -> bool:
+        if index == len(grouped_positions) - 1:
+            return True
+        return self._group_key(grouped_positions[index]) != self._group_key(grouped_positions[index + 1])
+
+    def _rebuild_table(self, ordered_positions: List[Position]):
+        """Completely rebuilds the table. Used when positions are added/removed/grouped."""
         self.table.setRowCount(0)
         self._row_map.clear()
 
-        for row_index, position in enumerate(self._positions.values()):
-            self.table.insertRow(row_index)
-            self._populate_row(row_index, position)
-            self._row_map[position.symbol] = row_index
+        visual_row = 0
+        for index, position in enumerate(ordered_positions):
+            self.table.insertRow(visual_row)
+            self._populate_row(visual_row, position)
+            self._row_map[position.symbol] = visual_row
+            visual_row += 1
 
-        self.table.setSortingEnabled(True)
+            if self._is_last_in_group(ordered_positions, index) and index < len(ordered_positions) - 1:
+                self._insert_group_divider(visual_row)
+                visual_row += 1
+
+    def _insert_group_divider(self, row_index: int):
+        """Insert a small bright divider row to make group boundaries obvious."""
+        self.table.insertRow(row_index)
+
+        divider_item = QTableWidgetItem("")
+        divider_item.setFlags(Qt.ItemFlag.NoItemFlags)
+        divider_item.setBackground(QColor("#ffd33d"))
+        self.table.setItem(row_index, 0, divider_item)
+        self.table.setSpan(row_index, 0, 1, self.table.columnCount())
+        self.table.setRowHeight(row_index, 4)
 
     def _update_rows_data(self):
         """Performs a flicker-free update of data in existing rows."""
@@ -184,46 +215,36 @@ class OpenPositionsTable(QWidget):
         self.table.setItem(row_index, 5, AnimatedTableWidgetItem(""))  # P&L
         self.table.setItem(row_index, 6, QTableWidgetItem())  # P&L %
 
-        # --- Button Updated ---
-        # Exit Button
         exit_btn = QPushButton("Exit")
-        exit_btn.setObjectName("exitButton")  # Set object name for specific styling
+        exit_btn.setObjectName("exitButton")
         exit_btn.setToolTip(f"Exit position: {position.symbol}")
         exit_btn.clicked.connect(lambda checked, s=position.symbol: self.position_exit_requested.emit(s))
         self.table.setCellWidget(row_index, 7, exit_btn)
 
-        # Populate all data
         self._update_row_data(row_index, position)
 
     def _update_row_data(self, row: int, position: Position):
         """Updates all the data for a specific, existing row."""
-        # Order ID (Column 0)
         self.table.item(row, 0).setText(position.order_id or "N/A")
 
-        # Symbol (Column 1)
         symbol_item = self.table.item(row, 1)
         symbol_item.setText(position.symbol)
         symbol_item.setFont(QFont("Consolas", 11))
 
-        # Qty (Column 2)
         qty_item = self.table.item(row, 2)
         qty_item.setText(f"{position.quantity:,}")
         qty_item.setForeground(QColor("#a0a0a0"))
 
-        # Avg Price (Column 3)
         self.table.item(row, 3).setText(f"₹{position.average_price:.2f}")
 
-        # LTP (Column 4)
         ltp_item = self.table.item(row, 4)
         ltp_item.setText(f"₹{position.ltp:.2f}")
         ltp_item.setForeground(QColor("#58a6ff"))
 
-        # P&L (Column 5)
         pnl_item = self.table.item(row, 5)
         if isinstance(pnl_item, AnimatedTableWidgetItem):
             pnl_item.set_animated_value(position.pnl, is_pnl=True)
 
-        # P&L % (Column 6)
         investment = position.average_price * abs(position.quantity)
         pnl_percent = (position.pnl / investment * 100) if investment != 0 else 0.0
         pnl_percent_item = self.table.item(row, 6)

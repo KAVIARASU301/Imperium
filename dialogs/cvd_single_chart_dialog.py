@@ -1,4 +1,5 @@
 import logging
+from contextlib import suppress
 from datetime import datetime, timedelta
 import numpy as np
 
@@ -14,6 +15,7 @@ from pyqtgraph import AxisItem, TextItem
 from kiteconnect import KiteConnect
 from core.cvd.cvd_historical import CVDHistoricalBuilder
 from core.cvd.cvd_mode import CVDMode
+from utils.swing_hunter import SwingHunter, SwingZone, Swing
 
 logger = logging.getLogger(__name__)
 
@@ -142,6 +144,16 @@ class CVDSingleChartDialog(QDialog):
         self.live_mode = True
         self.current_date = None
         self.previous_date = None
+        self._live_tick_points: list[tuple[datetime, float]] = []
+        self._current_session_start_ts: datetime | None = None
+        self._current_session_x_base: float = 0.0
+
+        # 🎣 Swing Hunter engine
+        self._swing_hunter = SwingHunter(
+            pivot_lookback=3,
+            retrace_thresh=50.0,
+            max_swings=6,
+        )
 
         self.setWindowTitle(f"Price & Cumulative Volume Chart — {symbol}")
         self.setMinimumSize(1100, 680)
@@ -289,6 +301,32 @@ class CVDSingleChartDialog(QDialog):
             ema_bar.addWidget(cb)
 
         ema_bar.addStretch()
+
+        # ── Swing Hunt toggle ──
+        self.btn_swing = QCheckBox("🎣 Swing Hunt")
+        self.btn_swing.setChecked(True)
+        self.btn_swing.setStyleSheet("""
+            QCheckBox {
+                color: #B8E0FF;
+                font-weight: 600;
+                font-size: 12px;
+                spacing: 6px;
+            }
+            QCheckBox::indicator {
+                width: 16px;
+                height: 16px;
+                border: 2px solid #5B9BD5;
+                border-radius: 3px;
+                background: #1B1F2B;
+            }
+            QCheckBox::indicator:checked {
+                background: #5B9BD5;
+            }
+        """)
+        self.btn_swing.toggled.connect(self._on_swing_toggled)
+        ema_bar.addWidget(self.btn_swing)
+
+        ema_bar.addStretch()
         root.addLayout(ema_bar)
 
         # === PRICE CHART (TOP) ===
@@ -353,6 +391,10 @@ class CVDSingleChartDialog(QDialog):
         self.price_crosshair.hide()
         self.price_plot.addItem(self.price_crosshair)
 
+        # 🎣 Swing Hunt overlays (price chart)
+        self._swing_price_items: list = []    # LinearRegionItem + TextItem per zone
+        self._swing_dot_items: list = []      # scatter dots for swing pivots (price)
+
         # 🔥 Price EMA Legend (top-right corner)
         self.price_legend = pg.LegendItem(offset=(10, 10))
         self.price_legend.setParentItem(self.price_plot.plotItem)
@@ -406,6 +448,12 @@ class CVDSingleChartDialog(QDialog):
 
         self.plot.addItem(self.prev_curve)
         self.plot.addItem(self.today_curve)
+
+        # Tick-level live overlay (prevents 1-minute repaint from hiding ticks)
+        self.today_tick_curve = pg.PlotCurveItem(
+            pen=pg.mkPen("#26A69A", width=1.4)
+        )
+        self.plot.addItem(self.today_tick_curve)
 
         self.live_dot = pg.ScatterPlotItem(
             size=5,
@@ -471,6 +519,25 @@ class CVDSingleChartDialog(QDialog):
 
     def _connect_signals(self):
         self.navigator.date_changed.connect(self._on_date_changed)
+        if self.cvd_engine:
+            self.cvd_engine.cvd_updated.connect(self._on_cvd_tick_update)
+
+    def _on_cvd_tick_update(self, token: int, cvd_value: float):
+        """Append live CVD ticks so intra-minute moves are never erased."""
+        if token != self.instrument_token or not self.live_mode:
+            return
+
+        ts = datetime.now()
+        self._live_tick_points.append((ts, cvd_value))
+
+        # Keep only today's/session points to avoid unbounded growth
+        today = datetime.now().date()
+        self._live_tick_points = [
+            (t, v) for t, v in self._live_tick_points
+            if t.date() == today
+        ]
+
+        self._plot_live_ticks_only()
 
     # ------------------------------------------------------------------
 
@@ -519,11 +586,13 @@ class CVDSingleChartDialog(QDialog):
         self.prev_curve.clear()
         self.today_curve.clear()
         self.live_dot.clear()
+        self.today_tick_curve.clear()
 
         self.price_prev_curve.clear()
         self.price_today_curve.clear()
         self.price_live_dot.clear()
 
+        self._clear_swing_overlays()
         self.all_timestamps.clear()
         self._load_and_plot()
 
@@ -733,6 +802,10 @@ class CVDSingleChartDialog(QDialog):
                 # Sequential index (comparison mode – old behavior)
                 xs = list(range(x_offset, x_offset + len(df_cvd_sess)))
 
+            if is_current_session and not df_cvd_sess.empty:
+                self._current_session_start_ts = df_cvd_sess.index[0]
+                self._current_session_x_base = float(xs[0]) if xs else 0.0
+
             if not is_current_session:
                 self.all_timestamps.extend(df_cvd_sess.index.tolist())
                 self.all_cvd_data.extend(cvd_y.tolist())
@@ -760,6 +833,17 @@ class CVDSingleChartDialog(QDialog):
 
             if not focus_mode:
                 x_offset += len(df_cvd_sess)
+
+        self._plot_live_ticks_only()
+
+        # 🎣 Swing Hunt overlay (price chart only)
+        if self.all_price_data and self.all_timestamps:
+            prices_arr = np.array(self.all_price_data)
+            if focus_mode:
+                xi = [self._time_to_session_index(ts) for ts in self.all_timestamps]
+            else:
+                xi = list(range(len(self.all_timestamps)))
+            self._draw_swing_overlays(prices_arr, self.all_timestamps, xi)
 
         # Time axis formatter
         def time_formatter(values, *_):
@@ -873,6 +957,151 @@ class CVDSingleChartDialog(QDialog):
             if cb.isChecked()
         }
 
+    # ──────────────────────────────────────────────────────────────────────
+    # 🎣  SWING HUNT OVERLAY
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _on_swing_toggled(self, checked: bool):
+        """Show/hide all swing zones instantly."""
+        for item in self._swing_price_items:
+            item.setVisible(checked)
+        for item in self._swing_dot_items:
+            item.setVisible(checked)
+
+    def _clear_swing_overlays(self):
+        """Remove every swing item from price chart."""
+        for item in self._swing_price_items:
+            self.price_plot.removeItem(item)
+        self._swing_price_items.clear()
+
+        for item in self._swing_dot_items:
+            self.price_plot.removeItem(item)
+        self._swing_dot_items.clear()
+
+    def _draw_swing_overlays(
+        self,
+        prices: np.ndarray,
+        timestamps: list,
+        x_indices: list[int],
+    ):
+        """
+        Run SwingHunter on price data, then paint zones + pivot dots
+        onto the price chart.
+
+        Virgin Zone  : semi-transparent TEAL band — market will come back here
+        Hunted Zone  : semi-transparent RED  band  — stop hunt done, watch for reversal
+        Swing pivots : colored dots (green=low, red=high)
+        """
+        self._clear_swing_overlays()
+
+        if not self.btn_swing.isChecked():
+            return
+        if len(prices) < 8:
+            return
+
+        swings, zones = self._swing_hunter.find_zones(prices, timestamps, x_indices)
+
+        visible = self.btn_swing.isChecked()
+
+        # ── Draw zones (LinearRegionItem = horizontal band) ──────────────
+        for zone in zones:
+            if zone.zone_type == "virgin":
+                brush = pg.mkBrush(0, 200, 160, 35)      # teal, very translucent
+                border_pen = pg.mkPen("#00C8A0", width=1, style=Qt.DashLine)
+                label_color = "#00C8A0"
+                label_prefix = "🌱 VIRGIN"
+            else:
+                brush = pg.mkBrush(255, 80, 80, 30)       # red, very translucent
+                border_pen = pg.mkPen("#FF5050", width=1, style=Qt.DashLine)
+                label_color = "#FF5050"
+                label_prefix = "💀 HUNTED"
+
+            # Horizontal band across full X range
+            region = pg.LinearRegionItem(
+                values=[zone.zone_bot, zone.zone_top],
+                orientation="horizontal",
+                brush=brush,
+                pen=border_pen,
+                movable=False,
+                bounds=[zone.zone_bot, zone.zone_top],
+            )
+            region.setVisible(visible)
+            self.price_plot.addItem(region)
+            self._swing_price_items.append(region)
+
+            # Label at the right edge of the chart
+            label_text = f"{label_prefix}  {zone.retrace_pct:.0f}%"
+            label = pg.TextItem(
+                text=label_text,
+                color=label_color,
+                anchor=(1, 0.5),
+                fill=pg.mkBrush("#161A25CC"),
+                border=pg.mkPen(label_color, width=0.5),
+            )
+            label.setFont(pg.QtGui.QFont("Consolas", 8))
+            mid_price = (zone.zone_top + zone.zone_bot) / 2
+            label.setPos(zone.x_end, mid_price)
+            label.setVisible(visible)
+            self.price_plot.addItem(label)
+            self._swing_price_items.append(label)
+
+            # Thin line connecting leg start to retrace
+            connector_xs = [
+                x_indices[min(zone.leg_start.idx, len(x_indices) - 1)],
+                x_indices[min(zone.leg_end.idx, len(x_indices) - 1)],
+                x_indices[min(zone.retrace_swing.idx, len(x_indices) - 1)],
+            ]
+            connector_ys = [
+                zone.leg_start.price,
+                zone.leg_end.price,
+                zone.retrace_swing.price,
+            ]
+            zigzag = pg.PlotCurveItem(
+                x=connector_xs,
+                y=connector_ys,
+                pen=pg.mkPen(label_color, width=1.2, style=Qt.DotLine),
+            )
+            zigzag.setVisible(visible)
+            self.price_plot.addItem(zigzag)
+            self._swing_price_items.append(zigzag)
+
+        # ── Draw swing pivot dots ─────────────────────────────────────────
+        high_xs, high_ys = [], []
+        low_xs,  low_ys  = [], []
+
+        for sw in swings:
+            xi = x_indices[min(sw.idx, len(x_indices) - 1)]
+            if sw.kind == "high":
+                high_xs.append(xi)
+                high_ys.append(sw.price)
+            else:
+                low_xs.append(xi)
+                low_ys.append(sw.price)
+
+        if high_xs:
+            high_dots = pg.ScatterPlotItem(
+                x=high_xs, y=high_ys,
+                symbol="t1",     # down-triangle = high pivot
+                size=10,
+                brush=pg.mkBrush("#FF4444"),
+                pen=pg.mkPen("#FFFFFF", width=0.8),
+            )
+            high_dots.setVisible(visible)
+            self.price_plot.addItem(high_dots)
+            self._swing_dot_items.append(high_dots)
+
+        if low_xs:
+            low_dots = pg.ScatterPlotItem(
+                x=low_xs, y=low_ys,
+                symbol="t",      # up-triangle = low pivot
+                size=10,
+                brush=pg.mkBrush("#00E676"),
+                pen=pg.mkPen("#FFFFFF", width=0.8),
+            )
+            low_dots.setVisible(visible)
+            self.price_plot.addItem(low_dots)
+            self._swing_dot_items.append(low_dots)
+
     def _blink_dot(self):
         self._dot_visible = not self._dot_visible
         alpha = 220 if self._dot_visible else 60
@@ -928,6 +1157,7 @@ class CVDSingleChartDialog(QDialog):
         self.price_ema21_curve.clear()
         self.price_ema51_curve.clear()
         self.all_timestamps.clear()
+        self._clear_swing_overlays()
 
         self._load_and_plot()
 
@@ -941,6 +1171,39 @@ class CVDSingleChartDialog(QDialog):
         delta_minutes = int((ts - session_start).total_seconds() / 60)
         return max(0, min(delta_minutes, MINUTES_PER_SESSION - 1))
 
+    def _plot_live_ticks_only(self):
+        """Plot tick-level CVD overlay on top of minute candles."""
+        if not self._live_tick_points:
+            self.today_tick_curve.clear()
+            return
+
+        if self._current_session_start_ts is None:
+            return
+
+        focus_mode = self.btn_focus.isChecked()
+        current_day = self._current_session_start_ts.date()
+        points = [
+            (ts, cvd) for ts, cvd in self._live_tick_points
+            if ts.date() == current_day
+        ]
+        if not points:
+            self.today_tick_curve.clear()
+            return
+
+        x_vals = []
+        y_vals = []
+        for ts, cvd in points:
+            if focus_mode:
+                x = self._time_to_session_index(ts) + (ts.second / 60.0) + (ts.microsecond / 60_000_000.0)
+            else:
+                minute_offset = (ts - self._current_session_start_ts).total_seconds() / 60.0
+                x = self._current_session_x_base + minute_offset
+
+            x_vals.append(x)
+            y_vals.append(cvd)
+
+        self.today_tick_curve.setData(x_vals, y_vals)
+
     # ------------------------------------------------------------------
     def showEvent(self, event):
         super().showEvent(event)
@@ -948,6 +1211,8 @@ class CVDSingleChartDialog(QDialog):
 
     def closeEvent(self, event):
         if self.cvd_engine:
+            with suppress(TypeError, RuntimeError):
+                self.cvd_engine.cvd_updated.disconnect(self._on_cvd_tick_update)
             self.cvd_engine.set_mode(CVDMode.NORMAL)
         if hasattr(self, "refresh_timer"):
             self.refresh_timer.stop()

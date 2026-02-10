@@ -75,7 +75,7 @@ class PositionsTable(QWidget):
         self.table.setDragEnabled(True)
         self.table.setAcceptDrops(True)
         self.table.setDropIndicatorShown(True)
-        self.table.setDragDropMode(QAbstractItemView.DragDrop)
+        self.table.setDragDropMode(QAbstractItemView.InternalMove)
 
         self.table.setMouseTracking(True)
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -177,19 +177,24 @@ class PositionsTable(QWidget):
                 return True
 
             if event.type() == QEvent.Type.MouseMove:
-                if self._drag_active:
+                if self._drag_active or event.buttons() != Qt.MouseButton.NoButton:
                     return False
 
                 row = self.table.rowAt(event.position().toPoint().y())
-                if row != self._hovered_row and row >= 0:
+                if row < 0:
+                    return False
+
+                row_kind = self._row_kind(row)
+                if row_kind in {"SLTP", "GROUP_SLTP", "DIVIDER"}:
+                    return False
+
+                if row != self._hovered_row:
                     self._hovered_row = row
                     self.table.setCurrentCell(row, self.SYMBOL_COL)
 
             elif event.type() == QEvent.Type.Leave:
-                # Only clear hover if NOT dragging
-                if not self._drag_active:
-                    self._hovered_row = -1
-                    self.table.setCurrentCell(-1, -1)
+                # Avoid clearing current cell here to prevent visual flicker while dragging/hovering.
+                self._hovered_row = -1
 
             elif event.type() == QEvent.Type.DragLeave:
                 self._hovered_row = -1
@@ -363,11 +368,14 @@ class PositionsTable(QWidget):
         self.position_row_map.clear()
         self.group_row_map.clear()
 
-        for group_name in self.group_order:
+        rendered_groups = [g for g in self.group_order if self.group_members.get(g)]
+
+        for index, group_name in enumerate(rendered_groups):
             members = self.group_members.get(group_name, [])
-            if not members:
-                continue
             self._add_group_rows(group_name, members)
+
+            if index < len(rendered_groups) - 1 or self.visual_order:
+                self._insert_group_divider_row()
 
         for symbol in self.visual_order:
             if symbol in self.positions:
@@ -407,6 +415,19 @@ class PositionsTable(QWidget):
             self.table.setProperty(f"row_pid_{sltp_row}", symbol)
             self.table.setProperty(f"row_role_{sltp_row}", "SLTP")
             self.table.setProperty(f"row_kind_{sltp_row}", "SLTP")
+
+    def _insert_group_divider_row(self):
+        """Insert a bright thin row to clearly mark the end of a group."""
+        row = self.table.rowCount()
+        self.table.insertRow(row)
+        self.table.setRowHeight(row, 5)
+        self.table.setProperty(f"row_kind_{row}", "DIVIDER")
+
+        divider_item = QTableWidgetItem("")
+        divider_item.setFlags(Qt.ItemFlag.NoItemFlags)
+        divider_item.setBackground(QColor("#FFD60A"))
+        self.table.setItem(row, 0, divider_item)
+        self.table.setSpan(row, 0, 1, self.table.columnCount())
 
     def _add_group_rows(self, group_name: str, members: List[str]):
         group_row = self.table.rowCount()
@@ -1011,9 +1032,11 @@ class PositionsTable(QWidget):
 
     def _on_item_pressed(self, item: QTableWidgetItem):
         row = item.row()
+        row_kind = self._row_kind(row)
 
-        # ❌ Prevent dragging SL/TP rows
-        if self._is_sltp_row(row):
+        # Prevent dragging non-draggable structural rows.
+        if row_kind in {"SLTP", "GROUP_SLTP", "DIVIDER"}:
+            self._drag_active = False
             return
 
         self._drag_active = True
@@ -1146,9 +1169,10 @@ class PositionsTable(QWidget):
         self.table.setShowGrid(False)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setFocusPolicy(Qt.StrongFocus)
+        self.table.setTabKeyNavigation(False)
 
         # IMPORTANT: enable row selection (used for hover)
-        self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setCurrentCell(-1, -1)
 
