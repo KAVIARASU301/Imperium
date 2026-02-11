@@ -7,7 +7,7 @@ import pandas as pd
 import pyqtgraph as pg
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QLabel, QHBoxLayout,
-    QPushButton, QWidget, QCheckBox
+    QPushButton, QWidget, QCheckBox, QSpinBox, QDoubleSpinBox
 )
 from PySide6.QtCore import Qt, QTimer, Signal, QEvent
 from pyqtgraph import AxisItem, TextItem
@@ -15,7 +15,6 @@ from pyqtgraph import AxisItem, TextItem
 from kiteconnect import KiteConnect
 from core.cvd.cvd_historical import CVDHistoricalBuilder
 from core.cvd.cvd_mode import CVDMode
-from utils.swing_hunter import SwingHunter, SwingZone, Swing
 
 logger = logging.getLogger(__name__)
 
@@ -148,12 +147,15 @@ class CVDSingleChartDialog(QDialog):
         self._current_session_start_ts: datetime | None = None
         self._current_session_x_base: float = 0.0
 
-        # 🎣 Swing Hunter engine
-        self._swing_hunter = SwingHunter(
-            pivot_lookback=3,
-            retrace_thresh=50.0,
-            max_swings=6,
-        )
+        # Plot caches
+        self.all_timestamps: list[datetime] = []
+        self._last_plot_x_indices: list[float] = []
+
+        # 🎯 Confluence signal lines (price + CVD both reversal at same bar)
+        self._confluence_lines: list = []   # InfiniteLine items added to both plots
+
+        # 📦 Range boxes (price + CVD consolidating together)
+        self._range_box_items: list = []    # (plot, LinearRegionItem) tuples
 
         self.setWindowTitle(f"Price & Cumulative Volume Chart — {symbol}")
         self.setMinimumSize(1100, 680)
@@ -175,8 +177,6 @@ class CVDSingleChartDialog(QDialog):
         self.current_date, self.previous_date = self.navigator.get_dates()
         self._load_and_plot()
         self._start_refresh_timer()
-
-        self.all_timestamps = []
 
     # ------------------------------------------------------------------
 
@@ -259,6 +259,51 @@ class CVDSingleChartDialog(QDialog):
 
         ema_bar.addStretch()
 
+        # ATR Trend Reversal controls
+        atr_label = QLabel("ATR Reversal:")
+        atr_label.setStyleSheet("color: #B0B0B0; font-weight: 600; font-size: 12px;")
+        ema_bar.addWidget(atr_label)
+
+        base_ema_label = QLabel("Base EMA")
+        base_ema_label.setStyleSheet("color: #8A9BA8; font-size: 12px;")
+        ema_bar.addWidget(base_ema_label)
+
+        self.atr_base_ema_input = QSpinBox()
+        self.atr_base_ema_input.setRange(1, 500)
+        self.atr_base_ema_input.setValue(51)
+        self.atr_base_ema_input.setFixedWidth(70)
+        self.atr_base_ema_input.setStyleSheet("QSpinBox { background:#1B1F2B; color:#E0E0E0; }")
+        self.atr_base_ema_input.valueChanged.connect(self._on_atr_settings_changed)
+        ema_bar.addWidget(self.atr_base_ema_input)
+
+        distance_label = QLabel("Distance")
+        distance_label.setStyleSheet("color: #8A9BA8; font-size: 12px;")
+        ema_bar.addWidget(distance_label)
+
+        self.atr_distance_input = QDoubleSpinBox()
+        self.atr_distance_input.setRange(0.1, 20.0)
+        self.atr_distance_input.setDecimals(2)
+        self.atr_distance_input.setSingleStep(0.1)
+        self.atr_distance_input.setValue(3.01)
+        self.atr_distance_input.setFixedWidth(80)
+        self.atr_distance_input.setStyleSheet("QDoubleSpinBox { background:#1B1F2B; color:#E0E0E0; }")
+        self.atr_distance_input.valueChanged.connect(self._on_atr_settings_changed)
+        ema_bar.addWidget(self.atr_distance_input)
+
+        # CVD EMA Gap threshold (only applies to CVD reversal signals)
+        cvd_gap_label = QLabel("CVD Gap >")
+        cvd_gap_label.setStyleSheet("color: #8A9BA8; font-size: 12px;")
+        ema_bar.addWidget(cvd_gap_label)
+
+        self.cvd_ema_gap_input = QSpinBox()
+        self.cvd_ema_gap_input.setRange(0, 500000)
+        self.cvd_ema_gap_input.setSingleStep(1000)
+        self.cvd_ema_gap_input.setValue(4000)
+        self.cvd_ema_gap_input.setFixedWidth(90)
+        self.cvd_ema_gap_input.setStyleSheet("QSpinBox { background:#1B1F2B; color:#26A69A; font-weight:600; }")
+        self.cvd_ema_gap_input.valueChanged.connect(self._on_atr_settings_changed)
+        ema_bar.addWidget(self.cvd_ema_gap_input)
+
         # EMA Label
         ema_label = QLabel("EMAs:")
         ema_label.setStyleSheet("color: #B0B0B0; font-weight: 600; font-size: 12px;")
@@ -302,12 +347,12 @@ class CVDSingleChartDialog(QDialog):
 
         ema_bar.addStretch()
 
-        # ── Swing Hunt toggle ──
-        self.btn_swing = QCheckBox("🎣 Swing Hunt")
-        self.btn_swing.setChecked(True)
-        self.btn_swing.setStyleSheet("""
+        # ── Range Zone toggle ──
+        self.btn_range = QCheckBox("📦 Range Zones")
+        self.btn_range.setChecked(True)
+        self.btn_range.setStyleSheet("""
             QCheckBox {
-                color: #B8E0FF;
+                color: #FFD580;
                 font-weight: 600;
                 font-size: 12px;
                 spacing: 6px;
@@ -315,16 +360,35 @@ class CVDSingleChartDialog(QDialog):
             QCheckBox::indicator {
                 width: 16px;
                 height: 16px;
-                border: 2px solid #5B9BD5;
+                border: 2px solid #FFB300;
                 border-radius: 3px;
                 background: #1B1F2B;
             }
             QCheckBox::indicator:checked {
-                background: #5B9BD5;
+                background: #FFB300;
             }
         """)
-        self.btn_swing.toggled.connect(self._on_swing_toggled)
-        ema_bar.addWidget(self.btn_swing)
+        self.btn_range.toggled.connect(self._on_range_toggled)
+        ema_bar.addWidget(self.btn_range)
+
+        range_sens_label = QLabel("Sens")
+        range_sens_label.setStyleSheet("color: #8A9BA8; font-size: 12px;")
+        ema_bar.addWidget(range_sens_label)
+
+        self.range_sens_input = QDoubleSpinBox()
+        self.range_sens_input.setRange(0.5, 10.0)
+        self.range_sens_input.setDecimals(1)
+        self.range_sens_input.setSingleStep(0.5)
+        self.range_sens_input.setValue(2.0)
+        self.range_sens_input.setFixedWidth(65)
+        self.range_sens_input.setToolTip(
+            "Range sensitivity: lower = tighter ranges only, higher = more ranges"
+        )
+        self.range_sens_input.setStyleSheet(
+            "QDoubleSpinBox { background:#1B1F2B; color:#FFD580; font-weight:600; }"
+        )
+        self.range_sens_input.valueChanged.connect(self._on_range_settings_changed)
+        ema_bar.addWidget(self.range_sens_input)
 
         ema_bar.addStretch()
         root.addLayout(ema_bar)
@@ -365,6 +429,22 @@ class CVDSingleChartDialog(QDialog):
         )
         self.price_plot.addItem(self.price_live_dot)
 
+        # ATR Trend Reversal markers
+        self.price_atr_above_markers = pg.ScatterPlotItem(
+            size=9,
+            symbol="t1",
+            brush=pg.mkBrush("#FF4444"),
+            pen=pg.mkPen("#FFFFFF", width=0.8),
+        )
+        self.price_atr_below_markers = pg.ScatterPlotItem(
+            size=9,
+            symbol="t",
+            brush=pg.mkBrush("#00E676"),
+            pen=pg.mkPen("#FFFFFF", width=0.8),
+        )
+        self.price_plot.addItem(self.price_atr_above_markers)
+        self.price_plot.addItem(self.price_atr_below_markers)
+
         # 🔥 INSTITUTIONAL-GRADE PRICE EMAS
         self.price_ema10_curve = pg.PlotCurveItem(
             pen=pg.mkPen('#00D9FF', width=2.0, style=Qt.SolidLine)
@@ -390,10 +470,6 @@ class CVDSingleChartDialog(QDialog):
         self.price_crosshair = pg.InfiniteLine(angle=90, movable=False, pen=pen)
         self.price_crosshair.hide()
         self.price_plot.addItem(self.price_crosshair)
-
-        # 🎣 Swing Hunt overlays (price chart)
-        self._swing_price_items: list = []    # LinearRegionItem + TextItem per zone
-        self._swing_dot_items: list = []      # scatter dots for swing pivots (price)
 
         # 🔥 Price EMA Legend (top-right corner)
         self.price_legend = pg.LegendItem(offset=(10, 10))
@@ -461,6 +537,22 @@ class CVDSingleChartDialog(QDialog):
             pen=pg.mkPen("#FFFFFF", width=1)
         )
         self.plot.addItem(self.live_dot)
+
+        # ATR Trend Reversal markers (CVD chart)
+        self.cvd_atr_above_markers = pg.ScatterPlotItem(
+            size=9,
+            symbol="t1",
+            brush=pg.mkBrush("#FF4444"),
+            pen=pg.mkPen("#FFFFFF", width=0.8),
+        )
+        self.cvd_atr_below_markers = pg.ScatterPlotItem(
+            size=9,
+            symbol="t",
+            brush=pg.mkBrush("#00E676"),
+            pen=pg.mkPen("#FFFFFF", width=0.8),
+        )
+        self.plot.addItem(self.cvd_atr_above_markers)
+        self.plot.addItem(self.cvd_atr_below_markers)
 
         # 🔥 INSTITUTIONAL-GRADE CVD EMAS
         self.cvd_ema10_curve = pg.PlotCurveItem(
@@ -592,8 +684,8 @@ class CVDSingleChartDialog(QDialog):
         self.price_today_curve.clear()
         self.price_live_dot.clear()
 
-        self._clear_swing_overlays()
         self.all_timestamps.clear()
+        self._clear_range_boxes()
         self._load_and_plot()
 
     def _on_mouse_moved(self, pos):
@@ -677,6 +769,129 @@ class CVDSingleChartDialog(QDialog):
 
         return ema
 
+    @staticmethod
+    def _calculate_atr(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) -> np.ndarray:
+        """Calculate ATR using Wilder's smoothing (RMA), aligned to input length."""
+        length = len(close)
+        atr = np.zeros(length, dtype=float)
+        if length == 0:
+            return atr
+
+        prev_close = np.concatenate(([close[0]], close[:-1]))
+        tr = np.maximum.reduce([
+            high - low,
+            np.abs(high - prev_close),
+            np.abs(low - prev_close),
+        ])
+
+        atr[0] = tr[0]
+        alpha = 1.0 / max(period, 1)
+        for i in range(1, length):
+            atr[i] = (tr[i] * alpha) + (atr[i - 1] * (1 - alpha))
+
+        return atr
+
+    def _on_atr_settings_changed(self, *_):
+        """Recompute ATR markers from plotted data without refetching history."""
+        self._update_atr_reversal_markers()
+
+    def _update_atr_reversal_markers(self):
+        """Update ATR reversal triangles using currently plotted price and CVD series."""
+        has_price = getattr(self, "all_price_data", None) and self._last_plot_x_indices
+        has_cvd   = getattr(self, "all_cvd_data",  None) and self._last_plot_x_indices
+
+        if not has_price:
+            self.price_atr_above_markers.clear()
+            self.price_atr_below_markers.clear()
+        if not has_cvd:
+            self.cvd_atr_above_markers.clear()
+            self.cvd_atr_below_markers.clear()
+        if not has_price and not has_cvd:
+            return
+
+        base_ema_period    = int(self.atr_base_ema_input.value())
+        distance_threshold = float(self.atr_distance_input.value())
+        x_arr              = np.array(self._last_plot_x_indices, dtype=float)
+
+        # ── Price markers ────────────────────────────────────────────────
+        if has_price:
+            price_data_array = np.array(self.all_price_data,      dtype=float)
+            high_data_array  = np.array(self.all_price_high_data,  dtype=float)
+            low_data_array   = np.array(self.all_price_low_data,   dtype=float)
+
+            atr_values    = self._calculate_atr(high_data_array, low_data_array, price_data_array, period=14)
+            base_ema      = self._calculate_ema(price_data_array, base_ema_period)
+            safe_atr      = np.where(atr_values <= 0, np.nan, atr_values)
+            distance      = np.abs(price_data_array - base_ema) / safe_atr
+
+            above_mask = (distance >= distance_threshold) & (price_data_array > base_ema)
+            below_mask = (distance >= distance_threshold) & (price_data_array < base_ema)
+            atr_offset = np.nan_to_num(atr_values, nan=0.0) * 0.15
+
+            self.price_atr_above_markers.setData(
+                x_arr[above_mask],
+                high_data_array[above_mask] + atr_offset[above_mask],
+            )
+            self.price_atr_below_markers.setData(
+                x_arr[below_mask],
+                low_data_array[below_mask] - atr_offset[below_mask],
+            )
+
+        # ── CVD markers — EMA 51 / distance 9 + raw gap gate (independent of price UI) ──
+        if has_cvd:
+            CVD_ATR_EMA      = 51
+            CVD_ATR_DISTANCE = 11
+
+            cvd_data_array = np.array(self.all_cvd_data, dtype=float)
+
+            if getattr(self, "all_cvd_high_data", None) and getattr(self, "all_cvd_low_data", None):
+                cvd_high = np.array(self.all_cvd_high_data, dtype=float)
+                cvd_low  = np.array(self.all_cvd_low_data,  dtype=float)
+            else:
+                cvd_high = cvd_data_array.copy()
+                cvd_low  = cvd_data_array.copy()
+
+            atr_cvd    = self._calculate_atr(cvd_high, cvd_low, cvd_data_array, period=14)
+            base_ema_c = self._calculate_ema(cvd_data_array, CVD_ATR_EMA)
+            safe_atr_c = np.where(atr_cvd <= 0, np.nan, atr_cvd)
+            distance_c = np.abs(cvd_data_array - base_ema_c) / safe_atr_c
+
+            # ── Extra gate: raw gap between CVD and its EMA must exceed threshold ──
+            cvd_ema_gap_threshold = float(self.cvd_ema_gap_input.value())
+            raw_gap_c  = np.abs(cvd_data_array - base_ema_c)
+            gap_mask_c = raw_gap_c > cvd_ema_gap_threshold  # BOTH conditions must hold
+
+            above_mask_c = (distance_c >= CVD_ATR_DISTANCE) & (cvd_data_array > base_ema_c) & gap_mask_c
+            below_mask_c = (distance_c >= CVD_ATR_DISTANCE) & (cvd_data_array < base_ema_c) & gap_mask_c
+            atr_offset_c = np.nan_to_num(atr_cvd, nan=0.0) * 0.15
+
+            # Simple EMA-side masks (no ATR distance required) — used for weak confluence
+            cvd_above_ema51 = cvd_data_array > base_ema_c
+            cvd_below_ema51 = cvd_data_array < base_ema_c
+
+            self.cvd_atr_above_markers.setData(
+                x_arr[above_mask_c],
+                cvd_high[above_mask_c] + atr_offset_c[above_mask_c],
+            )
+            self.cvd_atr_below_markers.setData(
+                x_arr[below_mask_c],
+                cvd_low[below_mask_c] - atr_offset_c[below_mask_c],
+            )
+
+        # ── Confluence: price reversal + CVD confirmation ─────────────────
+        if has_price and has_cvd:
+            if len(above_mask) == len(above_mask_c) == len(x_arr):
+                self._draw_confluence_lines(
+                    price_above_mask=above_mask,
+                    price_below_mask=below_mask,
+                    cvd_above_mask=above_mask_c,
+                    cvd_below_mask=below_mask_c,
+                    cvd_above_ema51=cvd_above_ema51,
+                    cvd_below_ema51=cvd_below_ema51,
+                    x_arr=x_arr,
+                )
+
+
     # ------------------------------------------------------------------
 
     def _load_and_plot(self):
@@ -758,6 +973,12 @@ class CVDSingleChartDialog(QDialog):
         self.price_prev_curve.clear()
         self.price_today_curve.clear()
         self.price_live_dot.clear()
+        self.price_atr_above_markers.clear()
+        self.price_atr_below_markers.clear()
+        self.cvd_atr_above_markers.clear()
+        self.cvd_atr_below_markers.clear()
+        self._clear_confluence_lines()
+        self._clear_range_boxes()
 
         # Clear EMA curves
         self.cvd_ema10_curve.clear()
@@ -769,7 +990,12 @@ class CVDSingleChartDialog(QDialog):
 
         self.all_timestamps = []
         self.all_cvd_data = []
+        self.all_cvd_high_data = []
+        self.all_cvd_low_data = []
         self.all_price_data = []
+        self.all_price_high_data = []
+        self.all_price_low_data = []
+        self._last_plot_x_indices = []
 
         x_offset = 0
         sessions = sorted(cvd_df["session"].unique())
@@ -779,13 +1005,21 @@ class CVDSingleChartDialog(QDialog):
             df_price_sess = price_df[price_df["session"] == sess]
 
             cvd_y_raw = df_cvd_sess["close"].values
+            cvd_high_raw = df_cvd_sess["high"].values if "high" in df_cvd_sess.columns else cvd_y_raw
+            cvd_low_raw  = df_cvd_sess["low"].values  if "low"  in df_cvd_sess.columns else cvd_y_raw
             price_y_raw = df_price_sess["close"].values
+            price_high_raw = df_price_sess["high"].values
+            price_low_raw = df_price_sess["low"].values
 
             # Rebasing logic for CVD
             if i == 0 and len(sessions) == 2 and not self.btn_focus.isChecked():
-                cvd_y = cvd_y_raw - prev_close
+                cvd_y    = cvd_y_raw    - prev_close
+                cvd_high = cvd_high_raw - prev_close
+                cvd_low  = cvd_low_raw  - prev_close
             else:
-                cvd_y = cvd_y_raw
+                cvd_y    = cvd_y_raw
+                cvd_high = cvd_high_raw
+                cvd_low  = cvd_low_raw
 
             price_y = price_y_raw
 
@@ -806,14 +1040,13 @@ class CVDSingleChartDialog(QDialog):
                 self._current_session_start_ts = df_cvd_sess.index[0]
                 self._current_session_x_base = float(xs[0]) if xs else 0.0
 
-            if not is_current_session:
-                self.all_timestamps.extend(df_cvd_sess.index.tolist())
-                self.all_cvd_data.extend(cvd_y.tolist())
-                self.all_price_data.extend(price_y.tolist())
-            else:
-                self.all_timestamps.extend(df_cvd_sess.index.tolist())
-                self.all_cvd_data.extend(cvd_y.tolist())
-                self.all_price_data.extend(price_y.tolist())
+            self.all_timestamps.extend(df_cvd_sess.index.tolist())
+            self.all_cvd_data.extend(cvd_y.tolist())
+            self.all_cvd_high_data.extend(cvd_high.tolist())
+            self.all_cvd_low_data.extend(cvd_low.tolist())
+            self.all_price_data.extend(price_y.tolist())
+            self.all_price_high_data.extend(price_high_raw.tolist())
+            self.all_price_low_data.extend(price_low_raw.tolist())
 
             # Plot CVD
             if i == 0 and len(sessions) == 2:
@@ -835,15 +1068,6 @@ class CVDSingleChartDialog(QDialog):
                 x_offset += len(df_cvd_sess)
 
         self._plot_live_ticks_only()
-
-        # 🎣 Swing Hunt overlay (price chart only)
-        if self.all_price_data and self.all_timestamps:
-            prices_arr = np.array(self.all_price_data)
-            if focus_mode:
-                xi = [self._time_to_session_index(ts) for ts in self.all_timestamps]
-            else:
-                xi = list(range(len(self.all_timestamps)))
-            self._draw_swing_overlays(prices_arr, self.all_timestamps, xi)
 
         # Time axis formatter
         def time_formatter(values, *_):
@@ -882,6 +1106,7 @@ class CVDSingleChartDialog(QDialog):
                 x_indices = list(range(len(self.all_timestamps)))
 
             # Calculate EMAs
+            self._last_plot_x_indices = list(x_indices)
             enabled_emas = self._enabled_ema_periods()
 
             # --- CVD EMAs ---
@@ -935,6 +1160,9 @@ class CVDSingleChartDialog(QDialog):
             for period, cb in self.ema_checkboxes.items():
                 self._on_ema_toggled(period, cb.isChecked())
 
+            self._update_atr_reversal_markers()
+            self._draw_range_boxes()
+
 
         # Set X range
         self.plot.enableAutoRange(axis=pg.ViewBox.YAxis)
@@ -957,150 +1185,232 @@ class CVDSingleChartDialog(QDialog):
             if cb.isChecked()
         }
 
-    # ──────────────────────────────────────────────────────────────────────
-    # 🎣  SWING HUNT OVERLAY
-    # ──────────────────────────────────────────────────────────────────────
+    # ------------------------------------------------------------------
+    # 🎯  CONFLUENCE SIGNAL LINES
+    # ------------------------------------------------------------------
 
-    def _on_swing_toggled(self, checked: bool):
-        """Show/hide all swing zones instantly."""
-        for item in self._swing_price_items:
-            item.setVisible(checked)
-        for item in self._swing_dot_items:
-            item.setVisible(checked)
+    def _clear_confluence_lines(self):
+        """Remove all confluence vertical lines from both charts."""
+        for line_pair in self._confluence_lines:
+            for plot, line in line_pair:
+                plot.removeItem(line)
+        self._confluence_lines.clear()
 
-    def _clear_swing_overlays(self):
-        """Remove every swing item from price chart."""
-        for item in self._swing_price_items:
-            self.price_plot.removeItem(item)
-        self._swing_price_items.clear()
-
-        for item in self._swing_dot_items:
-            self.price_plot.removeItem(item)
-        self._swing_dot_items.clear()
-
-    def _draw_swing_overlays(
+    def _draw_confluence_lines(
         self,
-        prices: np.ndarray,
-        timestamps: list,
-        x_indices: list[int],
+        price_above_mask: np.ndarray,
+        price_below_mask: np.ndarray,
+        cvd_above_mask: np.ndarray,
+        cvd_below_mask: np.ndarray,
+        cvd_above_ema51: np.ndarray,
+        cvd_below_ema51: np.ndarray,
+        x_arr: np.ndarray,
     ):
         """
-        Run SwingHunter on price data, then paint zones + pivot dots
-        onto the price chart.
+        Draw a vertical line on BOTH charts wherever price fires a reversal
+        and CVD confirms — either via its own ATR signal OR simply by being
+        on the correct side of its 51 EMA.
 
-        Virgin Zone  : semi-transparent TEAL band — market will come back here
-        Hunted Zone  : semi-transparent RED  band  — stop hunt done, watch for reversal
-        Swing pivots : colored dots (green=low, red=high)
+        SHORT (red)  : price above EMA (bearish reversal)
+                       AND (CVD fired above EMA  OR  CVD is just below EMA 51)
+        LONG  (green): price below EMA (bullish reversal)
+                       AND (CVD fired below EMA  OR  CVD is just above EMA 51)
         """
-        self._clear_swing_overlays()
+        self._clear_confluence_lines()
 
-        if not self.btn_swing.isChecked():
-            return
-        if len(prices) < 8:
-            return
+        short_mask = price_above_mask & (cvd_above_mask | cvd_below_ema51)
+        long_mask  = price_below_mask & (cvd_below_mask | cvd_above_ema51)
 
-        swings, zones = self._swing_hunter.find_zones(prices, timestamps, x_indices)
+        def _make_line(x: float, color: str) -> list:
+            """Create one InfiniteLine per chart and return [(plot, line), ...]."""
+            pen = pg.mkPen(color, width=1.5, style=Qt.SolidLine)
+            pairs = []
+            for plot in (self.price_plot, self.plot):
+                line = pg.InfiniteLine(
+                    pos=x,
+                    angle=90,
+                    movable=False,
+                    pen=pen,
+                    label="",
+                )
+                line.setZValue(5)   # above curves, below dots
+                plot.addItem(line)
+                pairs.append((plot, line))
+            return pairs
 
-        visible = self.btn_swing.isChecked()
+        for x in x_arr[short_mask]:
+            self._confluence_lines.append(_make_line(x, "#FF4444"))  # red  → short
 
-        # ── Draw zones (LinearRegionItem = horizontal band) ──────────────
-        for zone in zones:
-            if zone.zone_type == "virgin":
-                brush = pg.mkBrush(0, 200, 160, 35)      # teal, very translucent
-                border_pen = pg.mkPen("#00C8A0", width=1, style=Qt.DashLine)
-                label_color = "#00C8A0"
-                label_prefix = "🌱 VIRGIN"
+        for x in x_arr[long_mask]:
+            self._confluence_lines.append(_make_line(x, "#00E676"))  # green → long
+
+    # ------------------------------------------------------------------
+    # 📦  RANGE ZONE BOXES
+    # ------------------------------------------------------------------
+
+    def _clear_range_boxes(self):
+        """Remove all range box items from both charts."""
+        for plot, item in self._range_box_items:
+            plot.removeItem(item)
+        self._range_box_items.clear()
+
+    def _on_range_toggled(self, checked: bool):
+        """Show/hide range boxes instantly without redrawing."""
+        for _, item in self._range_box_items:
+            item.setVisible(checked)
+
+    def _on_range_settings_changed(self, *_):
+        """Recompute range boxes when sensitivity changes."""
+        self._draw_range_boxes()
+
+    @staticmethod
+    def _find_range_runs(mask: np.ndarray, min_bars: int) -> list[tuple[int, int]]:
+        """
+        Return list of (start, end) index pairs for contiguous True runs
+        in *mask* that are at least *min_bars* long.
+        """
+        runs = []
+        n = len(mask)
+        i = 0
+        while i < n:
+            if mask[i]:
+                j = i
+                while j < n and mask[j]:
+                    j += 1
+                if j - i >= min_bars:
+                    runs.append((i, j - 1))
+                i = j
             else:
-                brush = pg.mkBrush(255, 80, 80, 30)       # red, very translucent
-                border_pen = pg.mkPen("#FF5050", width=1, style=Qt.DashLine)
-                label_color = "#FF5050"
-                label_prefix = "💀 HUNTED"
+                i += 1
+        return runs
 
-            # Horizontal band across full X range
-            region = pg.LinearRegionItem(
-                values=[zone.zone_bot, zone.zone_top],
-                orientation="horizontal",
-                brush=brush,
-                pen=border_pen,
+    def _draw_range_boxes(self):
+        """
+        Detect bars where BOTH price and CVD are in a low-volatility range,
+        and draw aligned rectangular boxes on both charts for each run.
+
+        Detection: rolling (high - low) / ATR < sensitivity threshold
+        for both price and CVD simultaneously for >= min_bars consecutive bars.
+        """
+        self._clear_range_boxes()
+
+        has_price = getattr(self, "all_price_data", None) and self._last_plot_x_indices
+        has_cvd   = getattr(self, "all_cvd_data",  None) and self._last_plot_x_indices
+        if not (has_price and has_cvd):
+            return
+
+        visible   = self.btn_range.isChecked()
+        threshold = float(self.range_sens_input.value())
+        window    = 10   # rolling lookback in bars
+        min_bars  = 5    # minimum consecutive bars to qualify as a range
+
+        price_arr = np.array(self.all_price_data,     dtype=float)
+        p_high    = np.array(self.all_price_high_data, dtype=float)
+        p_low     = np.array(self.all_price_low_data,  dtype=float)
+        cvd_arr   = np.array(self.all_cvd_data,       dtype=float)
+
+        if getattr(self, "all_cvd_high_data", None) and getattr(self, "all_cvd_low_data", None):
+            c_high = np.array(self.all_cvd_high_data, dtype=float)
+            c_low  = np.array(self.all_cvd_low_data,  dtype=float)
+        else:
+            c_high = cvd_arr.copy()
+            c_low  = cvd_arr.copy()
+
+        x_arr = np.array(self._last_plot_x_indices, dtype=float)
+        n     = len(price_arr)
+        if n < window:
+            return
+
+        # ATR for normalisation
+        price_atr = self._calculate_atr(p_high, p_low, price_arr, period=14)
+        cvd_atr   = self._calculate_atr(c_high, c_low, cvd_arr,   period=14)
+
+        # Rolling range (high - low over window bars)
+        price_range_mask = np.zeros(n, dtype=bool)
+        cvd_range_mask   = np.zeros(n, dtype=bool)
+
+        for i in range(window - 1, n):
+            sl = slice(i - window + 1, i + 1)
+
+            p_roll_range = p_high[sl].max() - p_low[sl].min()
+            p_atr_val    = price_atr[i]
+            if p_atr_val > 0:
+                price_range_mask[i] = (p_roll_range / p_atr_val) < threshold
+
+            c_roll_range = c_high[sl].max() - c_low[sl].min()
+            c_atr_val    = cvd_atr[i]
+            if c_atr_val > 0:
+                cvd_range_mask[i] = (c_roll_range / c_atr_val) < threshold
+
+        both_mask = price_range_mask & cvd_range_mask
+        runs = self._find_range_runs(both_mask, min_bars)
+
+        for start, end in runs:
+            x_left  = float(x_arr[start])
+            x_right = float(x_arr[end]) + 1.0   # +1 so the box covers the last bar
+
+            # ── Price box ────────────────────────────────────────────────
+            p_top = float(p_high[start:end + 1].max())
+            p_bot = float(p_low [start:end + 1].min())
+            pad_p = (p_top - p_bot) * 0.08
+            p_box = pg.LinearRegionItem(
+                values=[x_left, x_right],
+                orientation="vertical",
+                brush=pg.mkBrush(255, 179, 0, 22),
+                pen=pg.mkPen("#FFB300", width=1, style=Qt.DashLine),
                 movable=False,
-                bounds=[zone.zone_bot, zone.zone_top],
             )
-            region.setVisible(visible)
-            self.price_plot.addItem(region)
-            self._swing_price_items.append(region)
+            # Clip vertical extent via a custom ROI — pyqtgraph LinearRegionItem
+            # spans full Y by default, so we layer an invisible rect on top for the
+            # price bounds label instead.
+            p_box.setZValue(2)
+            p_box.setVisible(visible)
+            self.price_plot.addItem(p_box)
+            self._range_box_items.append((self.price_plot, p_box))
 
-            # Label at the right edge of the chart
-            label_text = f"{label_prefix}  {zone.retrace_pct:.0f}%"
-            label = pg.TextItem(
-                text=label_text,
-                color=label_color,
-                anchor=(1, 0.5),
-                fill=pg.mkBrush("#161A25CC"),
-                border=pg.mkPen(label_color, width=0.5),
+            # Price range label
+            p_label = pg.TextItem(
+                text=f"R  {p_top - p_bot:.1f}",
+                color="#FFB300",
+                anchor=(0, 1),
+                fill=pg.mkBrush("#161A25BB"),
+                border=pg.mkPen("#FFB300", width=0.5),
             )
-            label.setFont(pg.QtGui.QFont("Consolas", 8))
-            mid_price = (zone.zone_top + zone.zone_bot) / 2
-            label.setPos(zone.x_end, mid_price)
-            label.setVisible(visible)
-            self.price_plot.addItem(label)
-            self._swing_price_items.append(label)
+            p_label.setFont(pg.QtGui.QFont("Consolas", 7))
+            p_label.setPos(x_left, p_top + pad_p)
+            p_label.setVisible(visible)
+            self.price_plot.addItem(p_label)
+            self._range_box_items.append((self.price_plot, p_label))
 
-            # Thin line connecting leg start to retrace
-            connector_xs = [
-                x_indices[min(zone.leg_start.idx, len(x_indices) - 1)],
-                x_indices[min(zone.leg_end.idx, len(x_indices) - 1)],
-                x_indices[min(zone.retrace_swing.idx, len(x_indices) - 1)],
-            ]
-            connector_ys = [
-                zone.leg_start.price,
-                zone.leg_end.price,
-                zone.retrace_swing.price,
-            ]
-            zigzag = pg.PlotCurveItem(
-                x=connector_xs,
-                y=connector_ys,
-                pen=pg.mkPen(label_color, width=1.2, style=Qt.DotLine),
+            # ── CVD box (same x span) ─────────────────────────────────────
+            c_top = float(c_high[start:end + 1].max())
+            c_bot = float(c_low [start:end + 1].min())
+            pad_c = (c_top - c_bot) * 0.08
+            c_box = pg.LinearRegionItem(
+                values=[x_left, x_right],
+                orientation="vertical",
+                brush=pg.mkBrush(255, 179, 0, 22),
+                pen=pg.mkPen("#FFB300", width=1, style=Qt.DashLine),
+                movable=False,
             )
-            zigzag.setVisible(visible)
-            self.price_plot.addItem(zigzag)
-            self._swing_price_items.append(zigzag)
+            c_box.setZValue(2)
+            c_box.setVisible(visible)
+            self.plot.addItem(c_box)
+            self._range_box_items.append((self.plot, c_box))
 
-        # ── Draw swing pivot dots ─────────────────────────────────────────
-        high_xs, high_ys = [], []
-        low_xs,  low_ys  = [], []
-
-        for sw in swings:
-            xi = x_indices[min(sw.idx, len(x_indices) - 1)]
-            if sw.kind == "high":
-                high_xs.append(xi)
-                high_ys.append(sw.price)
-            else:
-                low_xs.append(xi)
-                low_ys.append(sw.price)
-
-        if high_xs:
-            high_dots = pg.ScatterPlotItem(
-                x=high_xs, y=high_ys,
-                symbol="t1",     # down-triangle = high pivot
-                size=10,
-                brush=pg.mkBrush("#FF4444"),
-                pen=pg.mkPen("#FFFFFF", width=0.8),
+            # CVD range label
+            c_label = pg.TextItem(
+                text=f"R  {c_top - c_bot:.0f}",
+                color="#FFB300",
+                anchor=(0, 1),
+                fill=pg.mkBrush("#161A25BB"),
+                border=pg.mkPen("#FFB300", width=0.5),
             )
-            high_dots.setVisible(visible)
-            self.price_plot.addItem(high_dots)
-            self._swing_dot_items.append(high_dots)
-
-        if low_xs:
-            low_dots = pg.ScatterPlotItem(
-                x=low_xs, y=low_ys,
-                symbol="t",      # up-triangle = low pivot
-                size=10,
-                brush=pg.mkBrush("#00E676"),
-                pen=pg.mkPen("#FFFFFF", width=0.8),
-            )
-            low_dots.setVisible(visible)
-            self.price_plot.addItem(low_dots)
-            self._swing_dot_items.append(low_dots)
+            c_label.setFont(pg.QtGui.QFont("Consolas", 7))
+            c_label.setPos(x_left, c_top + pad_c)
+            c_label.setVisible(visible)
+            self.plot.addItem(c_label)
+            self._range_box_items.append((self.plot, c_label))
 
     def _blink_dot(self):
         self._dot_visible = not self._dot_visible
@@ -1150,6 +1460,10 @@ class CVDSingleChartDialog(QDialog):
         self.price_prev_curve.clear()
         self.price_today_curve.clear()
         self.price_live_dot.clear()
+        self.price_atr_above_markers.clear()
+        self.price_atr_below_markers.clear()
+        self.cvd_atr_above_markers.clear()
+        self.cvd_atr_below_markers.clear()
         self.cvd_ema10_curve.clear()
         self.cvd_ema21_curve.clear()
         self.cvd_ema51_curve.clear()
@@ -1157,8 +1471,8 @@ class CVDSingleChartDialog(QDialog):
         self.price_ema21_curve.clear()
         self.price_ema51_curve.clear()
         self.all_timestamps.clear()
-        self._clear_swing_overlays()
-
+        self._last_plot_x_indices = []
+        self._clear_range_boxes()
         self._load_and_plot()
 
     def _time_to_session_index(self, ts: datetime) -> int:
