@@ -766,7 +766,8 @@ class ScalperMainWindow(QMainWindow):
             "group_name": f"CVD_AUTO_{token}",
         }
 
-        self._execute_single_strike_order(order_params)
+        # Register the position BEFORE calling execute so that if the signal fires
+        # again within the async 500ms confirmation window we don't double-enter.
         self._cvd_automation_positions[token] = {
             "tradingsymbol": contract.tradingsymbol,
             "signal_side": signal_side,
@@ -775,6 +776,7 @@ class ScalperMainWindow(QMainWindow):
             "sl_underlying": sl_underlying,
             "target_underlying": target_underlying,
         }
+        self._execute_single_strike_order(order_params)
         logger.info(
             "[AUTO] Entered %s via %s | tag=%s qty=%s underlying_sl=%.2f underlying_target=%s",
             contract.tradingsymbol,
@@ -2359,60 +2361,17 @@ class ScalperMainWindow(QMainWindow):
                 self._play_sound(success=True)
                 return
 
-            # LIVE TRADING PATH (unchanged)
-            QTimer.singleShot(500, self._refresh_positions)
-
+            # LIVE TRADING PATH
+            # CRITICAL: Never call time.sleep() on the GUI thread — it freezes the event
+            # loop, stacks up pending timer callbacks and crashes the app under automation.
+            # Use QTimer.singleShot to do the confirmation check asynchronously instead.
             if not isinstance(self.trader, PaperTradingManager):
-                import time
-                time.sleep(0.5)
-                confirmed_order_api_data = self._confirm_order_success(order_id)
-                if confirmed_order_api_data:
-                    order_status = confirmed_order_api_data.get('status')
-                    if order_status in ['OPEN', 'TRIGGER PENDING', 'AMO REQ RECEIVED']:
-                        self._play_sound(success=True)
-                        return
-
-                    if order_status == 'COMPLETE':
-                        avg_price_from_order = confirmed_order_api_data.get('average_price',
-                                                                            price if price else contract_to_trade.ltp)
-                        filled_quantity = confirmed_order_api_data.get('filled_quantity', quantity)
-
-                        if transaction_type == self.trader.TRANSACTION_TYPE_BUY:
-                            new_position = Position(
-                                symbol=f"{contract_to_trade.symbol}{contract_to_trade.strike}{contract_to_trade.option_type}",
-                                tradingsymbol=contract_to_trade.tradingsymbol,
-                                quantity=filled_quantity,
-                                average_price=avg_price_from_order,
-                                ltp=avg_price_from_order,
-                                pnl=0,
-                                contract=contract_to_trade,
-                                order_id=order_id,
-                                exchange=self.trader.EXCHANGE_NFO,
-                                product=product,
-                                stop_loss_price=stop_loss_price,
-                                target_price=target_price,
-                                trailing_stop_loss=trailing_stop_loss if trailing_stop_loss and trailing_stop_loss > 0 else None,
-                                group_name=group_name
-                            )
-                            self.position_manager.add_position(new_position)
-                            self.trade_logger.log_trade(confirmed_order_api_data)
-                            action_msg = "bought"
-                        else:
-                            # Ledger will be handled by _check_live_completed_orders()
-                            action_msg = "sold"
-
-                        self._play_sound(success=True)
-                        self.statusBar().showMessage(
-                            f"Order {order_id} ({action_msg} {filled_quantity} {contract_to_trade.tradingsymbol} @ {avg_price_from_order:.2f}) successful.",
-                            5000)
-                        self._show_order_results([{'order_id': order_id, 'symbol': contract_to_trade.tradingsymbol}],
-                                                 [])
-                else:
-                    self._play_sound(success=False)
-                    logger.warning(
-                        f"Single strike order {order_id} for {contract_to_trade.tradingsymbol} failed or not confirmed.")
-                    self._show_order_results([], [{'symbol': contract_to_trade.tradingsymbol,
-                                                   'error': "Order rejected or status not confirmed"}])
+                QTimer.singleShot(500, lambda oid=order_id, c=contract_to_trade, qty=quantity,
+                                          p=price, tt=transaction_type, prod=product,
+                                          sl=stop_loss_price, tp=target_price,
+                                          tsl=trailing_stop_loss, gn=group_name:
+                    self._confirm_and_finalize_order(oid, c, qty, p, tt, prod, sl, tp, tsl, gn))
+                return
 
         except Exception as e:
             self._play_sound(success=False)
@@ -2420,6 +2379,70 @@ class ScalperMainWindow(QMainWindow):
                          exc_info=True)
             self._handle_order_error(e, order_params)
             self._show_order_results([], [{'symbol': contract_to_trade.tradingsymbol, 'error': str(e)}])
+
+    def _confirm_and_finalize_order(
+        self, order_id, contract_to_trade, quantity, price,
+        transaction_type, product, stop_loss_price, target_price,
+        trailing_stop_loss, group_name
+    ):
+        """
+        Async callback (called via QTimer.singleShot) that replaces the old
+        blocking time.sleep(0.5) + _confirm_order_success() pattern.
+
+        This runs on the GUI thread AFTER yielding to the event loop, so all
+        pending Qt callbacks (timers, signals) drain normally first.
+        """
+        self._refresh_positions()
+        confirmed_order_api_data = self._confirm_order_success(order_id)
+        if confirmed_order_api_data:
+            order_status = confirmed_order_api_data.get('status')
+            if order_status in ['OPEN', 'TRIGGER PENDING', 'AMO REQ RECEIVED']:
+                self._play_sound(success=True)
+                return
+
+            if order_status == 'COMPLETE':
+                avg_price_from_order = confirmed_order_api_data.get(
+                    'average_price', price if price else contract_to_trade.ltp)
+                filled_quantity = confirmed_order_api_data.get('filled_quantity', quantity)
+
+                if transaction_type == self.trader.TRANSACTION_TYPE_BUY:
+                    new_position = Position(
+                        symbol=f"{contract_to_trade.symbol}{contract_to_trade.strike}{contract_to_trade.option_type}",
+                        tradingsymbol=contract_to_trade.tradingsymbol,
+                        quantity=filled_quantity,
+                        average_price=avg_price_from_order,
+                        ltp=avg_price_from_order,
+                        pnl=0,
+                        contract=contract_to_trade,
+                        order_id=order_id,
+                        exchange=self.trader.EXCHANGE_NFO,
+                        product=product,
+                        stop_loss_price=stop_loss_price,
+                        target_price=target_price,
+                        trailing_stop_loss=trailing_stop_loss if trailing_stop_loss and trailing_stop_loss > 0 else None,
+                        group_name=group_name
+                    )
+                    self.position_manager.add_position(new_position)
+                    self.trade_logger.log_trade(confirmed_order_api_data)
+                    action_msg = "bought"
+                else:
+                    action_msg = "sold"
+
+                self._play_sound(success=True)
+                self.statusBar().showMessage(
+                    f"Order {order_id} ({action_msg} {filled_quantity} "
+                    f"{contract_to_trade.tradingsymbol} @ {avg_price_from_order:.2f}) successful.",
+                    5000)
+                self._show_order_results(
+                    [{'order_id': order_id, 'symbol': contract_to_trade.tradingsymbol}], [])
+        else:
+            self._play_sound(success=False)
+            logger.warning(
+                f"Single strike order {order_id} for {contract_to_trade.tradingsymbol} "
+                "failed or not confirmed.")
+            self._show_order_results(
+                [], [{'symbol': contract_to_trade.tradingsymbol,
+                      'error': "Order rejected or status not confirmed"}])
 
     def _execute_strategy_orders(self, order_params_list: List[dict], strategy_name: Optional[str] = None):
         if not order_params_list:

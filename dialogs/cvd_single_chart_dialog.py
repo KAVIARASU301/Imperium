@@ -1,4 +1,5 @@
 import logging
+from collections import deque
 from contextlib import suppress
 from datetime import datetime, timedelta
 import numpy as np
@@ -9,7 +10,7 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QLabel, QHBoxLayout,
     QPushButton, QWidget, QCheckBox, QSpinBox, QDoubleSpinBox
 )
-from PySide6.QtCore import Qt, QTimer, Signal, QEvent
+from PySide6.QtCore import Qt, QTimer, Signal, QEvent, QObject, QThread
 from pyqtgraph import AxisItem, TextItem
 
 from kiteconnect import KiteConnect
@@ -117,13 +118,94 @@ class DateNavigator(QWidget):
 
 
 # =============================================================================
+# Background data fetch worker — keeps kite.historical_data() OFF the GUI thread
+# =============================================================================
+
+class _DataFetchWorker(QObject):
+    """Runs kite.historical_data + CVD build on a QThread.
+    Emits result_ready(cvd_df, price_df, prev_close) on success,
+    or error() on failure — both signals are received on the GUI thread
+    because the worker is moved to a QThread and signals cross automatically.
+    """
+    result_ready = Signal(object, object, float)   # cvd_df, price_df, prev_close
+    error        = Signal(str)
+
+    def __init__(self, kite, instrument_token: int, from_dt, to_dt,
+                 timeframe_minutes: int, focus_mode: bool):
+        super().__init__()
+        self.kite = kite
+        self.instrument_token = instrument_token
+        self.from_dt = from_dt
+        self.to_dt = to_dt
+        self.timeframe_minutes = timeframe_minutes
+        self.focus_mode = focus_mode
+
+    def run(self):
+        try:
+            hist = self.kite.historical_data(
+                self.instrument_token,
+                self.from_dt,
+                self.to_dt,
+                interval="minute"
+            )
+            if not hist:
+                self.error.emit("no_data")
+                return
+
+            df = pd.DataFrame(hist)
+            if df.empty:
+                self.error.emit("empty_df")
+                return
+
+            df["date"] = pd.to_datetime(df["date"])
+            df.set_index("date", inplace=True)
+
+            if self.timeframe_minutes > 1:
+                rule = f"{self.timeframe_minutes}min"
+                df = df.resample(rule).agg({
+                    "open": "first", "high": "max",
+                    "low": "min",   "close": "last", "volume": "sum"
+                }).dropna()
+
+            cvd_df = CVDHistoricalBuilder.build_cvd_ohlc(df)
+            cvd_df["session"] = cvd_df.index.date
+            sessions = sorted(cvd_df["session"].unique())
+            if not sessions:
+                self.error.emit("no_sessions")
+                return
+
+            prev_close = 0.0
+            if len(sessions) >= 2:
+                prev_data = cvd_df[cvd_df["session"] == sessions[-2]]
+                if not prev_data.empty:
+                    prev_close = prev_data["close"].iloc[-1]
+
+            df["session"] = df.index.date
+            if self.focus_mode:
+                cvd_out   = cvd_df[cvd_df["session"] == sessions[-1]].copy()
+                price_out = df[df["session"] == sessions[-1]].copy()
+            else:
+                cvd_out   = cvd_df[cvd_df["session"].isin(sessions[-2:])].copy()
+                price_out = df[df["session"].isin(sessions[-2:])].copy()
+
+            self.result_ready.emit(cvd_out, price_out, prev_close)
+
+        except Exception as exc:
+            self.error.emit(str(exc))
+
+
+# =============================================================================
 # Single CVD Chart Dialog (with navigator)
 # =============================================================================
 
 class CVDSingleChartDialog(QDialog):
     REFRESH_INTERVAL_MS = 3000
+    LIVE_TICK_MAX_POINTS = 6000
+    LIVE_TICK_REPAINT_MS = 80
+    LIVE_TICK_DOWNSAMPLE_TARGET = 1500
     automation_signal = Signal(dict)
     automation_state_signal = Signal(dict)
+    _cvd_tick_received = Signal(float)   # internal: marshal WebSocket thread → GUI thread
 
     def __init__(
             self,
@@ -145,9 +227,10 @@ class CVDSingleChartDialog(QDialog):
         self.live_mode = True
         self.current_date = None
         self.previous_date = None
-        self._live_tick_points: list[tuple[datetime, float]] = []
+        self._live_tick_points: deque[tuple[datetime, float]] = deque(maxlen=self.LIVE_TICK_MAX_POINTS)
         self._current_session_start_ts: datetime | None = None
         self._current_session_x_base: float = 0.0
+        self._is_loading = False
 
         # Plot caches
         self.all_timestamps: list[datetime] = []
@@ -601,10 +684,17 @@ class CVDSingleChartDialog(QDialog):
         self.dot_timer.start(500)
         self._dot_visible = True
 
+        # Batch high-frequency tick updates to keep UI smooth
+        self._tick_repaint_timer = QTimer(self)
+        self._tick_repaint_timer.setSingleShot(True)
+        self._tick_repaint_timer.timeout.connect(self._plot_live_ticks_only)
+
     # ------------------------------------------------------------------
 
     def _connect_signals(self):
         self.navigator.date_changed.connect(self._on_date_changed)
+        # Internal: marshal WebSocket thread ticks to the GUI thread safely.
+        self._cvd_tick_received.connect(self._apply_cvd_tick, Qt.QueuedConnection)
         if self.cvd_engine:
             self.cvd_engine.cvd_updated.connect(self._on_cvd_tick_update)
 
@@ -617,21 +707,27 @@ class CVDSingleChartDialog(QDialog):
         })
 
     def _on_cvd_tick_update(self, token: int, cvd_value: float):
-        """Append live CVD ticks so intra-minute moves are never erased."""
+        """Receive CVD tick from the Kite WebSocket (background thread).
+
+        We only filter here — actual Qt/deque work is marshalled to the GUI
+        thread via the queued _cvd_tick_received signal to avoid race conditions.
+        """
         if token != self.instrument_token or not self.live_mode:
             return
+        self._cvd_tick_received.emit(cvd_value)
 
+    def _apply_cvd_tick(self, cvd_value: float):
+        """Slot — always called on the GUI thread via queued signal connection."""
         ts = datetime.now()
         self._live_tick_points.append((ts, cvd_value))
 
-        # Keep only today's/session points to avoid unbounded growth
-        today = datetime.now().date()
-        self._live_tick_points = [
-            (t, v) for t, v in self._live_tick_points
-            if t.date() == today
-        ]
+        # Trim stale points from previous sessions.
+        today = ts.date()
+        while self._live_tick_points and self._live_tick_points[0][0].date() < today:
+            self._live_tick_points.popleft()
 
-        self._plot_live_ticks_only()
+        if not self._tick_repaint_timer.isActive():
+            self._tick_repaint_timer.start(self.LIVE_TICK_REPAINT_MS)
 
     # ------------------------------------------------------------------
 
@@ -671,10 +767,11 @@ class CVDSingleChartDialog(QDialog):
 
     def _on_focus_mode_changed(self, enabled: bool):
         self.btn_focus.setText("🎯 FOCUS ON" if enabled else "Focus (1D)")
-        if enabled:
-            self.cvd_engine.set_mode(CVDMode.SINGLE_DAY)
-        else:
-            self.cvd_engine.set_mode(CVDMode.NORMAL)
+        if self.cvd_engine:
+            if enabled:
+                self.cvd_engine.set_mode(CVDMode.SINGLE_DAY)
+            else:
+                self.cvd_engine.set_mode(CVDMode.NORMAL)
 
         # Clear visual state
         self.prev_curve.clear()
@@ -913,16 +1010,26 @@ class CVDSingleChartDialog(QDialog):
         if idx is None:
             return
 
+        # Only emit when the closed bar advances or key values change.
+        # Emitting on every 3-second refresh floods _on_cvd_automation_market_state
+        # which triggers position checks and potentially order placement each time.
+        ts_str = self.all_timestamps[idx].isoformat() if idx < len(self.all_timestamps) else None
+        new_price_close = float(price_data_array[idx])
+        state_key = (ts_str, round(new_price_close, 4))
+        if getattr(self, "_last_emitted_state_key", None) == state_key:
+            return
+        self._last_emitted_state_key = state_key
+
         self.automation_state_signal.emit({
             "instrument_token": self.instrument_token,
             "symbol": self.symbol,
             "enabled": self.automate_toggle.isChecked(),
             "stoploss_points": float(self.automation_stoploss_input.value()),
             "bar_x": float(x_arr[idx]),
-            "price_close": float(price_data_array[idx]),
+            "price_close": new_price_close,
             "ema10": float(ema10[idx]),
             "ema51": float(ema51[idx]),
-            "timestamp": self.all_timestamps[idx].isoformat() if idx < len(self.all_timestamps) else None,
+            "timestamp": ts_str,
         })
 
     def _latest_closed_bar_index(self) -> int | None:
@@ -952,71 +1059,67 @@ class CVDSingleChartDialog(QDialog):
     # ------------------------------------------------------------------
 
     def _load_and_plot(self):
-        focus_mode = self.btn_focus.isChecked()
+        """Kick off a background fetch so the GUI thread is never blocked.
+
+        kite.historical_data() is an HTTP call that takes 300ms–2s.
+        Calling it on the GUI thread starves the WebSocket tick handler and
+        freezes the strike ladder / market data for the entire duration.
+        """
+        if self._is_loading:
+            return
 
         if not self.kite or not getattr(self.kite, "access_token", None):
             return
 
+        focus_mode = self.btn_focus.isChecked()
+
+        if self.live_mode:
+            to_dt   = datetime.now()
+            from_dt = to_dt - timedelta(days=5)
+        else:
+            to_dt   = self.current_date + timedelta(days=1)
+            from_dt = self.previous_date
+
+        self._is_loading = True
+
+        # Build worker + thread; keep references so GC doesn't kill them early.
+        worker = _DataFetchWorker(
+            self.kite, self.instrument_token,
+            from_dt, to_dt,
+            self.timeframe_minutes, focus_mode
+        )
+        thread = QThread(self)
+        worker.moveToThread(thread)
+
+        # Wire: thread starts → worker.run(); worker done → cleanup
+        thread.started.connect(worker.run)
+        worker.result_ready.connect(lambda cvd_df, price_df, prev_close:
+            self._on_fetch_result(cvd_df, price_df, prev_close, thread))
+        worker.error.connect(lambda msg:
+            self._on_fetch_error(msg, thread))
+
+        self._fetch_thread = thread   # keep alive
+        self._fetch_worker = worker
+        thread.start()
+
+    def _on_fetch_result(self, cvd_df, price_df, prev_close, thread: QThread):
+        """Called on the GUI thread when background fetch succeeds."""
         try:
-            if self.live_mode:
-                to_dt = datetime.now()
-                from_dt = to_dt - timedelta(days=5)
-            else:
-                to_dt = self.current_date + timedelta(days=1)
-                from_dt = self.previous_date
-
-            hist = self.kite.historical_data(
-                self.instrument_token,
-                from_dt,
-                to_dt,
-                interval="minute"
-            )
-            if not hist:
-                return
-
-            df = pd.DataFrame(hist)
-            df["date"] = pd.to_datetime(df["date"])
-            df.set_index("date", inplace=True)
-
-            # Timeframe aggregation
-            if self.timeframe_minutes > 1:
-                rule = f"{self.timeframe_minutes}min"
-
-                df = df.resample(rule).agg({
-                    "open": "first",
-                    "high": "max",
-                    "low": "min",
-                    "close": "last",
-                    "volume": "sum"
-                }).dropna()
-
-            # Build CVD data
-            cvd_df = CVDHistoricalBuilder.build_cvd_ohlc(df)
-            cvd_df["session"] = cvd_df.index.date
-
-            sessions = sorted(cvd_df["session"].unique())
-            if not sessions:
-                return
-
-            prev_close = 0.0
-            if len(sessions) >= 2:
-                prev_data = cvd_df[cvd_df["session"] == sessions[-2]]
-                if not prev_data.empty:
-                    prev_close = prev_data["close"].iloc[-1]
-
-            df["session"] = df.index.date
-
-            if focus_mode:
-                cvd_df = cvd_df[cvd_df["session"] == sessions[-1]]
-                price_df = df[df["session"] == sessions[-1]]
-            else:
-                cvd_df = cvd_df[cvd_df["session"].isin(sessions[-2:])]
-                price_df = df[df["session"].isin(sessions[-2:])]
-
             self._plot_data(cvd_df, price_df, prev_close)
-
         except Exception:
-            logger.exception("Failed to load CVD data")
+            logger.exception("Failed to plot CVD data")
+        finally:
+            self._is_loading = False
+            thread.quit()
+            thread.wait()
+
+    def _on_fetch_error(self, msg: str, thread: QThread):
+        """Called on the GUI thread when background fetch fails."""
+        if msg not in ("no_data", "empty_df", "no_sessions"):
+            logger.exception("Failed to load CVD data: %s", msg)
+        self._is_loading = False
+        thread.quit()
+        thread.wait()
 
     # ------------------------------------------------------------------
 
@@ -1342,7 +1445,7 @@ class CVDSingleChartDialog(QDialog):
             self._last_emitted_signal_key = signal_key
             self._last_emitted_closed_bar_ts = closed_bar_ts
 
-            self.automation_signal.emit({
+            payload = {
                 "instrument_token": self.instrument_token,
                 "symbol": self.symbol,
                 "signal_side": side,
@@ -1353,7 +1456,9 @@ class CVDSingleChartDialog(QDialog):
                 "stoploss_points": float(self.automation_stoploss_input.value()),
                 "trade_tag": trade_tag,
                 "timestamp": self.all_timestamps[latest_idx].isoformat() if latest_idx < len(self.all_timestamps) else None,
-            })
+            }
+            # Defer emit so broker callbacks cannot re-enter this refresh cycle.
+            QTimer.singleShot(0, lambda p=payload: self.automation_signal.emit(p))
 
     def _blink_dot(self):
         self._dot_visible = not self._dot_visible
@@ -1371,7 +1476,7 @@ class CVDSingleChartDialog(QDialog):
     def _refresh_if_live(self):
         if not self.live_mode:
             return
-        if not self.isVisible() or not self.isActiveWindow():
+        if not self.isVisible():
             return
         self._load_and_plot()
 
@@ -1446,8 +1551,12 @@ class CVDSingleChartDialog(QDialog):
             self.today_tick_curve.clear()
             return
 
-        x_vals = []
-        y_vals = []
+        if len(points) > self.LIVE_TICK_DOWNSAMPLE_TARGET:
+            step = max(1, len(points) // self.LIVE_TICK_DOWNSAMPLE_TARGET)
+            points = points[::step]
+
+        x_vals: list[float] = []
+        y_vals: list[float] = []
         for ts, cvd in points:
             if focus_mode:
                 x = self._time_to_session_index(ts) + (ts.second / 60.0) + (ts.microsecond / 60_000_000.0)
@@ -1466,10 +1575,16 @@ class CVDSingleChartDialog(QDialog):
         QTimer.singleShot(0, self._fix_axis_after_show)
 
     def closeEvent(self, event):
+        # Stop background fetch thread if one is running
+        if getattr(self, "_fetch_thread", None) and self._fetch_thread.isRunning():
+            self._fetch_thread.quit()
+            self._fetch_thread.wait(2000)  # max 2s wait
         if self.cvd_engine:
             with suppress(TypeError, RuntimeError):
                 self.cvd_engine.cvd_updated.disconnect(self._on_cvd_tick_update)
             self.cvd_engine.set_mode(CVDMode.NORMAL)
+        if hasattr(self, "_tick_repaint_timer"):
+            self._tick_repaint_timer.stop()
         if hasattr(self, "refresh_timer"):
             self.refresh_timer.stop()
         if hasattr(self, "dot_timer"):
@@ -1477,11 +1592,8 @@ class CVDSingleChartDialog(QDialog):
         super().closeEvent(event)
 
     def changeEvent(self, event):
-        if event.type() == QEvent.Type.ActivationChange:
-            if self.isActiveWindow():
-                if hasattr(self, "refresh_timer") and not self.refresh_timer.isActive():
-                    self.refresh_timer.start(self.REFRESH_INTERVAL_MS)
-            else:
-                if hasattr(self, "refresh_timer"):
-                    self.refresh_timer.stop()
+        # Intentionally NOT stopping/starting the refresh_timer on activation changes.
+        # During automation the dialog loses/regains focus constantly; toggling the
+        # timer here caused a racing condition where _load_and_plot was re-entered
+        # before _is_loading could be set, crashing the app within seconds.
         super().changeEvent(event)
