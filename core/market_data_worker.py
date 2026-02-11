@@ -2,7 +2,7 @@
 
 import logging
 from typing import Set, Optional
-from PySide6.QtCore import QObject, Signal, QTimer
+from PySide6.QtCore import QObject, Signal, QTimer, Qt
 from kiteconnect import KiteTicker
 from datetime import datetime, timedelta
 
@@ -19,6 +19,14 @@ class MarketDataWorker(QObject):
     connection_error = Signal(str)
     connection_status_changed = Signal(str)
 
+    # Internal signals: KiteTicker callbacks arrive from a non-Qt thread.
+    # We fan-in through queued Qt signals so QTimer operations happen on this
+    # QObject's thread only.
+    _ticks_received = Signal(list)
+    _ws_connected = Signal(object)
+    _ws_closed = Signal(int, str)
+    _ws_error = Signal(int, str)
+
     def __init__(self, api_key: str, access_token: str):
         super().__init__()
         self.api_key = api_key
@@ -34,6 +42,13 @@ class MarketDataWorker(QObject):
         self.heartbeat_timer.timeout.connect(self._check_heartbeat)
         self.last_tick_time: Optional[datetime] = None
         self.is_intentional_stop = False  # Track if user manually stopped
+        self._heartbeat_stale_reported = False
+
+        # Ensure websocket callback handling runs on the worker's thread.
+        self._ticks_received.connect(self._handle_ticks, Qt.QueuedConnection)
+        self._ws_connected.connect(self._handle_connect, Qt.QueuedConnection)
+        self._ws_closed.connect(self._handle_close, Qt.QueuedConnection)
+        self._ws_error.connect(self._handle_error, Qt.QueuedConnection)
 
     def start(self):
         """Initializes and connects the KiteTicker WebSocket client."""
@@ -45,21 +60,17 @@ class MarketDataWorker(QObject):
         self.is_intentional_stop = False  # Reset flag
         self.connection_status_changed.emit("Connecting")
 
-        # 🔥 FIX: Always create a fresh KiteTicker instance
-        # Old instance might be in a bad state after disconnect
-        if self.kws:
-            try:
-                self.kws.stop()
-            except Exception as e:
-                logger.warning(f"Error stopping old ticker instance: {e}")
+        if not self.kws:
+            # Keep a single KiteTicker instance for process lifetime.
+            # Internally it uses Twisted reactor, which is not restartable
+            # once stopped.
+            self.kws = KiteTicker(self.api_key, self.access_token)
 
-        self.kws = KiteTicker(self.api_key, self.access_token)
-
-        # Assign callbacks
-        self.kws.on_ticks = self._on_ticks
-        self.kws.on_connect = self._on_connect
-        self.kws.on_close = self._on_close
-        self.kws.on_error = self._on_error
+            # Assign callbacks once.
+            self.kws.on_ticks = self._on_ticks
+            self.kws.on_connect = self._on_connect
+            self.kws.on_close = self._on_close
+            self.kws.on_error = self._on_error
 
         # The connect call is non-blocking and runs in its own thread
         try:
@@ -77,22 +88,37 @@ class MarketDataWorker(QObject):
     def _check_heartbeat(self):
         if self.is_running and self.last_tick_time:
             if datetime.now() - self.last_tick_time > timedelta(seconds=30):
-                logger.warning("Heartbeat: No ticks received in the last 30 seconds. Assuming disconnection.")
-                if self.kws:
-                    self.kws.stop()
-                self._on_close(self.kws, 1001, "Heartbeat Timeout")
+                if not self._heartbeat_stale_reported:
+                    logger.warning("Heartbeat: No ticks received in the last 30 seconds.")
+                    self.connection_status_changed.emit("Connected (No Recent Ticks)")
+                    self._heartbeat_stale_reported = True
 
     def _on_ticks(self, _, ticks):
         """Callback for receiving ticks."""
-        self.last_tick_time = datetime.now()
-        self.data_received.emit(ticks)
+        self._ticks_received.emit(ticks)
 
     def _on_connect(self, _, response):
+        self._ws_connected.emit(response)
+
+    def _on_close(self, _, code, reason):
+        self._ws_closed.emit(code, str(reason))
+
+    def _on_error(self, _, code, reason):
+        self._ws_error.emit(int(code), str(reason))
+
+    def _handle_ticks(self, ticks):
+        """Qt-thread handler for receiving ticks."""
+        self.last_tick_time = datetime.now()
+        self._heartbeat_stale_reported = False
+        self.data_received.emit(ticks)
+
+    def _handle_connect(self, response):
         """Callback on successful connection."""
         logger.info("WebSocket connected. Subscribing to existing tokens.")
         self.connection_status_changed.emit("Connected")
         self.reconnect_attempts = 0  # Reset counter on success
         self.last_tick_time = datetime.now()
+        self._heartbeat_stale_reported = False
 
         # 🔥 FIX: Stop reconnect timer on successful connection
         if self.reconnect_timer.isActive():
@@ -113,7 +139,7 @@ class MarketDataWorker(QObject):
             except Exception as e:
                 logger.error(f"Failed to subscribe on connect: {e}")
 
-    def _on_close(self, _, code, reason):
+    def _handle_close(self, code, reason):
         """Callback on connection close."""
         logger.warning(f"WebSocket connection closed. Code: {code}, Reason: {reason}")
         self.is_running = False
@@ -121,7 +147,9 @@ class MarketDataWorker(QObject):
         self.connection_status_changed.emit("Disconnected")
         self.connection_closed.emit()
 
-        # 🔥 FIX: Only reconnect if not intentionally stopped
+        # If KiteTicker internal retry is enabled, don't force our own restart.
+        # Starting a fresh instance after reactor stop triggers
+        # twisted.internet.error.ReactorNotRestartable.
         if not self.is_intentional_stop and self.reconnect_attempts < self.max_reconnect_attempts:
             if not self.reconnect_timer.isActive():
                 delay = min(5000 * (2 ** min(self.reconnect_attempts, 5)), 60000)  # Exponential backoff, max 60s
@@ -131,7 +159,7 @@ class MarketDataWorker(QObject):
             logger.error(f"Max reconnection attempts ({self.max_reconnect_attempts}) reached. Giving up.")
             self.connection_status_changed.emit("Connection Failed - Max Retries Reached")
 
-    def _on_error(self, _, code, reason):
+    def _handle_error(self, code, reason):
         """Callback for WebSocket errors."""
         logger.error(f"WebSocket error. Code: {code}, Reason: {reason}")
         self.connection_status_changed.emit(f"Error: {reason}")
@@ -158,8 +186,24 @@ class MarketDataWorker(QObject):
         # Stop the timer before calling start to avoid overlap
         self.reconnect_timer.stop()
 
-        # 🔥 FIX: Call start() which will create a fresh KiteTicker instance
-        self.start()
+        # Reconnect using the same KiteTicker instance to avoid Twisted
+        # reactor restart errors.
+        if not self.kws:
+            self.start()
+            return
+
+        try:
+            self.connection_status_changed.emit("Connecting")
+            self.kws.connect(threaded=True)
+            self.is_running = True
+            logger.info("KiteTicker reconnect initiated")
+        except Exception as e:
+            self.is_running = False
+            logger.error(f"Reconnect failed: {e}")
+            if "ReactorNotRestartable" in str(e):
+                self.connection_status_changed.emit("Connection Failed - Restart App")
+            elif not self.is_intentional_stop and not self.reconnect_timer.isActive():
+                self.reconnect_timer.start(10000)
 
     def set_instruments(self, instrument_tokens: Set[int], append: bool = False):
         """
@@ -240,14 +284,7 @@ class MarketDataWorker(QObject):
         self.reconnect_attempts = 0  # Reset counter for manual reconnect
         self.reconnect_timer.stop()
 
-        # Stop existing connection if any
-        if self.kws and self.is_running:
-            try:
-                self.kws.stop()
-            except Exception as e:
-                logger.warning(f"Error stopping existing connection: {e}")
-
         self.is_running = False
 
-        # Start fresh
-        self.start()
+        # Reconnect without recreating/restarting reactor.
+        self.reconnect()
