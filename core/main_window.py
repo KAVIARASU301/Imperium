@@ -146,7 +146,7 @@ class ScalperMainWindow(QMainWindow):
         if isinstance(self.trader, PaperTradingManager):
             self.trader.order_update.connect(self._on_paper_trade_update)
             self.trader.order_rejected.connect(self._on_paper_order_rejected)
-            self.market_data_worker.data_received.connect(self.trader.update_market_data)
+            self.market_data_worker.data_received.connect(self.trader.update_market_data, Qt.QueuedConnection)
 
         self.pending_order_refresh_timer = QTimer(self)
         self.pending_order_refresh_timer.setInterval(1000)

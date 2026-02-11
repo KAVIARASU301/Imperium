@@ -357,7 +357,10 @@ class MarketMonitorDialog(QDialog):
         self._restore_state()
 
         # Connect to worker with optimized callback
-        self.market_data_worker.data_received.connect(self._on_ticks_received)
+        self.market_data_worker.data_received.connect(
+            self._on_ticks_received,
+            Qt.QueuedConnection,
+        )
 
         # Initialize with today's date
         self.current_date, self.previous_date = self.navigator.get_dates()

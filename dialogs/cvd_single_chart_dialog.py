@@ -123,12 +123,18 @@ class DateNavigator(QWidget):
 
 class _DataFetchWorker(QObject):
     """Runs kite.historical_data + CVD build on a QThread.
-    Emits result_ready(cvd_df, price_df, prev_close) on success,
-    or error() on failure — both signals are received on the GUI thread
-    because the worker is moved to a QThread and signals cross automatically.
+
+    Owns its QThread so the dialog connects to proper QObject bound-method
+    slots — not Python lambdas.  PySide6 AutoConnection resolves thread
+    affinity from __self__ of bound methods; lambdas have no QObject identity
+    and silently degrade to DirectConnection, causing pyqtgraph internal
+    QBasicTimers to be started from the worker thread (the warning flood).
     """
     result_ready = Signal(object, object, float)   # cvd_df, price_df, prev_close
     error        = Signal(str)
+    # Emitted at the end of run() so the dialog resets _is_loading without
+    # a lambda closure. Internally wired to thread.quit().
+    fetch_done   = Signal()
 
     def __init__(self, kite, instrument_token: int, from_dt, to_dt,
                  timeframe_minutes: int, focus_mode: bool):
@@ -139,6 +145,29 @@ class _DataFetchWorker(QObject):
         self.to_dt = to_dt
         self.timeframe_minutes = timeframe_minutes
         self.focus_mode = focus_mode
+
+        # Worker owns its thread — no lambda closures needed anywhere.
+        self._thread = QThread()
+        self.moveToThread(self._thread)
+        self._thread.started.connect(self.run)
+        self._thread.finished.connect(self._thread.deleteLater)
+        # Do NOT call self.deleteLater() from thread.finished: the worker was
+        # moveToThread'd so deleteLater would post to the worker thread, which
+        # has no event loop after quit() and will never process DeferredDelete.
+        # Instead, _on_fetch_done clears _fetch_worker, allowing Python GC to
+        # collect the worker naturally on the main thread.
+        self.fetch_done.connect(self._thread.quit)
+        # Connect worker's deletion to thread's finish
+        self._thread.finished.connect(self.deleteLater)
+
+    def start(self):
+        self._thread.start()
+
+    def quit_thread(self):
+        """Safe thread stop — called from close/cleanup paths."""
+        if self._thread.isRunning():
+            self._thread.quit()
+            self._thread.wait(2000)
 
     def run(self):
         try:
@@ -192,6 +221,10 @@ class _DataFetchWorker(QObject):
 
         except Exception as exc:
             self.error.emit(str(exc))
+        finally:
+            # Always signal completion — this triggers thread.quit() via the
+            # fetch_done→thread.quit connection wired in __init__.
+            self.fetch_done.emit()
 
 
 # =============================================================================
@@ -695,9 +728,13 @@ class CVDSingleChartDialog(QDialog):
         self.navigator.date_changed.connect(self._on_date_changed)
         # Internal: marshal WebSocket thread ticks to the GUI thread safely.
         self._cvd_tick_received.connect(self._apply_cvd_tick, Qt.QueuedConnection)
+        # In CVDSingleChartDialog._connect_signals
         if self.cvd_engine:
-            self.cvd_engine.cvd_updated.connect(self._on_cvd_tick_update)
-
+            # Force QueuedConnection to ensure logic runs on the Main UI Thread
+            self.cvd_engine.cvd_updated.connect(
+                self._on_cvd_tick_update,
+                type=Qt.ConnectionType.QueuedConnection
+            )
     def _on_automation_settings_changed(self, *_):
         self.automation_state_signal.emit({
             "instrument_token": self.instrument_token,
@@ -1061,11 +1098,25 @@ class CVDSingleChartDialog(QDialog):
     def _load_and_plot(self):
         """Kick off a background fetch so the GUI thread is never blocked.
 
-        kite.historical_data() is an HTTP call that takes 300ms–2s.
+        kite.historical_data() is an HTTP call that takes 300ms-2s.
         Calling it on the GUI thread starves the WebSocket tick handler and
         freezes the strike ladder / market data for the entire duration.
+
+        Thread-safety note
+        ------------------
+        The worker owns its own QThread (see _DataFetchWorker.__init__).
+        We connect result_ready / error / fetch_done to *bound methods* of
+        self (a QObject on the main thread).  PySide6 AutoConnection resolves
+        thread affinity via __self__ of bound methods and automatically uses
+        QueuedConnection, so every slot runs on the GUI thread without any
+        explicit Qt.QueuedConnection argument.  Lambdas must NOT be used here
+        because they have no QObject identity and silently fall back to
+        DirectConnection, causing pyqtgraph's internal QBasicTimers to be
+        started from the worker thread (the QBasicTimer warning flood).
         """
         if self._is_loading:
+            return
+        if getattr(self, "_fetch_worker", None) is not None:
             return
 
         if not self.kite or not getattr(self.kite, "access_token", None):
@@ -1082,44 +1133,36 @@ class CVDSingleChartDialog(QDialog):
 
         self._is_loading = True
 
-        # Build worker + thread; keep references so GC doesn't kill them early.
+        # Worker owns its thread; we just connect bound-method slots.
         worker = _DataFetchWorker(
             self.kite, self.instrument_token,
             from_dt, to_dt,
-            self.timeframe_minutes, focus_mode
+            self.timeframe_minutes, focus_mode,
         )
-        thread = QThread(self)
-        worker.moveToThread(thread)
+        # Bound-method connections: AutoConnection → QueuedConnection (cross-thread).
+        worker.result_ready.connect(self._on_fetch_result)
+        worker.error.connect(self._on_fetch_error)
+        worker.fetch_done.connect(self._on_fetch_done)
 
-        # Wire: thread starts → worker.run(); worker done → cleanup
-        thread.started.connect(worker.run)
-        worker.result_ready.connect(lambda cvd_df, price_df, prev_close:
-            self._on_fetch_result(cvd_df, price_df, prev_close, thread))
-        worker.error.connect(lambda msg:
-            self._on_fetch_error(msg, thread))
+        self._fetch_worker = worker   # keep alive until fetch_done
+        worker.start()
 
-        self._fetch_thread = thread   # keep alive
-        self._fetch_worker = worker
-        thread.start()
-
-    def _on_fetch_result(self, cvd_df, price_df, prev_close, thread: QThread):
+    def _on_fetch_result(self, cvd_df, price_df, prev_close):
         """Called on the GUI thread when background fetch succeeds."""
         try:
             self._plot_data(cvd_df, price_df, prev_close)
         except Exception:
             logger.exception("Failed to plot CVD data")
-        finally:
-            self._is_loading = False
-            thread.quit()
-            thread.wait()
 
-    def _on_fetch_error(self, msg: str, thread: QThread):
+    def _on_fetch_error(self, msg: str):
         """Called on the GUI thread when background fetch fails."""
         if msg not in ("no_data", "empty_df", "no_sessions"):
-            logger.exception("Failed to load CVD data: %s", msg)
+            logger.error("Failed to load CVD data: %s", msg)
+
+    def _on_fetch_done(self):
+        """Called on the GUI thread after result/error — resets loading flag."""
+        self._fetch_worker = None
         self._is_loading = False
-        thread.quit()
-        thread.wait()
 
     # ------------------------------------------------------------------
 
@@ -1575,10 +1618,11 @@ class CVDSingleChartDialog(QDialog):
         QTimer.singleShot(0, self._fix_axis_after_show)
 
     def closeEvent(self, event):
-        # Stop background fetch thread if one is running
-        if getattr(self, "_fetch_thread", None) and self._fetch_thread.isRunning():
-            self._fetch_thread.quit()
-            self._fetch_thread.wait(2000)  # max 2s wait
+        # Stop background fetch worker/thread if one is running
+        worker = getattr(self, "_fetch_worker", None)
+        if worker is not None:
+            worker.quit_thread()
+        self._is_loading = False
         if self.cvd_engine:
             with suppress(TypeError, RuntimeError):
                 self.cvd_engine.cvd_updated.disconnect(self._on_cvd_tick_update)
@@ -1589,6 +1633,8 @@ class CVDSingleChartDialog(QDialog):
             self.refresh_timer.stop()
         if hasattr(self, "dot_timer"):
             self.dot_timer.stop()
+        if hasattr(self, "_fetch_worker") and self._fetch_worker:
+            self._fetch_worker.quit_thread()  # Already calls wait(2000)
         super().closeEvent(event)
 
     def changeEvent(self, event):
