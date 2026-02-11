@@ -115,6 +115,8 @@ class ScalperMainWindow(QMainWindow):
         self.cvd_single_chart_dialogs = {}  # Dict[int, CVDSingleChartDialog] - token -> dialog
         self.header_linked_cvd_token: Optional[int] = None
         self.trade_ledger = TradeLedger(mode=self.trading_mode)
+        self._cvd_automation_positions: Dict[int, dict] = {}
+        self._cvd_automation_market_state: Dict[int, dict] = {}
 
         # CVD monitor symbols (v1 – fixed indices)
         self.cvd_symbols = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"]
@@ -656,6 +658,8 @@ class ScalperMainWindow(QMainWindow):
                 cvd_engine=self.cvd_engine,
                 parent=self
             )
+            dialog.automation_signal.connect(self._on_cvd_automation_signal)
+            dialog.automation_state_signal.connect(self._on_cvd_automation_market_state)
             dialog.destroyed.connect(lambda: self._on_cvd_single_chart_closed(cvd_token))
             self.cvd_single_chart_dialogs[cvd_token] = dialog
             if link_to_header:
@@ -697,9 +701,175 @@ class ScalperMainWindow(QMainWindow):
         """Handle CVD single chart dialog close."""
         if token in self.cvd_single_chart_dialogs:
             del self.cvd_single_chart_dialogs[token]
+        self._cvd_automation_positions.pop(token, None)
+        self._cvd_automation_market_state.pop(token, None)
         if self.header_linked_cvd_token == token:
             self.header_linked_cvd_token = None
         QTimer.singleShot(0, self._update_market_subscriptions)
+
+    def _on_cvd_automation_signal(self, payload: dict):
+        token = payload.get("instrument_token")
+        if token is None:
+            return
+
+        state = self._cvd_automation_market_state.get(token, {})
+        if not state.get("enabled"):
+            return
+        if self._cvd_automation_positions.get(token):
+            return
+
+        signal_side = payload.get("signal_side")
+        if signal_side not in {"long", "short"}:
+            return
+
+        contract = self._get_atm_contract_for_signal(signal_side)
+        if not contract:
+            logger.warning("[AUTO] ATM contract unavailable for signal: %s", signal_side)
+            return
+
+        lots = max(1, int(self.header.lot_size_spin.value()))
+        quantity = max(1, int(contract.lot_size) * lots)
+        stoploss_points = float(payload.get("stoploss_points") or state.get("stoploss_points") or 50.0)
+        entry_price = float(contract.ltp or 0.0)
+        entry_underlying = float(payload.get("price_close") or state.get("price_close") or 0.0)
+        trade_tag = payload.get("trade_tag")
+        if trade_tag not in {"to_51_ema", "away_from_51_ema"}:
+            trade_tag = "to_51_ema"
+        if entry_price <= 0:
+            logger.warning("[AUTO] Invalid LTP for %s, skipping entry.", contract.tradingsymbol)
+            return
+        if entry_underlying <= 0:
+            logger.warning("[AUTO] Invalid underlying close for %s, skipping entry.", contract.tradingsymbol)
+            return
+
+        # Strategy risk/target is based on underlying chart levels, not option premium.
+        sl_underlying = (
+            entry_underlying - stoploss_points
+            if signal_side == "long"
+            else entry_underlying + stoploss_points
+        )
+        target_underlying = None
+        if trade_tag == "to_51_ema":
+            target_ref = float(payload.get("ema51") or state.get("ema51") or 0.0)
+            if target_ref > 0:
+                target_underlying = target_ref
+
+        order_params = {
+            "contract": contract,
+            "quantity": quantity,
+            "order_type": self.trader.ORDER_TYPE_MARKET,
+            "product": self.settings.get('default_product', self.trader.PRODUCT_MIS),
+            "transaction_type": self.trader.TRANSACTION_TYPE_BUY,
+            # Keep position-level SL/TP empty for automation; managed by chart logic below.
+            "stop_loss_price": None,
+            "target_price": None,
+            "group_name": f"CVD_AUTO_{token}",
+        }
+
+        self._execute_single_strike_order(order_params)
+        self._cvd_automation_positions[token] = {
+            "tradingsymbol": contract.tradingsymbol,
+            "signal_side": signal_side,
+            "trade_tag": trade_tag,
+            "stoploss_points": stoploss_points,
+            "sl_underlying": sl_underlying,
+            "target_underlying": target_underlying,
+        }
+        logger.info(
+            "[AUTO] Entered %s via %s | tag=%s qty=%s underlying_sl=%.2f underlying_target=%s",
+            contract.tradingsymbol,
+            signal_side,
+            trade_tag,
+            quantity,
+            sl_underlying,
+            f"{target_underlying:.2f}" if target_underlying else "N/A",
+        )
+
+    def _on_cvd_automation_market_state(self, payload: dict):
+        token = payload.get("instrument_token")
+        if token is None:
+            return
+
+        self._cvd_automation_market_state[token] = payload
+        active_trade = self._cvd_automation_positions.get(token)
+        if not active_trade:
+            return
+
+        tradingsymbol = active_trade.get("tradingsymbol")
+        position = self.position_manager.get_position(tradingsymbol)
+        if not position:
+            self._cvd_automation_positions.pop(token, None)
+            return
+
+        price_close = float(payload.get("price_close") or 0.0)
+        ema10 = float(payload.get("ema10") or 0.0)
+        if price_close <= 0:
+            return
+
+        signal_side = active_trade.get("signal_side")
+        sl_underlying = active_trade.get("sl_underlying")
+        target_underlying = active_trade.get("target_underlying")
+        hit_stop = False
+        hit_target = False
+
+        if sl_underlying is not None:
+            if signal_side == "long":
+                hit_stop = price_close <= float(sl_underlying)
+            else:
+                hit_stop = price_close >= float(sl_underlying)
+
+        if target_underlying is not None:
+            if signal_side == "long":
+                hit_target = price_close >= float(target_underlying)
+            else:
+                hit_target = price_close <= float(target_underlying)
+
+        trade_tag = active_trade.get("trade_tag")
+        trail_exit = False
+        if trade_tag == "away_from_51_ema" and ema10 > 0:
+            if signal_side == "long":
+                trail_exit = price_close < ema10
+            else:
+                trail_exit = price_close > ema10
+
+        if hit_stop:
+            self._exit_position_automated(position, reason="AUTO_SL")
+            self._cvd_automation_positions.pop(token, None)
+        elif hit_target:
+            self._exit_position_automated(position, reason="AUTO_TARGET")
+            self._cvd_automation_positions.pop(token, None)
+        elif trail_exit:
+            self._exit_position_automated(position, reason="AUTO_EMA10")
+            self._cvd_automation_positions.pop(token, None)
+
+    def _get_atm_contract_for_signal(self, signal_side: str) -> Optional[Contract]:
+        if not self.strike_ladder or self.strike_ladder.atm_strike is None:
+            return None
+        ladder_row = self.strike_ladder.contracts.get(self.strike_ladder.atm_strike, {})
+        option_key = "CE" if signal_side == "long" else "PE"
+        return ladder_row.get(option_key)
+
+    def _exit_position_automated(self, position: Position, reason: str = "AUTO"):
+        try:
+            transaction_type = (
+                self.trader.TRANSACTION_TYPE_SELL
+                if position.quantity > 0
+                else self.trader.TRANSACTION_TYPE_BUY
+            )
+            self.trader.place_order(
+                variety=self.trader.VARIETY_REGULAR,
+                exchange=position.exchange,
+                tradingsymbol=position.tradingsymbol,
+                transaction_type=transaction_type,
+                quantity=abs(position.quantity),
+                product=position.product,
+                order_type=self.trader.ORDER_TYPE_MARKET,
+            )
+            logger.info("[AUTO] Exit placed for %s (%s)", position.tradingsymbol, reason)
+            self._refresh_positions()
+        except Exception as e:
+            logger.error("[AUTO] Failed automated exit for %s: %s", position.tradingsymbol, e, exc_info=True)
+
 
     def _update_cvd_chart_symbol(self, symbol: str, cvd_token: int, suffix: str = ""):
         """Update menu-opened (header-linked) CVD single chart dialog with new symbol."""

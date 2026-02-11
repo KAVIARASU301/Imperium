@@ -122,6 +122,8 @@ class DateNavigator(QWidget):
 
 class CVDSingleChartDialog(QDialog):
     REFRESH_INTERVAL_MS = 3000
+    automation_signal = Signal(dict)
+    automation_state_signal = Signal(dict)
 
     def __init__(
             self,
@@ -153,9 +155,8 @@ class CVDSingleChartDialog(QDialog):
 
         # 🎯 Confluence signal lines (price + CVD both reversal at same bar)
         self._confluence_lines: list = []   # InfiniteLine items added to both plots
-
-        # 📦 Range boxes (price + CVD consolidating together)
-        self._range_box_items: list = []    # (plot, LinearRegionItem) tuples
+        self._last_emitted_signal_key: str | None = None
+        self._last_emitted_closed_bar_ts: str | None = None
 
         self.setWindowTitle(f"Price & Cumulative Volume Chart — {symbol}")
         self.setMinimumSize(1100, 680)
@@ -347,12 +348,11 @@ class CVDSingleChartDialog(QDialog):
 
         ema_bar.addStretch()
 
-        # ── Range Zone toggle ──
-        self.btn_range = QCheckBox("📦 Range Zones")
-        self.btn_range.setChecked(True)
-        self.btn_range.setStyleSheet("""
+        self.automate_toggle = QCheckBox("🤖 Automate")
+        self.automate_toggle.setChecked(False)
+        self.automate_toggle.setStyleSheet("""
             QCheckBox {
-                color: #FFD580;
+                color: #7DD3FC;
                 font-weight: 600;
                 font-size: 12px;
                 spacing: 6px;
@@ -360,35 +360,29 @@ class CVDSingleChartDialog(QDialog):
             QCheckBox::indicator {
                 width: 16px;
                 height: 16px;
-                border: 2px solid #FFB300;
+                border: 2px solid #38BDF8;
                 border-radius: 3px;
                 background: #1B1F2B;
             }
             QCheckBox::indicator:checked {
-                background: #FFB300;
+                background: #38BDF8;
             }
         """)
-        self.btn_range.toggled.connect(self._on_range_toggled)
-        ema_bar.addWidget(self.btn_range)
+        self.automate_toggle.toggled.connect(self._on_automation_settings_changed)
+        ema_bar.addWidget(self.automate_toggle)
 
-        range_sens_label = QLabel("Sens")
-        range_sens_label.setStyleSheet("color: #8A9BA8; font-size: 12px;")
-        ema_bar.addWidget(range_sens_label)
+        sl_points_label = QLabel("SL Pts")
+        sl_points_label.setStyleSheet("color: #8A9BA8; font-size: 12px;")
+        ema_bar.addWidget(sl_points_label)
 
-        self.range_sens_input = QDoubleSpinBox()
-        self.range_sens_input.setRange(0.5, 10.0)
-        self.range_sens_input.setDecimals(1)
-        self.range_sens_input.setSingleStep(0.5)
-        self.range_sens_input.setValue(2.0)
-        self.range_sens_input.setFixedWidth(65)
-        self.range_sens_input.setToolTip(
-            "Range sensitivity: lower = tighter ranges only, higher = more ranges"
-        )
-        self.range_sens_input.setStyleSheet(
-            "QDoubleSpinBox { background:#1B1F2B; color:#FFD580; font-weight:600; }"
-        )
-        self.range_sens_input.valueChanged.connect(self._on_range_settings_changed)
-        ema_bar.addWidget(self.range_sens_input)
+        self.automation_stoploss_input = QSpinBox()
+        self.automation_stoploss_input.setRange(1, 1000)
+        self.automation_stoploss_input.setValue(50)
+        self.automation_stoploss_input.setSingleStep(5)
+        self.automation_stoploss_input.setFixedWidth(70)
+        self.automation_stoploss_input.setStyleSheet("QSpinBox { background:#1B1F2B; color:#FCA5A5; font-weight:600; }")
+        self.automation_stoploss_input.valueChanged.connect(self._on_automation_settings_changed)
+        ema_bar.addWidget(self.automation_stoploss_input)
 
         ema_bar.addStretch()
         root.addLayout(ema_bar)
@@ -614,6 +608,14 @@ class CVDSingleChartDialog(QDialog):
         if self.cvd_engine:
             self.cvd_engine.cvd_updated.connect(self._on_cvd_tick_update)
 
+    def _on_automation_settings_changed(self, *_):
+        self.automation_state_signal.emit({
+            "instrument_token": self.instrument_token,
+            "symbol": self.symbol,
+            "enabled": self.automate_toggle.isChecked(),
+            "stoploss_points": float(self.automation_stoploss_input.value()),
+        })
+
     def _on_cvd_tick_update(self, token: int, cvd_value: float):
         """Append live CVD ticks so intra-minute moves are never erased."""
         if token != self.instrument_token or not self.live_mode:
@@ -685,7 +687,6 @@ class CVDSingleChartDialog(QDialog):
         self.price_live_dot.clear()
 
         self.all_timestamps.clear()
-        self._clear_range_boxes()
         self._load_and_plot()
 
     def _on_mouse_moved(self, pos):
@@ -828,6 +829,11 @@ class CVDSingleChartDialog(QDialog):
             below_mask = (distance >= distance_threshold) & (price_data_array < base_ema)
             atr_offset = np.nan_to_num(atr_values, nan=0.0) * 0.15
 
+            price_prev = np.concatenate(([price_data_array[0]], price_data_array[:-1]))
+            ema_prev = np.concatenate(([base_ema[0]], base_ema[:-1]))
+            price_cross_above_ema = (price_prev <= ema_prev) & (price_data_array > base_ema)
+            price_cross_below_ema = (price_prev >= ema_prev) & (price_data_array < base_ema)
+
             self.price_atr_above_markers.setData(
                 x_arr[above_mask],
                 high_data_array[above_mask] + atr_offset[above_mask],
@@ -884,12 +890,63 @@ class CVDSingleChartDialog(QDialog):
                 self._draw_confluence_lines(
                     price_above_mask=above_mask,
                     price_below_mask=below_mask,
+                    price_cross_above_ema=price_cross_above_ema,
+                    price_cross_below_ema=price_cross_below_ema,
                     cvd_above_mask=above_mask_c,
                     cvd_below_mask=below_mask_c,
                     cvd_above_ema51=cvd_above_ema51,
                     cvd_below_ema51=cvd_below_ema51,
                     x_arr=x_arr,
                 )
+
+        self._emit_automation_market_state()
+
+    def _emit_automation_market_state(self):
+        if not self._last_plot_x_indices or not self.all_price_data:
+            return
+
+        x_arr = np.array(self._last_plot_x_indices, dtype=float)
+        price_data_array = np.array(self.all_price_data, dtype=float)
+        ema10 = self._calculate_ema(price_data_array, 10)
+        ema51 = self._calculate_ema(price_data_array, 51)
+        idx = self._latest_closed_bar_index()
+        if idx is None:
+            return
+
+        self.automation_state_signal.emit({
+            "instrument_token": self.instrument_token,
+            "symbol": self.symbol,
+            "enabled": self.automate_toggle.isChecked(),
+            "stoploss_points": float(self.automation_stoploss_input.value()),
+            "bar_x": float(x_arr[idx]),
+            "price_close": float(price_data_array[idx]),
+            "ema10": float(ema10[idx]),
+            "ema51": float(ema51[idx]),
+            "timestamp": self.all_timestamps[idx].isoformat() if idx < len(self.all_timestamps) else None,
+        })
+
+    def _latest_closed_bar_index(self) -> int | None:
+        if not self.all_timestamps:
+            return None
+
+        idx = len(self.all_timestamps) - 1
+        if not self.live_mode:
+            return idx
+
+        latest_ts = pd.Timestamp(self.all_timestamps[idx])
+        now_ts = (
+            pd.Timestamp.now(tz=latest_ts.tz)
+            if latest_ts.tz is not None
+            else pd.Timestamp.now()
+        )
+
+        # In live mode, treat current minute candle as open/incomplete.
+        if latest_ts.floor("min") >= now_ts.floor("min"):
+            idx -= 1
+
+        if idx < 0:
+            return None
+        return idx
 
 
     # ------------------------------------------------------------------
@@ -978,7 +1035,6 @@ class CVDSingleChartDialog(QDialog):
         self.cvd_atr_above_markers.clear()
         self.cvd_atr_below_markers.clear()
         self._clear_confluence_lines()
-        self._clear_range_boxes()
 
         # Clear EMA curves
         self.cvd_ema10_curve.clear()
@@ -1161,7 +1217,6 @@ class CVDSingleChartDialog(QDialog):
                 self._on_ema_toggled(period, cb.isChecked())
 
             self._update_atr_reversal_markers()
-            self._draw_range_boxes()
 
 
         # Set X range
@@ -1200,6 +1255,8 @@ class CVDSingleChartDialog(QDialog):
         self,
         price_above_mask: np.ndarray,
         price_below_mask: np.ndarray,
+        price_cross_above_ema: np.ndarray,
+        price_cross_below_ema: np.ndarray,
         cvd_above_mask: np.ndarray,
         cvd_below_mask: np.ndarray,
         cvd_above_ema51: np.ndarray,
@@ -1218,8 +1275,13 @@ class CVDSingleChartDialog(QDialog):
         """
         self._clear_confluence_lines()
 
-        short_mask = price_above_mask & (cvd_above_mask | cvd_below_ema51)
-        long_mask  = price_below_mask & (cvd_below_mask | cvd_above_ema51)
+        short_to_51_mask = price_above_mask & cvd_above_mask
+        short_away_mask = (price_above_mask & (~cvd_above_mask) & cvd_below_ema51) | (price_cross_below_ema & cvd_below_ema51)
+        long_to_51_mask = price_below_mask & cvd_below_mask
+        long_away_mask = (price_below_mask & (~cvd_below_mask) & cvd_above_ema51) | (price_cross_above_ema & cvd_above_ema51)
+
+        short_mask = short_to_51_mask | short_away_mask
+        long_mask = long_to_51_mask | long_away_mask
 
         def _make_line(x: float, color: str) -> list:
             """Create one InfiniteLine per chart and return [(plot, line), ...]."""
@@ -1244,173 +1306,54 @@ class CVDSingleChartDialog(QDialog):
         for x in x_arr[long_mask]:
             self._confluence_lines.append(_make_line(x, "#00E676"))  # green → long
 
-    # ------------------------------------------------------------------
-    # 📦  RANGE ZONE BOXES
-    # ------------------------------------------------------------------
-
-    def _clear_range_boxes(self):
-        """Remove all range box items from both charts."""
-        for plot, item in self._range_box_items:
-            plot.removeItem(item)
-        self._range_box_items.clear()
-
-    def _on_range_toggled(self, checked: bool):
-        """Show/hide range boxes instantly without redrawing."""
-        for _, item in self._range_box_items:
-            item.setVisible(checked)
-
-    def _on_range_settings_changed(self, *_):
-        """Recompute range boxes when sensitivity changes."""
-        self._draw_range_boxes()
-
-    @staticmethod
-    def _find_range_runs(mask: np.ndarray, min_bars: int) -> list[tuple[int, int]]:
-        """
-        Return list of (start, end) index pairs for contiguous True runs
-        in *mask* that are at least *min_bars* long.
-        """
-        runs = []
-        n = len(mask)
-        i = 0
-        while i < n:
-            if mask[i]:
-                j = i
-                while j < n and mask[j]:
-                    j += 1
-                if j - i >= min_bars:
-                    runs.append((i, j - 1))
-                i = j
-            else:
-                i += 1
-        return runs
-
-    def _draw_range_boxes(self):
-        """
-        Detect bars where BOTH price and CVD are in a low-volatility range,
-        and draw aligned rectangular boxes on both charts for each run.
-
-        Detection: rolling (high - low) / ATR < sensitivity threshold
-        for both price and CVD simultaneously for >= min_bars consecutive bars.
-        """
-        self._clear_range_boxes()
-
-        has_price = getattr(self, "all_price_data", None) and self._last_plot_x_indices
-        has_cvd   = getattr(self, "all_cvd_data",  None) and self._last_plot_x_indices
-        if not (has_price and has_cvd):
+        if not self.automate_toggle.isChecked():
             return
 
-        visible   = self.btn_range.isChecked()
-        threshold = float(self.range_sens_input.value())
-        window    = 10   # rolling lookback in bars
-        min_bars  = 5    # minimum consecutive bars to qualify as a range
+        signal_masks = (
+            ("short", "to_51_ema", short_to_51_mask),
+            ("short", "away_from_51_ema", short_away_mask),
+            ("long", "to_51_ema", long_to_51_mask),
+            ("long", "away_from_51_ema", long_away_mask),
+        )
 
-        price_arr = np.array(self.all_price_data,     dtype=float)
-        p_high    = np.array(self.all_price_high_data, dtype=float)
-        p_low     = np.array(self.all_price_low_data,  dtype=float)
-        cvd_arr   = np.array(self.all_cvd_data,       dtype=float)
-
-        if getattr(self, "all_cvd_high_data", None) and getattr(self, "all_cvd_low_data", None):
-            c_high = np.array(self.all_cvd_high_data, dtype=float)
-            c_low  = np.array(self.all_cvd_low_data,  dtype=float)
-        else:
-            c_high = cvd_arr.copy()
-            c_low  = cvd_arr.copy()
-
-        x_arr = np.array(self._last_plot_x_indices, dtype=float)
-        n     = len(price_arr)
-        if n < window:
+        closed_idx = self._latest_closed_bar_index()
+        if closed_idx is None:
             return
 
-        # ATR for normalisation
-        price_atr = self._calculate_atr(p_high, p_low, price_arr, period=14)
-        cvd_atr   = self._calculate_atr(c_high, c_low, cvd_arr,   period=14)
+        for side, trade_tag, mask in signal_masks:
+            indices = np.where(mask)[0]
+            if len(indices) == 0:
+                continue
+            latest_idx = int(indices[-1])
+            if latest_idx != closed_idx:
+                continue
 
-        # Rolling range (high - low over window bars)
-        price_range_mask = np.zeros(n, dtype=bool)
-        cvd_range_mask   = np.zeros(n, dtype=bool)
+            if latest_idx >= len(self.all_timestamps):
+                continue
 
-        for i in range(window - 1, n):
-            sl = slice(i - window + 1, i + 1)
+            closed_bar_ts = self.all_timestamps[latest_idx].isoformat()
+            if self._last_emitted_closed_bar_ts == closed_bar_ts:
+                continue
+            signal_x = float(x_arr[latest_idx])
+            ts_key = closed_bar_ts
+            signal_key = f"{side}:{trade_tag}:{ts_key}"
+            if self._last_emitted_signal_key == signal_key:
+                continue
+            self._last_emitted_signal_key = signal_key
+            self._last_emitted_closed_bar_ts = closed_bar_ts
 
-            p_roll_range = p_high[sl].max() - p_low[sl].min()
-            p_atr_val    = price_atr[i]
-            if p_atr_val > 0:
-                price_range_mask[i] = (p_roll_range / p_atr_val) < threshold
-
-            c_roll_range = c_high[sl].max() - c_low[sl].min()
-            c_atr_val    = cvd_atr[i]
-            if c_atr_val > 0:
-                cvd_range_mask[i] = (c_roll_range / c_atr_val) < threshold
-
-        both_mask = price_range_mask & cvd_range_mask
-        runs = self._find_range_runs(both_mask, min_bars)
-
-        for start, end in runs:
-            x_left  = float(x_arr[start])
-            x_right = float(x_arr[end]) + 1.0   # +1 so the box covers the last bar
-
-            # ── Price box ────────────────────────────────────────────────
-            p_top = float(p_high[start:end + 1].max())
-            p_bot = float(p_low [start:end + 1].min())
-            pad_p = (p_top - p_bot) * 0.08
-            p_box = pg.LinearRegionItem(
-                values=[x_left, x_right],
-                orientation="vertical",
-                brush=pg.mkBrush(255, 179, 0, 22),
-                pen=pg.mkPen("#FFB300", width=1, style=Qt.DashLine),
-                movable=False,
-            )
-            # Clip vertical extent via a custom ROI — pyqtgraph LinearRegionItem
-            # spans full Y by default, so we layer an invisible rect on top for the
-            # price bounds label instead.
-            p_box.setZValue(2)
-            p_box.setVisible(visible)
-            self.price_plot.addItem(p_box)
-            self._range_box_items.append((self.price_plot, p_box))
-
-            # Price range label
-            p_label = pg.TextItem(
-                text=f"R  {p_top - p_bot:.1f}",
-                color="#FFB300",
-                anchor=(0, 1),
-                fill=pg.mkBrush("#161A25BB"),
-                border=pg.mkPen("#FFB300", width=0.5),
-            )
-            p_label.setFont(pg.QtGui.QFont("Consolas", 7))
-            p_label.setPos(x_left, p_top + pad_p)
-            p_label.setVisible(visible)
-            self.price_plot.addItem(p_label)
-            self._range_box_items.append((self.price_plot, p_label))
-
-            # ── CVD box (same x span) ─────────────────────────────────────
-            c_top = float(c_high[start:end + 1].max())
-            c_bot = float(c_low [start:end + 1].min())
-            pad_c = (c_top - c_bot) * 0.08
-            c_box = pg.LinearRegionItem(
-                values=[x_left, x_right],
-                orientation="vertical",
-                brush=pg.mkBrush(255, 179, 0, 22),
-                pen=pg.mkPen("#FFB300", width=1, style=Qt.DashLine),
-                movable=False,
-            )
-            c_box.setZValue(2)
-            c_box.setVisible(visible)
-            self.plot.addItem(c_box)
-            self._range_box_items.append((self.plot, c_box))
-
-            # CVD range label
-            c_label = pg.TextItem(
-                text=f"R  {c_top - c_bot:.0f}",
-                color="#FFB300",
-                anchor=(0, 1),
-                fill=pg.mkBrush("#161A25BB"),
-                border=pg.mkPen("#FFB300", width=0.5),
-            )
-            c_label.setFont(pg.QtGui.QFont("Consolas", 7))
-            c_label.setPos(x_left, c_top + pad_c)
-            c_label.setVisible(visible)
-            self.plot.addItem(c_label)
-            self._range_box_items.append((self.plot, c_label))
+            self.automation_signal.emit({
+                "instrument_token": self.instrument_token,
+                "symbol": self.symbol,
+                "signal_side": side,
+                "signal_x": signal_x,
+                "price_close": float(self.all_price_data[latest_idx]),
+                "ema10": float(self._calculate_ema(np.array(self.all_price_data, dtype=float), 10)[latest_idx]),
+                "ema51": float(self._calculate_ema(np.array(self.all_price_data, dtype=float), 51)[latest_idx]),
+                "stoploss_points": float(self.automation_stoploss_input.value()),
+                "trade_tag": trade_tag,
+                "timestamp": self.all_timestamps[latest_idx].isoformat() if latest_idx < len(self.all_timestamps) else None,
+            })
 
     def _blink_dot(self):
         self._dot_visible = not self._dot_visible
@@ -1472,7 +1415,6 @@ class CVDSingleChartDialog(QDialog):
         self.price_ema51_curve.clear()
         self.all_timestamps.clear()
         self._last_plot_x_indices = []
-        self._clear_range_boxes()
         self._load_and_plot()
 
     def _time_to_session_index(self, ts: datetime) -> int:
