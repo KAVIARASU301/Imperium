@@ -730,11 +730,11 @@ class CVDSingleChartDialog(QDialog):
         self._cvd_tick_received.connect(self._apply_cvd_tick, Qt.QueuedConnection)
         # In CVDSingleChartDialog._connect_signals
         if self.cvd_engine:
-            # Force QueuedConnection to ensure logic runs on the Main UI Thread
             self.cvd_engine.cvd_updated.connect(
                 self._on_cvd_tick_update,
-                type=Qt.ConnectionType.QueuedConnection
+                Qt.QueuedConnection
             )
+
     def _on_automation_settings_changed(self, *_):
         self.automation_state_signal.emit({
             "instrument_token": self.instrument_token,
@@ -744,13 +744,12 @@ class CVDSingleChartDialog(QDialog):
         })
 
     def _on_cvd_tick_update(self, token: int, cvd_value: float):
-        """Receive CVD tick from the Kite WebSocket (background thread).
+        if not self.isVisible():
+            return
 
-        We only filter here — actual Qt/deque work is marshalled to the GUI
-        thread via the queued _cvd_tick_received signal to avoid race conditions.
-        """
         if token != self.instrument_token or not self.live_mode:
             return
+
         self._cvd_tick_received.emit(cvd_value)
 
     def _apply_cvd_tick(self, cvd_value: float):
@@ -1160,7 +1159,12 @@ class CVDSingleChartDialog(QDialog):
             logger.error("Failed to load CVD data: %s", msg)
 
     def _on_fetch_done(self):
-        """Called on the GUI thread after result/error — resets loading flag."""
+        worker = getattr(self, "_fetch_worker", None)
+
+        if worker is not None:
+            # Ensure thread fully stopped
+            worker.quit_thread()
+
         self._fetch_worker = None
         self._is_loading = False
 
@@ -1441,7 +1445,7 @@ class CVDSingleChartDialog(QDialog):
                     pen=pen,
                     label="",
                 )
-                line.setZValue(5)   # above curves, below dots
+                line.setZValue(1)   # above curves, below dots
                 plot.addItem(line)
                 pairs.append((plot, line))
             return pairs
@@ -1618,23 +1622,28 @@ class CVDSingleChartDialog(QDialog):
         QTimer.singleShot(0, self._fix_axis_after_show)
 
     def closeEvent(self, event):
-        # Stop background fetch worker/thread if one is running
+        # Stop background worker safely
         worker = getattr(self, "_fetch_worker", None)
         if worker is not None:
             worker.quit_thread()
+            self._fetch_worker = None
+
         self._is_loading = False
+
         if self.cvd_engine:
             with suppress(TypeError, RuntimeError):
                 self.cvd_engine.cvd_updated.disconnect(self._on_cvd_tick_update)
             self.cvd_engine.set_mode(CVDMode.NORMAL)
+
         if hasattr(self, "_tick_repaint_timer"):
             self._tick_repaint_timer.stop()
+
         if hasattr(self, "refresh_timer"):
             self.refresh_timer.stop()
+
         if hasattr(self, "dot_timer"):
             self.dot_timer.stop()
-        if hasattr(self, "_fetch_worker") and self._fetch_worker:
-            self._fetch_worker.quit_thread()  # Already calls wait(2000)
+
         super().closeEvent(event)
 
     def changeEvent(self, event):

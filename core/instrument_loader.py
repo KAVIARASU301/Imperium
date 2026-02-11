@@ -18,6 +18,11 @@ from urllib3.util.retry import Retry
 
 logger = logging.getLogger(__name__)
 
+ALLOWED_SYMBOLS = {
+    "NIFTY",
+    "BANKNIFTY",
+    "FINNIFTY",
+}
 
 class InstrumentLoader(QThread):
     """Background thread for loading NFO and BFO instruments with robust retry logic and caching"""
@@ -117,66 +122,79 @@ class InstrumentLoader(QThread):
             logger.error(f"Error saving instruments to cache: {e}")
 
     def process_instruments(self, instruments: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Process raw instruments into organized symbol data"""
-        self.progress_update.emit("Processing instruments data...")
+        """Process raw NFO instruments into organized symbol data (filtered & fast)"""
+        self.progress_update.emit("Processing NFO instruments...")
         self.loading_progress.emit(70)
 
         symbol_data: Dict[str, Any] = {}
-        processed_count = 0
         total_instruments = len(instruments)
+        processed_count = 0
 
         for inst in instruments:
             if self._stop_requested:
                 raise Exception("Operation cancelled by user")
 
-            symbol_name = inst['name']
-            if inst.get("segment") == "INDICES":
-                symbol_data[symbol_name]["instrument_token"] = inst["instrument_token"]
+            symbol_name = inst.get("name")
 
-            # Initialize symbol if not exists
+            # 🔥 HARD FILTER: only required index symbols
+            if symbol_name not in ALLOWED_SYMBOLS:
+                continue
+
+            # 🔥 Initialize symbol FIRST (critical fix)
             if symbol_name not in symbol_data:
                 symbol_data[symbol_name] = {
-                    'lot_size': inst['lot_size'],
-                    'tick_size': inst['tick_size'],
-                    'expiries': set(),
-                    'strikes': set(),
-                    'instruments': [],
-                    'futures': [],
-                    'exchange': inst['exchange']  # Track exchange (NFO or BFO)
+                    "lot_size": inst["lot_size"],
+                    "tick_size": inst["tick_size"],
+                    "expiries": set(),
+                    "strikes": set(),
+                    "instruments": [],
+                    "futures": [],
+                    "exchange": inst["exchange"],
+                    "instrument_token": None,  # index token if present
                 }
 
-            # Process CE and PE options
-            if inst['instrument_type'] in ['CE', 'PE']:
-                symbol_data[symbol_name]['lot_size'] = inst['lot_size']
-                symbol_data[symbol_name]['tick_size'] = inst['tick_size']
-                symbol_data[symbol_name]['expiries'].add(inst['expiry'])
-                symbol_data[symbol_name]['strikes'].add(inst['strike'])
-                symbol_data[symbol_name]['instruments'].append(inst)
+            # 🔥 Capture index instrument token safely
+            if inst.get("segment") == "INDICES":
+                symbol_data[symbol_name]["instrument_token"] = inst["instrument_token"]
+                continue
 
-            # Process FUT (Futures) contracts
-            elif inst['instrument_type'] == 'FUT':
-                symbol_data[symbol_name]['futures'].append(inst)
+            inst_type = inst.get("instrument_type")
+
+            # 🔥 Options
+            if inst_type in ("CE", "PE"):
+                symbol_data[symbol_name]["expiries"].add(inst["expiry"])
+                symbol_data[symbol_name]["strikes"].add(inst["strike"])
+                symbol_data[symbol_name]["instruments"].append(inst)
+
+            # 🔥 Futures
+            elif inst_type == "FUT":
+                symbol_data[symbol_name]["futures"].append({
+                    "instrument_token": inst["instrument_token"],
+                    "expiry": inst["expiry"]
+                })
 
             processed_count += 1
 
-            # Update progress every 1000 instruments
+            # Progress update (cheap & smooth)
             if processed_count % 1000 == 0:
                 progress = 70 + int((processed_count / total_instruments) * 20)
                 self.loading_progress.emit(min(progress, 90))
 
-        # Convert sets to sorted lists
-        self.progress_update.emit("Finalizing data structure...")
+        # 🔥 Finalize sets → sorted lists
+        self.progress_update.emit("Finalizing instruments...")
         self.loading_progress.emit(90)
 
-        for symbol in symbol_data:
+        for symbol, data in symbol_data.items():
             if self._stop_requested:
                 raise Exception("Operation cancelled by user")
 
-            symbol_data[symbol]['expiries'] = sorted(list(symbol_data[symbol]['expiries']))
-            symbol_data[symbol]['strikes'] = sorted(list(symbol_data[symbol]['strikes']))
+            data["expiries"] = sorted(data["expiries"])
+            data["strikes"] = sorted(data["strikes"])
 
         logger.info(
-            f"Processed {len(symbol_data)} symbols from {total_instruments} instruments")
+            f"Processed {len(symbol_data)} symbols from {total_instruments} instruments (filtered)"
+        )
+
         return symbol_data
 
     def fetch_instruments_with_retry(self, exchange: str) -> List[Dict[str, Any]]:
@@ -239,85 +257,49 @@ class InstrumentLoader(QThread):
         return []
 
     def run(self) -> None:
-        """Load instruments from both NFO and BFO exchanges with caching"""
+        """Load ONLY NFO instruments (fast & lightweight)"""
         try:
             self.loading_progress.emit(0)
 
-            # Check if we have valid cached instruments first
+            # 1️⃣ Use cache if valid
             if self.is_cache_valid():
-                self.progress_update.emit("Loading cached instruments...")
-                self.loading_progress.emit(50)
+                self.progress_update.emit("Loading cached NFO instruments...")
+                self.loading_progress.emit(60)
 
                 cached_symbol_data = self.load_cached_instruments()
                 if cached_symbol_data:
-                    self.progress_update.emit("Using cached instruments")
                     self.loading_progress.emit(100)
                     self.instruments_loaded.emit(cached_symbol_data)
                     return
 
-            # If no valid cache, fetch from API
-            self.progress_update.emit("Fetching fresh instruments from API...")
-            self.loading_progress.emit(5)
-
-            all_instruments = []
-
-            # Fetch NFO instruments (NIFTY, BANKNIFTY, FINNIFTY, etc.)
+            # 2️⃣ Fetch ONLY NFO
             self.progress_update.emit("Fetching NFO instruments...")
+            self.loading_progress.emit(10)
+
             nfo_instruments = self.fetch_instruments_with_retry("NFO")
-            if nfo_instruments:
-                all_instruments.extend(nfo_instruments)
-                logger.info(f"Loaded {len(nfo_instruments)} NFO instruments")
+            if not nfo_instruments:
+                raise Exception("Failed to load NFO instruments")
 
-            if self._stop_requested:
-                return
-
-            # Fetch BFO instruments (SENSEX, etc.)
-            self.progress_update.emit("Fetching BFO instruments...")
-            self.loading_progress.emit(35)
-            bfo_instruments = self.fetch_instruments_with_retry("BFO")
-            if bfo_instruments:
-                all_instruments.extend(bfo_instruments)
-                logger.info(f"Loaded {len(bfo_instruments)} BFO instruments")
-
-            if not all_instruments:
-                raise Exception("Failed to load instruments from both NFO and BFO exchanges")
-
-            if self._stop_requested:
-                return
-
-            # Process the combined instruments
             self.loading_progress.emit(60)
-            symbol_data = self.process_instruments(all_instruments)
 
-            if not self._stop_requested:
-                # Save to cache
-                self.save_instruments_to_cache(symbol_data)
+            # 3️⃣ Process
+            symbol_data = self.process_instruments(nfo_instruments)
 
-                symbols_str = ", ".join(sorted(symbol_data.keys()))
-                self.progress_update.emit(f"Loaded: {symbols_str}")
-                self.loading_progress.emit(100)
-                self.instruments_loaded.emit(symbol_data)
+            # 4️⃣ Cache & emit
+            self.save_instruments_to_cache(symbol_data)
+            self.loading_progress.emit(100)
+            self.instruments_loaded.emit(symbol_data)
 
         except Exception as e:
             if not self._stop_requested:
-                error_msg = str(e)
-                logger.error(f"InstrumentLoader failed: {error_msg}")
+                logger.error(f"NFO InstrumentLoader failed: {e}")
 
-                # Try to fall back to cached instruments even if expired
-                if "cancelled" not in error_msg.lower():
-                    logger.info("Attempting to use expired cache as fallback...")
-                    self.progress_update.emit("Trying expired cache as fallback...")
-
-                    cached_symbol_data = self.load_cached_instruments()
-                    if cached_symbol_data:
-                        logger.warning("Using expired cached instruments as fallback")
-                        self.progress_update.emit("Using cached instruments (fallback)")
-                        self.loading_progress.emit(100)
-                        self.instruments_loaded.emit(cached_symbol_data)
-                        return
-
-                self.loading_progress.emit(0)
-                self.error_occurred.emit(error_msg)
+                cached = self.load_cached_instruments()
+                if cached:
+                    logger.warning("Using expired cache fallback")
+                    self.instruments_loaded.emit(cached)
+                else:
+                    self.error_occurred.emit(str(e))
 
     def clear_cache(self) -> None:
         """Clear the instrument cache"""
