@@ -122,22 +122,11 @@ class DateNavigator(QWidget):
 # =============================================================================
 
 class _DataFetchWorker(QObject):
-    """Runs kite.historical_data + CVD build on a QThread.
+    result_ready = Signal(object, object, float)
+    error = Signal(str)
+    finished = Signal()
 
-    Owns its QThread so the dialog connects to proper QObject bound-method
-    slots — not Python lambdas.  PySide6 AutoConnection resolves thread
-    affinity from __self__ of bound methods; lambdas have no QObject identity
-    and silently degrade to DirectConnection, causing pyqtgraph internal
-    QBasicTimers to be started from the worker thread (the warning flood).
-    """
-    result_ready = Signal(object, object, float)   # cvd_df, price_df, prev_close
-    error        = Signal(str)
-    # Emitted at the end of run() so the dialog resets _is_loading without
-    # a lambda closure. Internally wired to thread.quit().
-    fetch_done   = Signal()
-
-    def __init__(self, kite, instrument_token: int, from_dt, to_dt,
-                 timeframe_minutes: int, focus_mode: bool):
+    def __init__(self, kite, instrument_token, from_dt, to_dt, timeframe_minutes, focus_mode):
         super().__init__()
         self.kite = kite
         self.instrument_token = instrument_token
@@ -145,29 +134,6 @@ class _DataFetchWorker(QObject):
         self.to_dt = to_dt
         self.timeframe_minutes = timeframe_minutes
         self.focus_mode = focus_mode
-
-        # Worker owns its thread — no lambda closures needed anywhere.
-        self._thread = QThread()
-        self.moveToThread(self._thread)
-        self._thread.started.connect(self.run)
-        self._thread.finished.connect(self._thread.deleteLater)
-        # Do NOT call self.deleteLater() from thread.finished: the worker was
-        # moveToThread'd so deleteLater would post to the worker thread, which
-        # has no event loop after quit() and will never process DeferredDelete.
-        # Instead, _on_fetch_done clears _fetch_worker, allowing Python GC to
-        # collect the worker naturally on the main thread.
-        self.fetch_done.connect(self._thread.quit)
-        # Connect worker's deletion to thread's finish
-        self._thread.finished.connect(self.deleteLater)
-
-    def start(self):
-        self._thread.start()
-
-    def quit_thread(self):
-        """Safe thread stop — called from close/cleanup paths."""
-        if self._thread.isRunning():
-            self._thread.quit()
-            self._thread.wait(2000)
 
     def run(self):
         try:
@@ -177,6 +143,7 @@ class _DataFetchWorker(QObject):
                 self.to_dt,
                 interval="minute"
             )
+
             if not hist:
                 self.error.emit("no_data")
                 return
@@ -192,12 +159,16 @@ class _DataFetchWorker(QObject):
             if self.timeframe_minutes > 1:
                 rule = f"{self.timeframe_minutes}min"
                 df = df.resample(rule).agg({
-                    "open": "first", "high": "max",
-                    "low": "min",   "close": "last", "volume": "sum"
+                    "open": "first",
+                    "high": "max",
+                    "low": "min",
+                    "close": "last",
+                    "volume": "sum"
                 }).dropna()
 
             cvd_df = CVDHistoricalBuilder.build_cvd_ohlc(df)
             cvd_df["session"] = cvd_df.index.date
+
             sessions = sorted(cvd_df["session"].unique())
             if not sessions:
                 self.error.emit("no_sessions")
@@ -210,11 +181,12 @@ class _DataFetchWorker(QObject):
                     prev_close = prev_data["close"].iloc[-1]
 
             df["session"] = df.index.date
+
             if self.focus_mode:
-                cvd_out   = cvd_df[cvd_df["session"] == sessions[-1]].copy()
+                cvd_out = cvd_df[cvd_df["session"] == sessions[-1]].copy()
                 price_out = df[df["session"] == sessions[-1]].copy()
             else:
-                cvd_out   = cvd_df[cvd_df["session"].isin(sessions[-2:])].copy()
+                cvd_out = cvd_df[cvd_df["session"].isin(sessions[-2:])].copy()
                 price_out = df[df["session"].isin(sessions[-2:])].copy()
 
             self.result_ready.emit(cvd_out, price_out, prev_close)
@@ -222,9 +194,7 @@ class _DataFetchWorker(QObject):
         except Exception as exc:
             self.error.emit(str(exc))
         finally:
-            # Always signal completion — this triggers thread.quit() via the
-            # fetch_done→thread.quit connection wired in __init__.
-            self.fetch_done.emit()
+            self.finished.emit()
 
 
 # =============================================================================
@@ -1095,27 +1065,15 @@ class CVDSingleChartDialog(QDialog):
     # ------------------------------------------------------------------
 
     def _load_and_plot(self):
-        """Kick off a background fetch so the GUI thread is never blocked.
-
-        kite.historical_data() is an HTTP call that takes 300ms-2s.
-        Calling it on the GUI thread starves the WebSocket tick handler and
-        freezes the strike ladder / market data for the entire duration.
-
-        Thread-safety note
-        ------------------
-        The worker owns its own QThread (see _DataFetchWorker.__init__).
-        We connect result_ready / error / fetch_done to *bound methods* of
-        self (a QObject on the main thread).  PySide6 AutoConnection resolves
-        thread affinity via __self__ of bound methods and automatically uses
-        QueuedConnection, so every slot runs on the GUI thread without any
-        explicit Qt.QueuedConnection argument.  Lambdas must NOT be used here
-        because they have no QObject identity and silently fall back to
-        DirectConnection, causing pyqtgraph's internal QBasicTimers to be
-        started from the worker thread (the QBasicTimer warning flood).
         """
-        if self._is_loading:
+        Safe background fetch.
+        Dialog owns the QThread.
+        Worker does NOT own its thread.
+        """
+        if self.live_mode and getattr(self, "_historical_loaded_once", False):
             return
-        if getattr(self, "_fetch_worker", None) is not None:
+
+        if self._is_loading:
             return
 
         if not self.kite or not getattr(self.kite, "access_token", None):
@@ -1124,34 +1082,47 @@ class CVDSingleChartDialog(QDialog):
         focus_mode = self.btn_focus.isChecked()
 
         if self.live_mode:
-            to_dt   = datetime.now()
+            to_dt = datetime.now()
             from_dt = to_dt - timedelta(days=5)
         else:
-            to_dt   = self.current_date + timedelta(days=1)
+            to_dt = self.current_date + timedelta(days=1)
             from_dt = self.previous_date
 
         self._is_loading = True
 
-        # Worker owns its thread; we just connect bound-method slots.
-        worker = _DataFetchWorker(
-            self.kite, self.instrument_token,
-            from_dt, to_dt,
-            self.timeframe_minutes, focus_mode,
-        )
-        # Bound-method connections: AutoConnection → QueuedConnection (cross-thread).
-        worker.result_ready.connect(self._on_fetch_result)
-        worker.error.connect(self._on_fetch_error)
-        worker.fetch_done.connect(self._on_fetch_done)
+        # 🔥 Create thread owned by dialog
+        self._fetch_thread = QThread(self)
 
-        self._fetch_worker = worker   # keep alive until fetch_done
-        worker.start()
+        self._fetch_worker = _DataFetchWorker(
+            self.kite,
+            self.instrument_token,
+            from_dt,
+            to_dt,
+            self.timeframe_minutes,
+            focus_mode,
+        )
+
+        self._fetch_worker.moveToThread(self._fetch_thread)
+
+        # Thread lifecycle
+        self._fetch_thread.started.connect(self._fetch_worker.run)
+        self._fetch_worker.finished.connect(self._fetch_thread.quit)
+
+        # Safe cleanup
+        self._fetch_thread.finished.connect(self._fetch_worker.deleteLater)
+        self._fetch_thread.finished.connect(self._fetch_thread.deleteLater)
+
+        # GUI thread slots (auto queued)
+        self._fetch_worker.result_ready.connect(self._on_fetch_result)
+        self._fetch_worker.error.connect(self._on_fetch_error)
+
+        self._fetch_thread.start()
 
     def _on_fetch_result(self, cvd_df, price_df, prev_close):
-        """Called on the GUI thread when background fetch succeeds."""
-        try:
-            self._plot_data(cvd_df, price_df, prev_close)
-        except Exception:
-            logger.exception("Failed to plot CVD data")
+        self._is_loading = False
+        self._plot_data(cvd_df, price_df, prev_close)
+
+        self._historical_loaded_once = True
 
     def _on_fetch_error(self, msg: str):
         """Called on the GUI thread when background fetch fails."""
@@ -1402,110 +1373,147 @@ class CVDSingleChartDialog(QDialog):
         self._confluence_lines.clear()
 
     def _draw_confluence_lines(
-        self,
-        price_above_mask: np.ndarray,
-        price_below_mask: np.ndarray,
-        price_cross_above_ema: np.ndarray,
-        price_cross_below_ema: np.ndarray,
-        cvd_above_mask: np.ndarray,
-        cvd_below_mask: np.ndarray,
-        cvd_above_ema51: np.ndarray,
-        cvd_below_ema51: np.ndarray,
-        x_arr: np.ndarray,
+            self,
+            price_above_mask: np.ndarray,
+            price_below_mask: np.ndarray,
+            price_cross_above_ema: np.ndarray,
+            price_cross_below_ema: np.ndarray,
+            cvd_above_mask: np.ndarray,
+            cvd_below_mask: np.ndarray,
+            cvd_above_ema51: np.ndarray,
+            cvd_below_ema51: np.ndarray,
+            x_arr: np.ndarray,
     ):
-        """
-        Draw a vertical line on BOTH charts wherever price fires a reversal
-        and CVD confirms — either via its own ATR signal OR simply by being
-        on the correct side of its 51 EMA.
 
-        SHORT (red)  : price above EMA (bearish reversal)
-                       AND (CVD fired above EMA  OR  CVD is just below EMA 51)
-        LONG  (green): price below EMA (bullish reversal)
-                       AND (CVD fired below EMA  OR  CVD is just above EMA 51)
-        """
-        self._clear_confluence_lines()
+        if not hasattr(self, "_confluence_line_map"):
+            self._confluence_line_map = {}
+
+        # ----------------------------------------------------------
+        # Compute CVD cross (ONLY replacing price-cross trigger)
+        # ----------------------------------------------------------
+
+        cvd_data = np.array(self.all_cvd_data, dtype=float)
+        cvd_ema51 = self._calculate_ema(cvd_data, 51)
+
+        cvd_prev = np.concatenate(([cvd_data[0]], cvd_data[:-1]))
+        cvd_ema_prev = np.concatenate(([cvd_ema51[0]], cvd_ema51[:-1]))
+
+        cvd_cross_above = (cvd_prev <= cvd_ema_prev) & (cvd_data > cvd_ema51)
+        cvd_cross_below = (cvd_prev >= cvd_ema_prev) & (cvd_data < cvd_ema51)
+        # ----------------------------------------------------------
+        # CVD Anti-Hug Filter
+        # ----------------------------------------------------------
+
+        gap = np.abs(cvd_data - cvd_ema51)
+
+        # Use your existing UI gap input as base
+        min_gap = self.cvd_ema_gap_input.value() * 0.5
+
+        cvd_cross_above &= (gap > min_gap)
+        cvd_cross_below &= (gap > min_gap)
+
+        # ----------------------------------------------------------
+        # ORIGINAL STRUCTURE — only cross replaced
+        # ----------------------------------------------------------
 
         short_to_51_mask = price_above_mask & cvd_above_mask
-        short_away_mask = (price_above_mask & (~cvd_above_mask) & cvd_below_ema51) | (price_cross_below_ema & cvd_below_ema51)
+
+        short_away_mask = (
+                (price_above_mask & (~cvd_above_mask) & cvd_below_ema51)
+                | (cvd_cross_below & cvd_below_ema51)
+        )
+
         long_to_51_mask = price_below_mask & cvd_below_mask
-        long_away_mask = (price_below_mask & (~cvd_below_mask) & cvd_above_ema51) | (price_cross_above_ema & cvd_above_ema51)
+
+        long_away_mask = (
+                (price_below_mask & (~cvd_below_mask) & cvd_above_ema51)
+                | (cvd_cross_above & cvd_above_ema51)
+        )
 
         short_mask = short_to_51_mask | short_away_mask
         long_mask = long_to_51_mask | long_away_mask
 
-        def _make_line(x: float, color: str) -> list:
-            """Create one InfiniteLine per chart and return [(plot, line), ...]."""
-            pen = pg.mkPen(color, width=1.5, style=Qt.SolidLine)
+        # ----------------------------------------------------------
+        # Alignment safety
+        # ----------------------------------------------------------
+
+        length = min(len(x_arr), len(short_mask), len(long_mask))
+        x_arr = x_arr[:length]
+        short_mask = short_mask[:length]
+        long_mask = long_mask[:length]
+
+        new_keys = set()
+
+        def _add_line(key: str, x: float, color: str):
+            if key in self._confluence_line_map:
+                return
+
+            pen = pg.mkPen(color, width=2.0)
             pairs = []
+
             for plot in (self.price_plot, self.plot):
-                line = pg.InfiniteLine(
-                    pos=x,
-                    angle=90,
-                    movable=False,
-                    pen=pen,
-                    label="",
-                )
-                line.setZValue(1)   # above curves, below dots
+                line = pg.InfiniteLine(pos=x, angle=90, movable=False, pen=pen)
+                line.setZValue(2)
                 plot.addItem(line)
                 pairs.append((plot, line))
-            return pairs
 
-        for x in x_arr[short_mask]:
-            self._confluence_lines.append(_make_line(x, "#FF4444"))  # red  → short
+            self._confluence_line_map[key] = pairs
 
-        for x in x_arr[long_mask]:
-            self._confluence_lines.append(_make_line(x, "#00E676"))  # green → long
+        for idx in np.where(short_mask)[0]:
+            key = f"S:{idx}"
+            new_keys.add(key)
+            _add_line(key, float(x_arr[idx]), "#FF4444")
+
+        for idx in np.where(long_mask)[0]:
+            key = f"L:{idx}"
+            new_keys.add(key)
+            _add_line(key, float(x_arr[idx]), "#00E676")
+
+        obsolete = set(self._confluence_line_map.keys()) - new_keys
+        for key in obsolete:
+            for plot, line in self._confluence_line_map[key]:
+                plot.removeItem(line)
+            del self._confluence_line_map[key]
+
+        # ================= AUTOMATION =================
 
         if not self.automate_toggle.isChecked():
             return
 
-        signal_masks = (
-            ("short", "to_51_ema", short_to_51_mask),
-            ("short", "away_from_51_ema", short_away_mask),
-            ("long", "to_51_ema", long_to_51_mask),
-            ("long", "away_from_51_ema", long_away_mask),
-        )
-
         closed_idx = self._latest_closed_bar_index()
-        if closed_idx is None:
+        if closed_idx is None or closed_idx >= length:
             return
 
-        for side, trade_tag, mask in signal_masks:
-            indices = np.where(mask)[0]
-            if len(indices) == 0:
-                continue
-            latest_idx = int(indices[-1])
-            if latest_idx != closed_idx:
-                continue
+        if self._is_chop_regime(closed_idx):
+            return
 
-            if latest_idx >= len(self.all_timestamps):
-                continue
+        side = None
+        if short_mask[closed_idx]:
+            side = "short"
+        elif long_mask[closed_idx]:
+            side = "long"
 
-            closed_bar_ts = self.all_timestamps[latest_idx].isoformat()
-            if self._last_emitted_closed_bar_ts == closed_bar_ts:
-                continue
-            signal_x = float(x_arr[latest_idx])
-            ts_key = closed_bar_ts
-            signal_key = f"{side}:{trade_tag}:{ts_key}"
-            if self._last_emitted_signal_key == signal_key:
-                continue
-            self._last_emitted_signal_key = signal_key
-            self._last_emitted_closed_bar_ts = closed_bar_ts
+        if side is None:
+            return
 
-            payload = {
-                "instrument_token": self.instrument_token,
-                "symbol": self.symbol,
-                "signal_side": side,
-                "signal_x": signal_x,
-                "price_close": float(self.all_price_data[latest_idx]),
-                "ema10": float(self._calculate_ema(np.array(self.all_price_data, dtype=float), 10)[latest_idx]),
-                "ema51": float(self._calculate_ema(np.array(self.all_price_data, dtype=float), 51)[latest_idx]),
-                "stoploss_points": float(self.automation_stoploss_input.value()),
-                "trade_tag": trade_tag,
-                "timestamp": self.all_timestamps[latest_idx].isoformat() if latest_idx < len(self.all_timestamps) else None,
-            }
-            # Defer emit so broker callbacks cannot re-enter this refresh cycle.
-            QTimer.singleShot(0, lambda p=payload: self.automation_signal.emit(p))
+        closed_bar_ts = self.all_timestamps[closed_idx].isoformat()
+
+        if self._last_emitted_closed_bar_ts == closed_bar_ts:
+            return
+
+        self._last_emitted_closed_bar_ts = closed_bar_ts
+
+        payload = {
+            "instrument_token": self.instrument_token,
+            "symbol": self.symbol,
+            "signal_side": side,
+            "signal_x": float(x_arr[closed_idx]),
+            "price_close": float(self.all_price_data[closed_idx]),
+            "stoploss_points": float(self.automation_stoploss_input.value()),
+            "timestamp": closed_bar_ts,
+        }
+
+        QTimer.singleShot(0, lambda p=payload: self.automation_signal.emit(p))
 
     def _blink_dot(self):
         self._dot_visible = not self._dot_visible
@@ -1521,11 +1529,20 @@ class CVDSingleChartDialog(QDialog):
         self.refresh_timer.start(self.REFRESH_INTERVAL_MS)
 
     def _refresh_if_live(self):
+        """
+        In live mode, DO NOT refetch historical every 3 seconds.
+        Only live tick overlay updates via CVDEngine.
+        Historical reload happens only when:
+            - timeframe changes
+            - date changes
+            - focus mode changes
+        """
         if not self.live_mode:
             return
-        if not self.isVisible():
-            return
-        self._load_and_plot()
+
+        # Nothing to do here.
+        # Live updates are driven by CVDEngine ticks.
+        return
 
     def _fix_axis_after_show(self):
         bottom_axis = self.plot.getAxis("bottom")
@@ -1622,29 +1639,91 @@ class CVDSingleChartDialog(QDialog):
         QTimer.singleShot(0, self._fix_axis_after_show)
 
     def closeEvent(self, event):
-        # Stop background worker safely
-        worker = getattr(self, "_fetch_worker", None)
-        if worker is not None:
-            worker.quit_thread()
-            self._fetch_worker = None
-
-        self._is_loading = False
-
-        if self.cvd_engine:
-            with suppress(TypeError, RuntimeError):
-                self.cvd_engine.cvd_updated.disconnect(self._on_cvd_tick_update)
-            self.cvd_engine.set_mode(CVDMode.NORMAL)
-
-        if hasattr(self, "_tick_repaint_timer"):
-            self._tick_repaint_timer.stop()
-
-        if hasattr(self, "refresh_timer"):
-            self.refresh_timer.stop()
-
-        if hasattr(self, "dot_timer"):
-            self.dot_timer.stop()
-
+        try:
+            if hasattr(self, "_fetch_thread") and self._fetch_thread.isRunning():
+                self._fetch_thread.quit()
+                self._fetch_thread.wait(2000)
+        except Exception:
+            pass
         super().closeEvent(event)
+
+    # ------------------------------------------------------------------
+    # REGIME / CHOP DETECTION
+    # ------------------------------------------------------------------
+
+    def _compute_adx(self, high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) -> np.ndarray:
+        length = len(close)
+        if length < period + 5:
+            return np.zeros(length)
+
+        plus_dm = np.zeros(length)
+        minus_dm = np.zeros(length)
+        tr = np.zeros(length)
+
+        for i in range(1, length):
+            up_move = high[i] - high[i - 1]
+            down_move = low[i - 1] - low[i]
+
+            plus_dm[i] = up_move if (up_move > down_move and up_move > 0) else 0.0
+            minus_dm[i] = down_move if (down_move > up_move and down_move > 0) else 0.0
+
+            tr[i] = max(
+                high[i] - low[i],
+                abs(high[i] - close[i - 1]),
+                abs(low[i] - close[i - 1])
+            )
+
+        # Wilder smoothing
+        atr = np.zeros(length)
+        atr[period] = np.mean(tr[1:period + 1])
+
+        for i in range(period + 1, length):
+            atr[i] = (atr[i - 1] * (period - 1) + tr[i]) / period
+
+        plus_di = 100 * (pd.Series(plus_dm).rolling(period).mean() / atr)
+        minus_di = 100 * (pd.Series(minus_dm).rolling(period).mean() / atr)
+
+        dx = (abs(plus_di - minus_di) / (plus_di + minus_di)) * 100
+        adx = dx.rolling(period).mean()
+
+        return np.nan_to_num(adx.values)
+
+    def _is_chop_regime(self, idx: int) -> bool:
+        """
+        Determine if market is in chop regime at given index.
+        Uses:
+            - ADX
+            - EMA 51 slope
+            - Price hugging EMA 51
+        """
+
+        if idx is None or idx < 20:
+            return False
+
+        price = np.array(self.all_price_data, dtype=float)
+        high = np.array(self.all_price_high_data, dtype=float)
+        low = np.array(self.all_price_low_data, dtype=float)
+
+        ema51 = self._calculate_ema(price, 51)
+        atr = self._calculate_atr(high, low, price, 14)
+        adx = self._compute_adx(high, low, price, 14)
+
+        atr_val = max(float(atr[idx]), 1e-6)
+
+        # 1️⃣ Low ADX
+        low_adx = adx[idx] < 18
+
+        # 2️⃣ EMA slope
+        slope = ema51[idx] - ema51[idx - 5]
+        flat = abs(slope) < (0.02 * atr_val)
+
+        # 3️⃣ Price hugging EMA
+        hugging = abs(price[idx] - ema51[idx]) < (0.25 * atr_val)
+
+        return (
+                low_adx
+                or (hugging and flat and adx[idx] < 22)
+        )
 
     def changeEvent(self, event):
         # Intentionally NOT stopping/starting the refresh_timer on activation changes.
