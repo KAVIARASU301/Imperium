@@ -57,8 +57,12 @@ class CVDEngine(QObject):
         token = tick.get("instrument_token")
         price = tick.get("last_price")
         volume = tick.get("volume")
+        last_qty = tick.get("last_quantity") or tick.get("last_traded_quantity")
 
-        if token is None or price is None or volume is None:
+        if token is None or price is None:
+            return
+
+        if volume is None and last_qty is None:
             return
 
         # Get or create state
@@ -82,12 +86,22 @@ class CVDEngine(QObject):
         # Initialize on first tick
         if state.last_volume is None:
             state.last_price = price
-            state.last_volume = volume
+            state.last_volume = volume if volume is not None else 0
             self.cvd_updated.emit(token, state.cvd)
             return
 
-        # Calculate volume delta
-        volume_delta = volume - state.last_volume
+        # Calculate volume delta.
+        # Prefer exchange cumulative volume when it advances; otherwise fall back
+        # to per-tick traded quantity for smoother intrabar updates.
+        volume_delta = 0
+        if volume is not None:
+            volume_delta = volume - state.last_volume
+            # Handle rare feed/session resets where cumulative volume drops.
+            if volume_delta < 0:
+                volume_delta = int(last_qty or 0)
+
+        if volume_delta <= 0 and last_qty is not None:
+            volume_delta = int(last_qty)
 
         # Update CVD if volume increased
         if volume_delta > 0:
@@ -111,7 +125,8 @@ class CVDEngine(QObject):
 
         # Update state
         state.last_price = price
-        state.last_volume = volume
+        if volume is not None:
+            state.last_volume = volume
 
     def get_cvd(self, token: int) -> Optional[float]:
         """Get current CVD value for a token."""
@@ -124,6 +139,20 @@ class CVDEngine(QObject):
             token: state.cvd
             for token, state in self._states.items()
         }
+
+    def subscribe_instruments(self, tokens: Iterable[int]) -> bool:
+        """Compatibility helper used by some UI flows.
+
+        CVDEngine itself does not own websocket subscriptions; main window handles
+        market data subscriptions. Here we just ensure token states exist.
+        """
+        try:
+            for token in tokens:
+                self.register_token(int(token))
+            return True
+        except Exception:
+            logger.exception("[CVD] Failed to register instruments")
+            return False
 
     def clear_token(self, token: int):
         """Remove a token from tracking."""

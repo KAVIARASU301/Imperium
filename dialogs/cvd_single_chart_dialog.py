@@ -1372,6 +1372,19 @@ class CVDSingleChartDialog(QDialog):
                 plot.removeItem(line)
         self._confluence_lines.clear()
 
+        # Current confluence rendering uses _confluence_line_map.
+        # Ensure full cleanup between re-plots so stale keys don't
+        # suppress fresh ATR/confluence line rendering.
+        line_map = getattr(self, "_confluence_line_map", None)
+        if line_map:
+            for pairs in line_map.values():
+                for plot, line in pairs:
+                    try:
+                        plot.removeItem(line)
+                    except Exception:
+                        pass
+            line_map.clear()
+
     def _draw_confluence_lines(
             self,
             price_above_mask: np.ndarray,
@@ -1398,8 +1411,8 @@ class CVDSingleChartDialog(QDialog):
         cvd_prev = np.concatenate(([cvd_data[0]], cvd_data[:-1]))
         cvd_ema_prev = np.concatenate(([cvd_ema51[0]], cvd_ema51[:-1]))
 
-        cvd_cross_above = (cvd_prev <= cvd_ema_prev) & (cvd_data > cvd_ema51)
-        cvd_cross_below = (cvd_prev >= cvd_ema_prev) & (cvd_data < cvd_ema51)
+        cvd_cross_above_raw = (cvd_prev <= cvd_ema_prev) & (cvd_data > cvd_ema51)
+        cvd_cross_below_raw = (cvd_prev >= cvd_ema_prev) & (cvd_data < cvd_ema51)
         # ----------------------------------------------------------
         # CVD Anti-Hug Filter
         # ----------------------------------------------------------
@@ -1409,8 +1422,24 @@ class CVDSingleChartDialog(QDialog):
         # Use your existing UI gap input as base
         min_gap = self.cvd_ema_gap_input.value() * 0.5
 
-        cvd_cross_above &= (gap > min_gap)
-        cvd_cross_below &= (gap > min_gap)
+        cvd_cross_above_raw &= (gap > min_gap)
+        cvd_cross_below_raw &= (gap > min_gap)
+
+        # ----------------------------------------------------------
+        # Slope filter for EMA-cross entries (15m or 30m trend)
+        # - short cross: both price and CVD sloping down
+        # - long cross: both price and CVD sloping up
+        # ----------------------------------------------------------
+
+        price_data = np.array(self.all_price_data, dtype=float)
+        price_up_slope, price_down_slope = self._build_slope_direction_masks(price_data)
+        cvd_up_slope, cvd_down_slope = self._build_slope_direction_masks(cvd_data)
+
+        short_slope_ok = price_down_slope & cvd_down_slope
+        long_slope_ok = price_up_slope & cvd_up_slope
+
+        cvd_cross_above_filtered = cvd_cross_above_raw & long_slope_ok
+        cvd_cross_below_filtered = cvd_cross_below_raw & short_slope_ok
 
         # ----------------------------------------------------------
         # ORIGINAL STRUCTURE — only cross replaced
@@ -1420,18 +1449,32 @@ class CVDSingleChartDialog(QDialog):
 
         short_away_mask = (
                 (price_above_mask & (~cvd_above_mask) & cvd_below_ema51)
-                | (cvd_cross_below & cvd_below_ema51)
+                | (cvd_cross_below_raw & cvd_below_ema51)
         )
 
         long_to_51_mask = price_below_mask & cvd_below_mask
 
         long_away_mask = (
                 (price_below_mask & (~cvd_below_mask) & cvd_above_ema51)
-                | (cvd_cross_above & cvd_above_ema51)
+                | (cvd_cross_above_raw & cvd_above_ema51)
         )
 
         short_mask = short_to_51_mask | short_away_mask
         long_mask = long_to_51_mask | long_away_mask
+
+        # Trade qualification masks:
+        # keep ATR alignment behavior unchanged, apply slope filter only
+        # to EMA-cross derived branch.
+        short_away_mask_qualified = (
+                (price_above_mask & (~cvd_above_mask) & cvd_below_ema51)
+                | (cvd_cross_below_filtered & cvd_below_ema51)
+        )
+        long_away_mask_qualified = (
+                (price_below_mask & (~cvd_below_mask) & cvd_above_ema51)
+                | (cvd_cross_above_filtered & cvd_above_ema51)
+        )
+        short_mask_qualified = short_to_51_mask | short_away_mask_qualified
+        long_mask_qualified = long_to_51_mask | long_away_mask_qualified
 
         # ----------------------------------------------------------
         # Alignment safety
@@ -1441,6 +1484,8 @@ class CVDSingleChartDialog(QDialog):
         x_arr = x_arr[:length]
         short_mask = short_mask[:length]
         long_mask = long_mask[:length]
+        short_mask_qualified = short_mask_qualified[:length]
+        long_mask_qualified = long_mask_qualified[:length]
 
         new_keys = set()
 
@@ -1488,9 +1533,9 @@ class CVDSingleChartDialog(QDialog):
             return
 
         side = None
-        if short_mask[closed_idx]:
+        if short_mask_qualified[closed_idx]:
             side = "short"
-        elif long_mask[closed_idx]:
+        elif long_mask_qualified[closed_idx]:
             side = "long"
 
         if side is None:
@@ -1514,6 +1559,34 @@ class CVDSingleChartDialog(QDialog):
         }
 
         QTimer.singleShot(0, lambda p=payload: self.automation_signal.emit(p))
+
+    def _build_slope_direction_masks(self, series: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Build per-bar slope direction masks using two lookbacks:
+        - 15 minutes
+        - 30 minutes
+
+        A direction qualifies when either lookback indicates that direction.
+        """
+        length = len(series)
+        up_mask = np.zeros(length, dtype=bool)
+        down_mask = np.zeros(length, dtype=bool)
+
+        if length < 2:
+            return up_mask, down_mask
+
+        lookback_minutes = (15, 30)
+        for minutes in lookback_minutes:
+            bars_back = max(1, int(round(minutes / max(self.timeframe_minutes, 1))))
+            if bars_back >= length:
+                continue
+
+            delta = np.zeros(length, dtype=float)
+            delta[bars_back:] = series[bars_back:] - series[:-bars_back]
+            up_mask |= delta > 0
+            down_mask |= delta < 0
+
+        return up_mask, down_mask
 
     def _blink_dot(self):
         self._dot_visible = not self._dot_visible
@@ -1606,10 +1679,25 @@ class CVDSingleChartDialog(QDialog):
             return
 
         focus_mode = self.btn_focus.isChecked()
-        current_day = self._current_session_start_ts.date()
+        session_start_ts = pd.Timestamp(self._current_session_start_ts)
+
+        def _align_tick_ts(ts: datetime) -> pd.Timestamp:
+            tick_ts = pd.Timestamp(ts)
+
+            # Handle mixed tz-aware / tz-naive arithmetic safely.
+            if session_start_ts.tz is None and tick_ts.tz is not None:
+                tick_ts = tick_ts.tz_convert(None)
+            elif session_start_ts.tz is not None and tick_ts.tz is None:
+                tick_ts = tick_ts.tz_localize(session_start_ts.tz)
+            elif session_start_ts.tz is not None and tick_ts.tz is not None and tick_ts.tz != session_start_ts.tz:
+                tick_ts = tick_ts.tz_convert(session_start_ts.tz)
+
+            return tick_ts
+
+        current_day = session_start_ts.date()
         points = [
             (ts, cvd) for ts, cvd in self._live_tick_points
-            if ts.date() == current_day
+            if _align_tick_ts(ts).date() == current_day
         ]
         if not points:
             self.today_tick_curve.clear()
@@ -1622,10 +1710,13 @@ class CVDSingleChartDialog(QDialog):
         x_vals: list[float] = []
         y_vals: list[float] = []
         for ts, cvd in points:
+            tick_ts = _align_tick_ts(ts)
+
             if focus_mode:
-                x = self._time_to_session_index(ts) + (ts.second / 60.0) + (ts.microsecond / 60_000_000.0)
+                tick_dt = tick_ts.to_pydatetime()
+                x = self._time_to_session_index(tick_dt) + (tick_dt.second / 60.0) + (tick_dt.microsecond / 60_000_000.0)
             else:
-                minute_offset = (ts - self._current_session_start_ts).total_seconds() / 60.0
+                minute_offset = (tick_ts - session_start_ts).total_seconds() / 60.0
                 x = self._current_session_x_base + minute_offset
 
             x_vals.append(x)
