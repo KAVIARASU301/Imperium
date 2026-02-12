@@ -8,7 +8,7 @@ import pandas as pd
 import pyqtgraph as pg
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QLabel, QHBoxLayout,
-    QPushButton, QWidget, QCheckBox, QSpinBox, QDoubleSpinBox
+    QPushButton, QWidget, QCheckBox, QSpinBox, QDoubleSpinBox, QComboBox
 )
 from PySide6.QtCore import Qt, QTimer, Signal, QEvent, QObject, QThread
 from pyqtgraph import AxisItem, TextItem
@@ -22,8 +22,9 @@ logger = logging.getLogger(__name__)
 from datetime import time
 
 TRADING_START = time(9, 15)
-TRADING_END   = time(15, 30)
+TRADING_END = time(15, 30)
 MINUTES_PER_SESSION = 375  # 6h 15m
+
 
 # =============================================================================
 # Date Navigator (same behavior as multi-chart)
@@ -208,7 +209,12 @@ class CVDSingleChartDialog(QDialog):
     LIVE_TICK_DOWNSAMPLE_TARGET = 1500
     automation_signal = Signal(dict)
     automation_state_signal = Signal(dict)
-    _cvd_tick_received = Signal(float)   # internal: marshal WebSocket thread → GUI thread
+    _cvd_tick_received = Signal(float)  # internal: marshal WebSocket thread → GUI thread
+
+    SIGNAL_FILTER_ALL = "all"
+    SIGNAL_FILTER_ATR_ONLY = "atr_only"
+    SIGNAL_FILTER_EMA_CROSS_ONLY = "ema_cross_only"
+    SIGNAL_FILTER_OTHERS = "others"
 
     def __init__(
             self,
@@ -240,7 +246,7 @@ class CVDSingleChartDialog(QDialog):
         self._last_plot_x_indices: list[float] = []
 
         # 🎯 Confluence signal lines (price + CVD both reversal at same bar)
-        self._confluence_lines: list = []   # InfiniteLine items added to both plots
+        self._confluence_lines: list = []  # InfiniteLine items added to both plots
         self._last_emitted_signal_key: str | None = None
         self._last_emitted_closed_bar_ts: str | None = None
 
@@ -456,6 +462,20 @@ class CVDSingleChartDialog(QDialog):
         """)
         self.automate_toggle.toggled.connect(self._on_automation_settings_changed)
         ema_bar.addWidget(self.automate_toggle)
+
+        signal_filter_label = QLabel("Signals")
+        signal_filter_label.setStyleSheet("color: #8A9BA8; font-size: 12px;")
+        ema_bar.addWidget(signal_filter_label)
+
+        self.signal_filter_combo = QComboBox()
+        self.signal_filter_combo.setFixedWidth(260)
+        self.signal_filter_combo.setStyleSheet("QComboBox { background:#1B1F2B; color:#E0E0E0; font-weight:600; }")
+        self.signal_filter_combo.addItem("All Trade Signals", self.SIGNAL_FILTER_ALL)
+        self.signal_filter_combo.addItem("Only ATR Reversal Signals", self.SIGNAL_FILTER_ATR_ONLY)
+        self.signal_filter_combo.addItem("Only EMA Cross Signals", self.SIGNAL_FILTER_EMA_CROSS_ONLY)
+        self.signal_filter_combo.addItem("ATR Divergence Signals", self.SIGNAL_FILTER_OTHERS)
+        self.signal_filter_combo.currentIndexChanged.connect(self._on_signal_filter_changed)
+        ema_bar.addWidget(self.signal_filter_combo)
 
         sl_points_label = QLabel("SL Pts")
         sl_points_label.setStyleSheet("color: #8A9BA8; font-size: 12px;")
@@ -711,7 +731,15 @@ class CVDSingleChartDialog(QDialog):
             "symbol": self.symbol,
             "enabled": self.automate_toggle.isChecked(),
             "stoploss_points": float(self.automation_stoploss_input.value()),
+            "signal_filter": self._selected_signal_filter(),
         })
+
+    def _on_signal_filter_changed(self, *_):
+        self._update_atr_reversal_markers()
+        self._on_automation_settings_changed()
+
+    def _selected_signal_filter(self) -> str:
+        return self.signal_filter_combo.currentData() or self.SIGNAL_FILTER_ALL
 
     def _on_cvd_tick_update(self, token: int, cvd_value: float):
         if not self.isVisible():
@@ -902,7 +930,7 @@ class CVDSingleChartDialog(QDialog):
     def _update_atr_reversal_markers(self):
         """Update ATR reversal triangles using currently plotted price and CVD series."""
         has_price = getattr(self, "all_price_data", None) and self._last_plot_x_indices
-        has_cvd   = getattr(self, "all_cvd_data",  None) and self._last_plot_x_indices
+        has_cvd = getattr(self, "all_cvd_data", None) and self._last_plot_x_indices
 
         if not has_price:
             self.price_atr_above_markers.clear()
@@ -913,20 +941,20 @@ class CVDSingleChartDialog(QDialog):
         if not has_price and not has_cvd:
             return
 
-        base_ema_period    = int(self.atr_base_ema_input.value())
+        base_ema_period = int(self.atr_base_ema_input.value())
         distance_threshold = float(self.atr_distance_input.value())
-        x_arr              = np.array(self._last_plot_x_indices, dtype=float)
+        x_arr = np.array(self._last_plot_x_indices, dtype=float)
 
         # ── Price markers ────────────────────────────────────────────────
         if has_price:
-            price_data_array = np.array(self.all_price_data,      dtype=float)
-            high_data_array  = np.array(self.all_price_high_data,  dtype=float)
-            low_data_array   = np.array(self.all_price_low_data,   dtype=float)
+            price_data_array = np.array(self.all_price_data, dtype=float)
+            high_data_array = np.array(self.all_price_high_data, dtype=float)
+            low_data_array = np.array(self.all_price_low_data, dtype=float)
 
-            atr_values    = self._calculate_atr(high_data_array, low_data_array, price_data_array, period=14)
-            base_ema      = self._calculate_ema(price_data_array, base_ema_period)
-            safe_atr      = np.where(atr_values <= 0, np.nan, atr_values)
-            distance      = np.abs(price_data_array - base_ema) / safe_atr
+            atr_values = self._calculate_atr(high_data_array, low_data_array, price_data_array, period=14)
+            base_ema = self._calculate_ema(price_data_array, base_ema_period)
+            safe_atr = np.where(atr_values <= 0, np.nan, atr_values)
+            distance = np.abs(price_data_array - base_ema) / safe_atr
 
             above_mask = (distance >= distance_threshold) & (price_data_array > base_ema)
             below_mask = (distance >= distance_threshold) & (price_data_array < base_ema)
@@ -948,26 +976,26 @@ class CVDSingleChartDialog(QDialog):
 
         # ── CVD markers — EMA 51 / distance 9 + raw gap gate (independent of price UI) ──
         if has_cvd:
-            CVD_ATR_EMA      = 51
+            CVD_ATR_EMA = 51
             CVD_ATR_DISTANCE = 11
 
             cvd_data_array = np.array(self.all_cvd_data, dtype=float)
 
             if getattr(self, "all_cvd_high_data", None) and getattr(self, "all_cvd_low_data", None):
                 cvd_high = np.array(self.all_cvd_high_data, dtype=float)
-                cvd_low  = np.array(self.all_cvd_low_data,  dtype=float)
+                cvd_low = np.array(self.all_cvd_low_data, dtype=float)
             else:
                 cvd_high = cvd_data_array.copy()
-                cvd_low  = cvd_data_array.copy()
+                cvd_low = cvd_data_array.copy()
 
-            atr_cvd    = self._calculate_atr(cvd_high, cvd_low, cvd_data_array, period=14)
+            atr_cvd = self._calculate_atr(cvd_high, cvd_low, cvd_data_array, period=14)
             base_ema_c = self._calculate_ema(cvd_data_array, CVD_ATR_EMA)
             safe_atr_c = np.where(atr_cvd <= 0, np.nan, atr_cvd)
             distance_c = np.abs(cvd_data_array - base_ema_c) / safe_atr_c
 
             # ── Extra gate: raw gap between CVD and its EMA must exceed threshold ──
             cvd_ema_gap_threshold = float(self.cvd_ema_gap_input.value())
-            raw_gap_c  = np.abs(cvd_data_array - base_ema_c)
+            raw_gap_c = np.abs(cvd_data_array - base_ema_c)
             gap_mask_c = raw_gap_c > cvd_ema_gap_threshold  # BOTH conditions must hold
 
             above_mask_c = (distance_c >= CVD_ATR_DISTANCE) & (cvd_data_array > base_ema_c) & gap_mask_c
@@ -1031,6 +1059,7 @@ class CVDSingleChartDialog(QDialog):
             "symbol": self.symbol,
             "enabled": self.automate_toggle.isChecked(),
             "stoploss_points": float(self.automation_stoploss_input.value()),
+            "signal_filter": self._selected_signal_filter(),
             "bar_x": float(x_arr[idx]),
             "price_close": new_price_close,
             "ema10": float(ema10[idx]),
@@ -1060,7 +1089,6 @@ class CVDSingleChartDialog(QDialog):
         if idx < 0:
             return None
         return idx
-
 
     # ------------------------------------------------------------------
 
@@ -1183,20 +1211,20 @@ class CVDSingleChartDialog(QDialog):
 
             cvd_y_raw = df_cvd_sess["close"].values
             cvd_high_raw = df_cvd_sess["high"].values if "high" in df_cvd_sess.columns else cvd_y_raw
-            cvd_low_raw  = df_cvd_sess["low"].values  if "low"  in df_cvd_sess.columns else cvd_y_raw
+            cvd_low_raw = df_cvd_sess["low"].values if "low" in df_cvd_sess.columns else cvd_y_raw
             price_y_raw = df_price_sess["close"].values
             price_high_raw = df_price_sess["high"].values
             price_low_raw = df_price_sess["low"].values
 
             # Rebasing logic for CVD
             if i == 0 and len(sessions) == 2 and not self.btn_focus.isChecked():
-                cvd_y    = cvd_y_raw    - prev_close
+                cvd_y = cvd_y_raw - prev_close
                 cvd_high = cvd_high_raw - prev_close
-                cvd_low  = cvd_low_raw  - prev_close
+                cvd_low = cvd_low_raw - prev_close
             else:
-                cvd_y    = cvd_y_raw
+                cvd_y = cvd_y_raw
                 cvd_high = cvd_high_raw
-                cvd_low  = cvd_low_raw
+                cvd_low = cvd_low_raw
 
             price_y = price_y_raw
 
@@ -1339,7 +1367,6 @@ class CVDSingleChartDialog(QDialog):
 
             self._update_atr_reversal_markers()
 
-
         # Set X range
         self.plot.enableAutoRange(axis=pg.ViewBox.YAxis)
         self.price_plot.enableAutoRange(axis=pg.ViewBox.YAxis)
@@ -1442,6 +1469,13 @@ class CVDSingleChartDialog(QDialog):
         cvd_cross_below_filtered = cvd_cross_below_raw & short_slope_ok
 
         # ----------------------------------------------------------
+        # CVD-only slope for ATR Divergence (Others)
+        # Divergence edge: Price and CVD NOT aligned, but CVD must be trending
+        # ----------------------------------------------------------
+        cvd_short_slope_ok = cvd_down_slope  # CVD trending down for shorts
+        cvd_long_slope_ok = cvd_up_slope  # CVD trending up for longs
+
+        # ----------------------------------------------------------
         # ORIGINAL STRUCTURE — only cross replaced
         # ----------------------------------------------------------
 
@@ -1476,6 +1510,41 @@ class CVDSingleChartDialog(QDialog):
         short_mask_qualified = short_to_51_mask | short_away_mask_qualified
         long_mask_qualified = long_to_51_mask | long_away_mask_qualified
 
+        ema_cross_short_mask = cvd_cross_below_raw & cvd_below_ema51
+        ema_cross_long_mask = cvd_cross_above_raw & cvd_above_ema51
+        ema_cross_short_mask_qualified = cvd_cross_below_filtered & cvd_below_ema51
+        ema_cross_long_mask_qualified = cvd_cross_above_filtered & cvd_above_ema51
+
+        # ----------------------------------------------------------
+        # Define distinct signal types
+        # ----------------------------------------------------------
+
+        # 1. ATR Reversal (to EMA51)
+        atr_reversal_short_mask = short_to_51_mask
+        atr_reversal_long_mask = long_to_51_mask
+
+        # 2. EMA Cross (pure, without ATR requirement)
+        ema_cross_short_mask = ema_cross_short_mask_qualified
+        ema_cross_long_mask = ema_cross_long_mask_qualified
+
+        # 3. ATR Divergence (ATR aligned, CVD diverging with slope, not crossing)
+        #    - Short: Price above ATR, CVD below EMA51, CVD trending down, no cross
+        #    - Long: Price below ATR, CVD above EMA51, CVD trending up, no cross
+        others_short_mask = (
+                price_above_mask &
+                (~cvd_above_mask) &
+                cvd_below_ema51 &
+                cvd_short_slope_ok &  # CVD must be trending down
+                (~ema_cross_short_mask_qualified)  # Not an EMA cross
+        )
+        others_long_mask = (
+                price_below_mask &
+                (~cvd_below_mask) &
+                cvd_above_ema51 &
+                cvd_long_slope_ok &  # CVD must be trending up
+                (~ema_cross_long_mask_qualified)  # Not an EMA cross
+        )
+
         # ----------------------------------------------------------
         # Alignment safety
         # ----------------------------------------------------------
@@ -1486,6 +1555,37 @@ class CVDSingleChartDialog(QDialog):
         long_mask = long_mask[:length]
         short_mask_qualified = short_mask_qualified[:length]
         long_mask_qualified = long_mask_qualified[:length]
+        short_to_51_mask = short_to_51_mask[:length]
+        long_to_51_mask = long_to_51_mask[:length]
+        ema_cross_short_mask_qualified = ema_cross_short_mask_qualified[:length]
+        ema_cross_long_mask_qualified = ema_cross_long_mask_qualified[:length]
+        atr_reversal_short_mask = atr_reversal_short_mask[:length]
+        atr_reversal_long_mask = atr_reversal_long_mask[:length]
+        ema_cross_short_mask = ema_cross_short_mask[:length]
+        ema_cross_long_mask = ema_cross_long_mask[:length]
+        others_short_mask = others_short_mask[:length]
+        others_long_mask = others_long_mask[:length]
+
+        signal_filter = self._selected_signal_filter()
+        signal_label = "all"
+        if signal_filter == self.SIGNAL_FILTER_ATR_ONLY:
+            short_mask = atr_reversal_short_mask
+            long_mask = atr_reversal_long_mask
+            short_mask_qualified = atr_reversal_short_mask
+            long_mask_qualified = atr_reversal_long_mask
+            signal_label = "atr_reversal"
+        elif signal_filter == self.SIGNAL_FILTER_EMA_CROSS_ONLY:
+            short_mask = ema_cross_short_mask
+            long_mask = ema_cross_long_mask
+            short_mask_qualified = ema_cross_short_mask
+            long_mask_qualified = ema_cross_long_mask
+            signal_label = "ema_cross"
+        elif signal_filter == self.SIGNAL_FILTER_OTHERS:
+            short_mask = others_short_mask
+            long_mask = others_long_mask
+            short_mask_qualified = others_short_mask
+            long_mask_qualified = others_long_mask
+            signal_label = "atr_divergence"
 
         new_keys = set()
 
@@ -1552,6 +1652,7 @@ class CVDSingleChartDialog(QDialog):
             "instrument_token": self.instrument_token,
             "symbol": self.symbol,
             "signal_side": side,
+            "signal_type": signal_label,
             "signal_x": float(x_arr[closed_idx]),
             "price_close": float(self.all_price_data[closed_idx]),
             "stoploss_points": float(self.automation_stoploss_input.value()),
@@ -1714,7 +1815,8 @@ class CVDSingleChartDialog(QDialog):
 
             if focus_mode:
                 tick_dt = tick_ts.to_pydatetime()
-                x = self._time_to_session_index(tick_dt) + (tick_dt.second / 60.0) + (tick_dt.microsecond / 60_000_000.0)
+                x = self._time_to_session_index(tick_dt) + (tick_dt.second / 60.0) + (
+                            tick_dt.microsecond / 60_000_000.0)
             else:
                 minute_offset = (tick_ts - session_start_ts).total_seconds() / 60.0
                 x = self._current_session_x_base + minute_offset
