@@ -3467,12 +3467,17 @@ class ScalperMainWindow(QMainWindow):
                     # Dialog was already destroyed
                     del self.cvd_single_chart_dialogs[cvd_token]
 
-            # Subscribe to market data for this token
+            # Ensure CVD engine + websocket are both tracking this token.
             if self.cvd_engine:
                 try:
                     self.cvd_engine.set_mode(CVDMode.SINGLE_CHART)
-                    success = self.cvd_engine.subscribe_instruments([cvd_token])
-                    if not success:
+                    self.cvd_engine.register_token(cvd_token)
+                    self.active_cvd_tokens.add(cvd_token)
+                    self._update_market_subscriptions()
+
+                    if hasattr(self.market_data_worker, 'subscribed_tokens') and (
+                        cvd_token not in self.market_data_worker.subscribed_tokens
+                    ):
                         QMessageBox.warning(
                             self,
                             "Subscription Failed",

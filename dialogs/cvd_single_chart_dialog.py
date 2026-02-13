@@ -209,7 +209,7 @@ class CVDSingleChartDialog(QDialog):
     LIVE_TICK_DOWNSAMPLE_TARGET = 1500
     automation_signal = Signal(dict)
     automation_state_signal = Signal(dict)
-    _cvd_tick_received = Signal(float)  # internal: marshal WebSocket thread → GUI thread
+    _cvd_tick_received = Signal(float, float)  # internal: marshal WebSocket thread → GUI thread
 
     SIGNAL_FILTER_ALL = "all"
     SIGNAL_FILTER_ATR_ONLY = "atr_only"
@@ -237,9 +237,13 @@ class CVDSingleChartDialog(QDialog):
         self.current_date = None
         self.previous_date = None
         self._live_tick_points: deque[tuple[datetime, float]] = deque(maxlen=self.LIVE_TICK_MAX_POINTS)
+        self._live_price_points: deque[tuple[datetime, float]] = deque(maxlen=self.LIVE_TICK_MAX_POINTS)
         self._current_session_start_ts: datetime | None = None
         self._current_session_x_base: float = 0.0
+        self._live_cvd_offset: float | None = None
+        self._current_session_last_cvd_value: float | None = None
         self._is_loading = False
+        self._last_live_refresh_minute: datetime | None = None
 
         # Plot caches
         self.all_timestamps: list[datetime] = []
@@ -268,7 +272,7 @@ class CVDSingleChartDialog(QDialog):
 
         # Init in LIVE mode
         self.current_date, self.previous_date = self.navigator.get_dates()
-        self._load_and_plot()
+        self._load_and_plot(force=True)
         self._start_refresh_timer()
 
     # ------------------------------------------------------------------
@@ -521,6 +525,11 @@ class CVDSingleChartDialog(QDialog):
         self.price_plot.addItem(self.price_prev_curve)
         self.price_plot.addItem(self.price_today_curve)
 
+        self.price_today_tick_curve = pg.PlotCurveItem(
+            pen=pg.mkPen("#FFE57F", width=1.4)
+        )
+        self.price_plot.addItem(self.price_today_tick_curve)
+
         # Price live dot
         self.price_live_dot = pg.ScatterPlotItem(
             size=5,
@@ -741,24 +750,36 @@ class CVDSingleChartDialog(QDialog):
     def _selected_signal_filter(self) -> str:
         return self.signal_filter_combo.currentData() or self.SIGNAL_FILTER_ALL
 
-    def _on_cvd_tick_update(self, token: int, cvd_value: float):
+    def _on_cvd_tick_update(self, token: int, cvd_value: float, last_price: float):
         if not self.isVisible():
             return
 
         if token != self.instrument_token or not self.live_mode:
             return
 
-        self._cvd_tick_received.emit(cvd_value)
+        self._cvd_tick_received.emit(cvd_value, last_price)
 
-    def _apply_cvd_tick(self, cvd_value: float):
+    def _apply_cvd_tick(self, cvd_value: float, last_price: float):
         """Slot — always called on the GUI thread via queued signal connection."""
         ts = datetime.now()
-        self._live_tick_points.append((ts, cvd_value))
+
+        # Align live tick CVD level with historical curve to avoid visual jump.
+        if self._live_cvd_offset is None:
+            if self._current_session_last_cvd_value is not None:
+                self._live_cvd_offset = float(self._current_session_last_cvd_value) - float(cvd_value)
+            else:
+                self._live_cvd_offset = 0.0
+
+        plotted_cvd = float(cvd_value) + float(self._live_cvd_offset)
+        self._live_tick_points.append((ts, plotted_cvd))
+        self._live_price_points.append((ts, float(last_price)))
 
         # Trim stale points from previous sessions.
         today = ts.date()
         while self._live_tick_points and self._live_tick_points[0][0].date() < today:
             self._live_tick_points.popleft()
+        while self._live_price_points and self._live_price_points[0][0].date() < today:
+            self._live_price_points.popleft()
 
         if not self._tick_repaint_timer.isActive():
             self._tick_repaint_timer.start(self.LIVE_TICK_REPAINT_MS)
@@ -812,13 +833,18 @@ class CVDSingleChartDialog(QDialog):
         self.today_curve.clear()
         self.live_dot.clear()
         self.today_tick_curve.clear()
+        self.price_today_tick_curve.clear()
 
         self.price_prev_curve.clear()
         self.price_today_curve.clear()
         self.price_live_dot.clear()
 
+        self._live_tick_points.clear()
+        self._live_price_points.clear()
+        self._live_cvd_offset = None
+        self._current_session_last_cvd_value = None
         self.all_timestamps.clear()
-        self._load_and_plot()
+        self._load_and_plot(force=True)
 
     def _on_mouse_moved(self, pos):
         in_price_plot = self.price_plot.sceneBoundingRect().contains(pos)
@@ -881,7 +907,7 @@ class CVDSingleChartDialog(QDialog):
             self.live_mode = False
             self.refresh_timer.stop()
 
-        self._load_and_plot()
+        self._load_and_plot(force=True)
 
     # ------------------------------------------------------------------
 
@@ -1092,13 +1118,13 @@ class CVDSingleChartDialog(QDialog):
 
     # ------------------------------------------------------------------
 
-    def _load_and_plot(self):
+    def _load_and_plot(self, force: bool = False):
         """
         Safe background fetch.
         Dialog owns the QThread.
         Worker does NOT own its thread.
         """
-        if self.live_mode and getattr(self, "_historical_loaded_once", False):
+        if self.live_mode and getattr(self, "_historical_loaded_once", False) and not force:
             return
 
         if self._is_loading:
@@ -1151,6 +1177,8 @@ class CVDSingleChartDialog(QDialog):
         self._plot_data(cvd_df, price_df, prev_close)
 
         self._historical_loaded_once = True
+        if self.live_mode:
+            self._last_live_refresh_minute = datetime.now().replace(second=0, microsecond=0)
 
     def _on_fetch_error(self, msg: str):
         """Called on the GUI thread when background fetch fails."""
@@ -1176,8 +1204,10 @@ class CVDSingleChartDialog(QDialog):
         self.prev_curve.clear()
         self.today_curve.clear()
         self.live_dot.clear()
+        self.today_tick_curve.clear()
         self.price_prev_curve.clear()
         self.price_today_curve.clear()
+        self.price_today_tick_curve.clear()
         self.price_live_dot.clear()
         self.price_atr_above_markers.clear()
         self.price_atr_below_markers.clear()
@@ -1204,6 +1234,8 @@ class CVDSingleChartDialog(QDialog):
 
         x_offset = 0
         sessions = sorted(cvd_df["session"].unique())
+        self._current_session_last_cvd_value = None
+        self._live_cvd_offset = None
 
         for i, sess in enumerate(sessions):
             df_cvd_sess = cvd_df[cvd_df["session"] == sess]
@@ -1244,6 +1276,7 @@ class CVDSingleChartDialog(QDialog):
             if is_current_session and not df_cvd_sess.empty:
                 self._current_session_start_ts = df_cvd_sess.index[0]
                 self._current_session_x_base = float(xs[0]) if xs else 0.0
+                self._current_session_last_cvd_value = float(cvd_y[-1]) if len(cvd_y) else None
 
             self.all_timestamps.extend(df_cvd_sess.index.tolist())
             self.all_cvd_data.extend(cvd_y.tolist())
@@ -1704,19 +1737,24 @@ class CVDSingleChartDialog(QDialog):
 
     def _refresh_if_live(self):
         """
-        In live mode, DO NOT refetch historical every 3 seconds.
-        Only live tick overlay updates via CVDEngine.
-        Historical reload happens only when:
-            - timeframe changes
-            - date changes
-            - focus mode changes
+        In live mode, refresh historical once per completed minute so base curves
+        stay in sync while tick overlays provide intraminute motion.
         """
         if not self.live_mode:
             return
 
-        # Nothing to do here.
-        # Live updates are driven by CVDEngine ticks.
-        return
+        if self._is_loading:
+            return
+
+        current_minute = datetime.now().replace(second=0, microsecond=0)
+        if self._last_live_refresh_minute is None:
+            self._last_live_refresh_minute = current_minute
+            return
+
+        if current_minute <= self._last_live_refresh_minute:
+            return
+
+        self._load_and_plot(force=True)
 
     def _fix_axis_after_show(self):
         bottom_axis = self.plot.getAxis("bottom")
@@ -1743,8 +1781,10 @@ class CVDSingleChartDialog(QDialog):
         self.prev_curve.clear()
         self.today_curve.clear()
         self.live_dot.clear()
+        self.today_tick_curve.clear()
         self.price_prev_curve.clear()
         self.price_today_curve.clear()
+        self.price_today_tick_curve.clear()
         self.price_live_dot.clear()
         self.price_atr_above_markers.clear()
         self.price_atr_below_markers.clear()
@@ -1757,8 +1797,12 @@ class CVDSingleChartDialog(QDialog):
         self.price_ema21_curve.clear()
         self.price_ema51_curve.clear()
         self.all_timestamps.clear()
+        self._live_tick_points.clear()
+        self._live_price_points.clear()
+        self._live_cvd_offset = None
+        self._current_session_last_cvd_value = None
         self._last_plot_x_indices = []
-        self._load_and_plot()
+        self._load_and_plot(force=True)
 
     def _time_to_session_index(self, ts: datetime) -> int:
         """
@@ -1774,6 +1818,7 @@ class CVDSingleChartDialog(QDialog):
         """Plot tick-level CVD overlay on top of minute candles."""
         if not self._live_tick_points:
             self.today_tick_curve.clear()
+            self.price_today_tick_curve.clear()
             return
 
         if self._current_session_start_ts is None:
@@ -1802,6 +1847,7 @@ class CVDSingleChartDialog(QDialog):
         ]
         if not points:
             self.today_tick_curve.clear()
+            self.price_today_tick_curve.clear()
             return
 
         if len(points) > self.LIVE_TICK_DOWNSAMPLE_TARGET:
@@ -1810,6 +1856,9 @@ class CVDSingleChartDialog(QDialog):
 
         x_vals: list[float] = []
         y_vals: list[float] = []
+        price_vals: list[float] = []
+        price_map = {ts: px for ts, px in self._live_price_points}
+
         for ts, cvd in points:
             tick_ts = _align_tick_ts(ts)
 
@@ -1823,8 +1872,17 @@ class CVDSingleChartDialog(QDialog):
 
             x_vals.append(x)
             y_vals.append(cvd)
+            price_vals.append(float(price_map.get(ts, np.nan)))
 
         self.today_tick_curve.setData(x_vals, y_vals)
+        if x_vals and y_vals:
+            self.live_dot.setData([x_vals[-1]], [y_vals[-1]])
+
+        if price_vals:
+            self.price_today_tick_curve.setData(x_vals, price_vals)
+            finite_idx = next((i for i in range(len(price_vals) - 1, -1, -1) if np.isfinite(price_vals[i])), None)
+            if finite_idx is not None:
+                self.price_live_dot.setData([x_vals[finite_idx]], [price_vals[finite_idx]])
 
     # ------------------------------------------------------------------
     def showEvent(self, event):

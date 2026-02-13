@@ -18,7 +18,7 @@ class CVDEngine(QObject):
     Emits signal whenever CVD changes.
     """
 
-    cvd_updated = Signal(int, float)  # instrument_token, cvd_value
+    cvd_updated = Signal(int, float, float)  # instrument_token, cvd_value, last_price
 
     def __init__(self):
         super().__init__()
@@ -87,7 +87,7 @@ class CVDEngine(QObject):
         if state.last_volume is None:
             state.last_price = price
             state.last_volume = volume if volume is not None else 0
-            self.cvd_updated.emit(token, state.cvd)
+            self.cvd_updated.emit(token, state.cvd, float(price))
             return
 
         # Calculate volume delta.
@@ -110,8 +110,6 @@ class CVDEngine(QObject):
             else:
                 state.cvd -= volume_delta
 
-            # Emit signal
-            self.cvd_updated.emit(token, state.cvd)
 
             # Throttled logging (every 2 seconds per token)
             current_time = datetime.now().timestamp()
@@ -127,6 +125,9 @@ class CVDEngine(QObject):
         state.last_price = price
         if volume is not None:
             state.last_volume = volume
+
+        # Emit latest point even when CVD is unchanged so price can update live.
+        self.cvd_updated.emit(token, state.cvd, float(price))
 
     def get_cvd(self, token: int) -> Optional[float]:
         """Get current CVD value for a token."""
