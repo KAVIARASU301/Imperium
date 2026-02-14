@@ -1,4 +1,5 @@
 import logging
+import re
 from collections import deque
 from contextlib import suppress
 from datetime import datetime, timedelta
@@ -8,7 +9,8 @@ import pandas as pd
 import pyqtgraph as pg
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QLabel, QHBoxLayout,
-    QPushButton, QWidget, QCheckBox, QSpinBox, QDoubleSpinBox, QComboBox
+    QPushButton, QWidget, QCheckBox, QSpinBox, QDoubleSpinBox, QComboBox,
+    QFormLayout, QGroupBox
 )
 from PySide6.QtCore import Qt, QTimer, Signal, QEvent, QObject, QThread
 from pyqtgraph import AxisItem, TextItem
@@ -265,7 +267,7 @@ class CVDSingleChartDialog(QDialog):
         self._last_emitted_signal_key: str | None = None
         self._last_emitted_closed_bar_ts: str | None = None
 
-        self.setWindowTitle(f"Auto Trader — {symbol}")
+        self.setWindowTitle(f"Auto Trader — {self._display_symbol_for_title(symbol)}")
         self.setMinimumSize(1100, 680)
         self.setWindowFlags(
             Qt.Window |
@@ -287,6 +289,13 @@ class CVDSingleChartDialog(QDialog):
         self._start_refresh_timer()
 
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _display_symbol_for_title(symbol: str) -> str:
+        """Hide FUT suffix/token from the window title while keeping internal symbol unchanged."""
+        display_symbol = re.sub(r"[-_ ]?FUT$", "", symbol, flags=re.IGNORECASE)
+        display_symbol = re.sub(r"\bFUT\b", "", display_symbol, flags=re.IGNORECASE)
+        return re.sub(r"\s{2,}", " ", display_symbol).strip() or symbol
 
     def _setup_ui(self):
         root = QVBoxLayout(self)
@@ -325,6 +334,40 @@ class CVDSingleChartDialog(QDialog):
             }
             QCheckBox::indicator:checked {
                 background: #5B9BD5;
+            }
+        """
+
+        compact_combo_style = """
+            QComboBox {
+                background: #1B1F2B;
+                color: #E0E0E0;
+                font-weight: 600;
+                font-size: 11px;
+                padding: 2px 8px;
+                border: 1px solid #3A4458;
+                border-radius: 4px;
+                min-height: 22px;
+            }
+            QComboBox:hover {
+                border: 1px solid #5B9BD5;
+            }
+            QComboBox::drop-down {
+                border: none;
+                width: 20px;
+            }
+            QComboBox::down-arrow {
+                image: none;
+                border-left: 4px solid transparent;
+                border-right: 4px solid transparent;
+                border-top: 5px solid #8A9BA8;
+                margin-right: 5px;
+            }
+            QComboBox QAbstractItemView {
+                background: #1B1F2B;
+                color: #E0E0E0;
+                selection-background-color: #5B9BD5;
+                selection-color: #000;
+                border: 1px solid #3A4458;
             }
         """
 
@@ -396,58 +439,46 @@ class CVDSingleChartDialog(QDialog):
         self.automate_toggle.setStyleSheet(compact_toggle_style)
         self.automate_toggle.toggled.connect(self._on_automation_settings_changed)
 
-        sl_top_label = QLabel("SL")
-        sl_top_label.setStyleSheet("color: #9CCAF4; font-size: 11px; font-weight: 600;")
-        top_bar.addWidget(sl_top_label)
-
         self.automation_stoploss_input = QSpinBox()
         self.automation_stoploss_input.setRange(1, 1000)
         self.automation_stoploss_input.setValue(50)
         self.automation_stoploss_input.setSingleStep(5)
-        self.automation_stoploss_input.setFixedWidth(58)
+        self.automation_stoploss_input.setFixedWidth(96)
         self.automation_stoploss_input.setStyleSheet(compact_spinbox_style)
         self.automation_stoploss_input.valueChanged.connect(self._on_automation_settings_changed)
-        top_bar.addWidget(self.automation_stoploss_input)
-
-        route_top_label = QLabel("Route")
-        route_top_label.setStyleSheet("color: #9CCAF4; font-size: 11px; font-weight: 600;")
-        top_bar.addWidget(route_top_label)
 
         self.automation_route_combo = QComboBox()
-        self.automation_route_combo.setFixedWidth(128)
-        self.automation_route_combo.setStyleSheet("""
-            QComboBox {
-                background: #1B1F2B;
-                color: #E0E0E0;
-                font-weight: 600;
-                font-size: 11px;
-                padding: 2px 8px;
-                border: 1px solid #3A4458;
-                border-radius: 4px;
-                min-height: 22px;
-            }
-            QComboBox:hover {
-                border: 1px solid #5B9BD5;
-            }
-            QComboBox::drop-down {
-                border: none;
-                width: 20px;
-            }
-            QComboBox::down-arrow {
-                image: none;
-                border-left: 4px solid transparent;
-                border-right: 4px solid transparent;
-                border-top: 5px solid #8A9BA8;
-                margin-right: 5px;
-            }
-        """)
+        self.automation_route_combo.setFixedWidth(180)
+        self.automation_route_combo.setStyleSheet(compact_combo_style)
         self.automation_route_combo.addItem("Buy Exit Panel", self.ROUTE_BUY_EXIT_PANEL)
         self.automation_route_combo.addItem("Direct", self.ROUTE_DIRECT)
         self.automation_route_combo.setCurrentIndex(0)
         self.automation_route_combo.currentIndexChanged.connect(self._on_automation_settings_changed)
-        top_bar.addWidget(self.automation_route_combo)
 
         top_bar.addWidget(self.automate_toggle)
+
+        self.setup_btn = QPushButton("Setup")
+        self.setup_btn.setFixedHeight(28)
+        self.setup_btn.setMinimumWidth(88)
+        self.setup_btn.setToolTip("Open automation and signal settings")
+        self.setup_btn.setStyleSheet("""
+            QPushButton {
+                background:#212635;
+                border:1px solid #3A4458;
+                border-radius:4px;
+                padding:4px 10px;
+                color: #9CCAF4;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                border: 1px solid #5B9BD5;
+            }
+            QPushButton:pressed {
+                background: #1B1F2B;
+            }
+        """)
+        self.setup_btn.clicked.connect(self._open_setup_dialog)
+        top_bar.addWidget(self.setup_btn)
 
         # Export button (compact)
         self.btn_export = QPushButton("📸")
@@ -481,54 +512,31 @@ class CVDSingleChartDialog(QDialog):
 
         ema_bar.addStretch()
 
-        # ATR Trend Reversal controls
-        atr_label = QLabel("ATR Rev:")
-        atr_label.setStyleSheet("color: #B0B0B0; font-weight: 600; font-size: 12px;")
-        ema_bar.addWidget(atr_label)
-
-        base_ema_label = QLabel("Base")
-        base_ema_label.setStyleSheet("color: #8A9BA8; font-size: 11px;")
-        ema_bar.addWidget(base_ema_label)
-
         self.atr_base_ema_input = QSpinBox()
         self.atr_base_ema_input.setRange(1, 500)
         self.atr_base_ema_input.setValue(51)
-        self.atr_base_ema_input.setFixedWidth(50)
+        self.atr_base_ema_input.setFixedWidth(96)
         self.atr_base_ema_input.setStyleSheet(compact_spinbox_style)
         self.atr_base_ema_input.valueChanged.connect(self._on_atr_settings_changed)
-        ema_bar.addWidget(self.atr_base_ema_input)
-
-        distance_label = QLabel("Dist")
-        distance_label.setStyleSheet("color: #8A9BA8; font-size: 11px;")
-        ema_bar.addWidget(distance_label)
 
         self.atr_distance_input = QDoubleSpinBox()
         self.atr_distance_input.setRange(0.1, 20.0)
         self.atr_distance_input.setDecimals(2)
         self.atr_distance_input.setSingleStep(0.1)
         self.atr_distance_input.setValue(3.01)
-        self.atr_distance_input.setFixedWidth(56)
+        self.atr_distance_input.setFixedWidth(96)
         self.atr_distance_input.setStyleSheet(compact_spinbox_style)
         self.atr_distance_input.valueChanged.connect(self._on_atr_settings_changed)
-        ema_bar.addWidget(self.atr_distance_input)
-
-        # CVD EMA Gap threshold (only applies to CVD reversal signals)
-        cvd_gap_label = QLabel("Gap >")
-        cvd_gap_label.setStyleSheet("color: #8A9BA8; font-size: 11px;")
-        cvd_gap_label.setToolTip(
-            "Minimum distance between CVD and its EMA to confirm signal validity.\nFilters out price-hugging conditions where CVD trends weakly.")
-        ema_bar.addWidget(cvd_gap_label)
 
         self.cvd_ema_gap_input = QSpinBox()
         self.cvd_ema_gap_input.setRange(0, 500000)
         self.cvd_ema_gap_input.setSingleStep(1000)
         self.cvd_ema_gap_input.setValue(3000)
-        self.cvd_ema_gap_input.setFixedWidth(66)
+        self.cvd_ema_gap_input.setFixedWidth(120)
         self.cvd_ema_gap_input.setStyleSheet(compact_spinbox_style)
         self.cvd_ema_gap_input.setToolTip(
             "Minimum distance between CVD and its EMA to confirm signal validity.\nFilters out price-hugging conditions where CVD trends weakly.")
         self.cvd_ema_gap_input.valueChanged.connect(self._on_atr_settings_changed)
-        ema_bar.addWidget(self.cvd_ema_gap_input)
 
         # EMA Label
         ema_label = QLabel("EMAs:")
@@ -579,39 +587,7 @@ class CVDSingleChartDialog(QDialog):
 
         self.signal_filter_combo = QComboBox()
         self.signal_filter_combo.setFixedWidth(160)
-        self.signal_filter_combo.setStyleSheet("""
-            QComboBox {
-                background: #1B1F2B;
-                color: #E0E0E0;
-                font-weight: 600;
-                font-size: 12px;
-                padding: 2px 8px;
-                border: 1px solid #3A4458;
-                border-radius: 3px;
-                min-height: 22px;
-            }
-            QComboBox:hover {
-                border: 1px solid #5B9BD5;
-            }
-            QComboBox::drop-down {
-                border: none;
-                width: 20px;
-            }
-            QComboBox::down-arrow {
-                image: none;
-                border-left: 4px solid transparent;
-                border-right: 4px solid transparent;
-                border-top: 5px solid #8A9BA8;
-                margin-right: 5px;
-            }
-            QComboBox QAbstractItemView {
-                background: #1B1F2B;
-                color: #E0E0E0;
-                selection-background-color: #5B9BD5;
-                selection-color: #000;
-                border: 1px solid #3A4458;
-            }
-        """)
+        self.signal_filter_combo.setStyleSheet(compact_combo_style)
         self.signal_filter_combo.addItem("All Signals", self.SIGNAL_FILTER_ALL)
         self.signal_filter_combo.addItem("ATR Reversal Only", self.SIGNAL_FILTER_ATR_ONLY)
         self.signal_filter_combo.addItem("EMA Cross Only", self.SIGNAL_FILTER_EMA_CROSS_ONLY)
@@ -619,46 +595,13 @@ class CVDSingleChartDialog(QDialog):
         self.signal_filter_combo.currentIndexChanged.connect(self._on_signal_filter_changed)
         ema_bar.addWidget(self.signal_filter_combo)
 
-        # ATR Marker Display Filter
         atr_marker_label = QLabel("ATR Markers")
         atr_marker_label.setStyleSheet("color: #8A9BA8; font-size: 11px;")
         ema_bar.addWidget(atr_marker_label)
 
         self.atr_marker_filter_combo = QComboBox()
-        self.atr_marker_filter_combo.setFixedWidth(136)
-        self.atr_marker_filter_combo.setStyleSheet("""
-            QComboBox {
-                background: #1B1F2B;
-                color: #E0E0E0;
-                font-weight: 600;
-                font-size: 12px;
-                padding: 2px 8px;
-                border: 1px solid #3A4458;
-                border-radius: 3px;
-                min-height: 22px;
-            }
-            QComboBox:hover {
-                border: 1px solid #5B9BD5;
-            }
-            QComboBox::drop-down {
-                border: none;
-                width: 20px;
-            }
-            QComboBox::down-arrow {
-                image: none;
-                border-left: 4px solid transparent;
-                border-right: 4px solid transparent;
-                border-top: 5px solid #8A9BA8;
-                margin-right: 5px;
-            }
-            QComboBox QAbstractItemView {
-                background: #1B1F2B;
-                color: #E0E0E0;
-                selection-background-color: #5B9BD5;
-                selection-color: #000;
-                border: 1px solid #3A4458;
-            }
-        """)
+        self.atr_marker_filter_combo.setFixedWidth(140)
+        self.atr_marker_filter_combo.setStyleSheet(compact_combo_style)
         self.atr_marker_filter_combo.addItem("Show All", self.ATR_MARKER_SHOW_ALL)
         self.atr_marker_filter_combo.addItem("Confluence Only", self.ATR_MARKER_CONFLUENCE_ONLY)
         self.atr_marker_filter_combo.addItem("Green Only", self.ATR_MARKER_GREEN_ONLY)
@@ -667,6 +610,8 @@ class CVDSingleChartDialog(QDialog):
         self.atr_marker_filter_combo.setCurrentIndex(1)
         self.atr_marker_filter_combo.currentIndexChanged.connect(self._on_atr_marker_filter_changed)
         ema_bar.addWidget(self.atr_marker_filter_combo)
+
+        self._build_setup_dialog(compact_combo_style)
 
         ema_bar.addWidget(self.btn_focus)
         ema_bar.addWidget(self.btn_export)
@@ -910,6 +855,90 @@ class CVDSingleChartDialog(QDialog):
                 Qt.QueuedConnection
             )
 
+    def _build_setup_dialog(self, compact_combo_style: str):
+        self.setup_dialog = QDialog(self)
+        self.setup_dialog.setWindowTitle("Auto Trader Setup")
+        self.setup_dialog.setModal(False)
+        self.setup_dialog.setMinimumWidth(420)
+        self.setup_dialog.setStyleSheet("""
+            QDialog {
+                background: #161A25;
+                color: #E0E0E0;
+            }
+            QGroupBox {
+                border: 1px solid #3A4458;
+                border-radius: 6px;
+                margin-top: 8px;
+                padding-top: 10px;
+                font-weight: 600;
+                color: #9CCAF4;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 6px;
+            }
+            QLabel {
+                color: #B0B0B0;
+                font-size: 11px;
+                font-weight: 600;
+            }
+        """)
+
+        layout = QVBoxLayout(self.setup_dialog)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
+
+        auto_group = QGroupBox("Automation")
+        auto_form = QFormLayout(auto_group)
+        auto_form.setLabelAlignment(Qt.AlignLeft)
+        auto_form.addRow("Stop Loss", self.automation_stoploss_input)
+        auto_form.addRow("Route", self.automation_route_combo)
+        layout.addWidget(auto_group)
+
+        signal_group = QGroupBox("ATR / Signal")
+        signal_form = QFormLayout(signal_group)
+        signal_form.setLabelAlignment(Qt.AlignLeft)
+        signal_form.addRow("ATR Base EMA", self.atr_base_ema_input)
+        signal_form.addRow("ATR Distance", self.atr_distance_input)
+        signal_form.addRow("CVD EMA Gap", self.cvd_ema_gap_input)
+
+        self.setup_signal_filter_combo = QComboBox()
+        self.setup_signal_filter_combo.setFixedWidth(220)
+        self.setup_signal_filter_combo.setStyleSheet(compact_combo_style)
+        self.setup_signal_filter_combo.addItem("All Signals", self.SIGNAL_FILTER_ALL)
+        self.setup_signal_filter_combo.addItem("ATR Reversal Only", self.SIGNAL_FILTER_ATR_ONLY)
+        self.setup_signal_filter_combo.addItem("EMA Cross Only", self.SIGNAL_FILTER_EMA_CROSS_ONLY)
+        self.setup_signal_filter_combo.addItem("ATR Divergence", self.SIGNAL_FILTER_OTHERS)
+        self.setup_signal_filter_combo.setCurrentIndex(self.signal_filter_combo.currentIndex())
+        self.setup_signal_filter_combo.currentIndexChanged.connect(self._on_setup_signal_filter_changed)
+        signal_form.addRow("Signal Filter", self.setup_signal_filter_combo)
+
+        self.setup_atr_marker_filter_combo = QComboBox()
+        self.setup_atr_marker_filter_combo.setFixedWidth(220)
+        self.setup_atr_marker_filter_combo.setStyleSheet(compact_combo_style)
+        self.setup_atr_marker_filter_combo.addItem("Show All", self.ATR_MARKER_SHOW_ALL)
+        self.setup_atr_marker_filter_combo.addItem("Confluence Only", self.ATR_MARKER_CONFLUENCE_ONLY)
+        self.setup_atr_marker_filter_combo.addItem("Green Only", self.ATR_MARKER_GREEN_ONLY)
+        self.setup_atr_marker_filter_combo.addItem("Red Only", self.ATR_MARKER_RED_ONLY)
+        self.setup_atr_marker_filter_combo.addItem("Hide All", self.ATR_MARKER_HIDE_ALL)
+        self.setup_atr_marker_filter_combo.setCurrentIndex(self.atr_marker_filter_combo.currentIndex())
+        self.setup_atr_marker_filter_combo.currentIndexChanged.connect(self._on_setup_atr_marker_filter_changed)
+        signal_form.addRow("ATR Markers", self.setup_atr_marker_filter_combo)
+        layout.addWidget(signal_group)
+
+        close_row = QHBoxLayout()
+        close_row.addStretch()
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.setup_dialog.hide)
+        close_row.addWidget(close_btn)
+        layout.addLayout(close_row)
+
+    def _open_setup_dialog(self):
+        self.setup_dialog.show()
+        self.setup_dialog.raise_()
+        self.setup_dialog.activateWindow()
+
     def _on_automation_settings_changed(self, *_):
         self.automation_state_signal.emit({
             "instrument_token": self.instrument_token,
@@ -921,11 +950,32 @@ class CVDSingleChartDialog(QDialog):
         })
 
     def _on_signal_filter_changed(self, *_):
+        if hasattr(self, "setup_signal_filter_combo"):
+            self.setup_signal_filter_combo.blockSignals(True)
+            self.setup_signal_filter_combo.setCurrentIndex(self.signal_filter_combo.currentIndex())
+            self.setup_signal_filter_combo.blockSignals(False)
+        self._update_atr_reversal_markers()
+        self._on_automation_settings_changed()
+
+    def _on_setup_signal_filter_changed(self, *_):
+        self.signal_filter_combo.blockSignals(True)
+        self.signal_filter_combo.setCurrentIndex(self.setup_signal_filter_combo.currentIndex())
+        self.signal_filter_combo.blockSignals(False)
         self._update_atr_reversal_markers()
         self._on_automation_settings_changed()
 
     def _on_atr_marker_filter_changed(self, *_):
         """Handle ATR marker display filter changes"""
+        if hasattr(self, "setup_atr_marker_filter_combo"):
+            self.setup_atr_marker_filter_combo.blockSignals(True)
+            self.setup_atr_marker_filter_combo.setCurrentIndex(self.atr_marker_filter_combo.currentIndex())
+            self.setup_atr_marker_filter_combo.blockSignals(False)
+        self._update_atr_reversal_markers()
+
+    def _on_setup_atr_marker_filter_changed(self, *_):
+        self.atr_marker_filter_combo.blockSignals(True)
+        self.atr_marker_filter_combo.setCurrentIndex(self.setup_atr_marker_filter_combo.currentIndex())
+        self.atr_marker_filter_combo.blockSignals(False)
         self._update_atr_reversal_markers()
 
     def _selected_signal_filter(self) -> str:
