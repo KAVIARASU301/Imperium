@@ -533,7 +533,7 @@ class PositionsTable(QWidget):
         label.setStyleSheet("""
             QLabel {
                 font-family: Segoe UI;
-                font-size: 12px;
+                font-size: 11px;
                 font-weight: 500;
                 color: #9CA3AF;
             }
@@ -542,7 +542,9 @@ class PositionsTable(QWidget):
         # ---- Wrapper widget (THIS IS THE KEY) ----
         container = QWidget()
         layout = QVBoxLayout(container)
-        layout.setContentsMargins(0, 2, 6, 0)  # top aligned visually
+        # Keep SL/TP text clear of row clipping with near-zero cell spacing.
+        layout.setContentsMargins(0, 0, 2, 0)
+        layout.setSpacing(0)
         layout.addWidget(label)
         layout.setAlignment(Qt.AlignTop | Qt.AlignRight)
 
@@ -597,7 +599,7 @@ class PositionsTable(QWidget):
         label.setStyleSheet("""
             QLabel {
                 font-family: Segoe UI;
-                font-size: 12px;
+                font-size: 11px;
                 font-weight: 500;
                 color: #9CA3AF;
             }
@@ -605,7 +607,9 @@ class PositionsTable(QWidget):
 
         container = QWidget()
         layout = QVBoxLayout(container)
-        layout.setContentsMargins(0, 2, 6, 0)
+        # Keep SL/TP text clear of row clipping with near-zero cell spacing.
+        layout.setContentsMargins(0, 0, 2, 0)
+        layout.setSpacing(0)
         layout.addWidget(label)
         layout.setAlignment(Qt.AlignTop | Qt.AlignRight)
 
