@@ -767,14 +767,14 @@ class ScalperMainWindow(QMainWindow):
             logger.warning("[AUTO] Invalid underlying close for %s, skipping entry.", contract.tradingsymbol)
             return
 
-            # All auto-trader exits now use underlying-based stop-loss points from UI.
-            # Additional exit triggers are strategy-specific and handled in
-            # _on_cvd_automation_market_state.
-            sl_underlying = (
-                entry_underlying - stoploss_points
-                if signal_side == "long"
-                else entry_underlying + stoploss_points
-            )
+        # All auto-trader exits now use underlying-based stop-loss points from UI.
+        # Additional exit triggers are strategy-specific and handled in
+        # _on_cvd_automation_market_state.
+        sl_underlying = (
+            entry_underlying - stoploss_points
+            if signal_side == "long"
+            else entry_underlying + stoploss_points
+        )
 
         order_params = {
             "contract": contract,
@@ -799,7 +799,9 @@ class ScalperMainWindow(QMainWindow):
             "last_ema10": state.get("ema10"),
             "last_ema51": state.get("ema51"),
             "last_cvd_close": state.get("cvd_close"),
-            "last_cvd_ema51": state.get("cvd_ema51"),        }
+            "last_cvd_ema10": state.get("cvd_ema10"),
+            "last_cvd_ema51": state.get("cvd_ema51"),
+        }
         self._execute_single_strike_order(order_params)
         logger.info(
             "[AUTO] Entered %s via %s | strategy=%s qty=%s underlying_sl=%s",
@@ -807,7 +809,6 @@ class ScalperMainWindow(QMainWindow):
             signal_side,
             strategy_type,
             quantity,
-            f"{sl_underlying:.2f}" if sl_underlying is not None else "N/A",
             f"{sl_underlying:.2f}" if sl_underlying is not None else "N/A",
         )
 
@@ -834,6 +835,7 @@ class ScalperMainWindow(QMainWindow):
 
         price_close = float(payload.get("price_close") or 0.0)
         ema10 = float(payload.get("ema10") or 0.0)
+        cvd_ema10 = float(payload.get("cvd_ema10") or 0.0)
         ema51 = float(payload.get("ema51") or 0.0)
         cvd_close = float(payload.get("cvd_close") or 0.0)
         cvd_ema51 = float(payload.get("cvd_ema51") or 0.0)
@@ -855,10 +857,12 @@ class ScalperMainWindow(QMainWindow):
         prev_ema10 = active_trade.get("last_ema10")
         prev_ema51 = active_trade.get("last_ema51")
         prev_cvd = active_trade.get("last_cvd_close")
+        prev_cvd_ema10 = active_trade.get("last_cvd_ema10")
         prev_cvd_ema51 = active_trade.get("last_cvd_ema51")
 
         has_price_ema51 = all(v is not None for v in (prev_price, prev_ema51)) and ema51 > 0
         has_price_ema10 = all(v is not None for v in (prev_price, prev_ema10)) and ema10 > 0
+        has_cvd_ema10 = all(v is not None for v in (prev_cvd, prev_cvd_ema10)) and cvd_ema10 != 0
         has_cvd_ema51 = all(v is not None for v in (prev_cvd, prev_cvd_ema51)) and cvd_ema51 != 0
 
         price_cross_above_ema51 = (
@@ -873,6 +877,12 @@ class ScalperMainWindow(QMainWindow):
         price_cross_below_ema10 = (
                 has_price_ema10 and prev_price >= prev_ema10 and price_close < ema10
         )
+        cvd_cross_above_ema10 = (
+                has_cvd_ema10 and prev_cvd <= prev_cvd_ema10 and cvd_close > cvd_ema10
+        )
+        cvd_cross_below_ema10 = (
+                has_cvd_ema10 and prev_cvd >= prev_cvd_ema10 and cvd_close < cvd_ema10
+        )
         cvd_cross_above_ema51 = (
                 has_cvd_ema51 and prev_cvd <= prev_cvd_ema51 and cvd_close > cvd_ema51
         )
@@ -885,9 +895,9 @@ class ScalperMainWindow(QMainWindow):
         if hit_stop:
             exit_reason = "AUTO_SL"
         elif strategy_type == "ema_cross":
-            if signal_side == "long" and price_cross_below_ema10:
+            if signal_side == "long" and cvd_cross_below_ema10:
                 exit_reason = "AUTO_EMA10_CROSS"
-            elif signal_side == "short" and price_cross_above_ema10:
+            elif signal_side == "short" and cvd_cross_above_ema10:
                 exit_reason = "AUTO_EMA10_CROSS"
         elif strategy_type == "atr_divergence":
             if signal_side == "long" and price_cross_above_ema51:
@@ -909,6 +919,7 @@ class ScalperMainWindow(QMainWindow):
         active_trade["last_ema10"] = ema10
         active_trade["last_ema51"] = ema51
         active_trade["last_cvd_close"] = cvd_close
+        active_trade["last_cvd_ema10"] = cvd_ema10
         active_trade["last_cvd_ema51"] = cvd_ema51
 
     def _is_cvd_auto_cutoff_reached(self) -> bool:

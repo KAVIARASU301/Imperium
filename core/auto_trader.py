@@ -1096,6 +1096,7 @@ class CVDSingleChartDialog(QDialog):
         cvd_data_array = np.array(self.all_cvd_data, dtype=float)
         ema10 = self._calculate_ema(price_data_array, 10)
         ema51 = self._calculate_ema(price_data_array, 51)
+        cvd_ema10 = self._calculate_ema(cvd_data_array, 10)
         cvd_ema51 = self._calculate_ema(cvd_data_array, 51)
         idx = self._latest_closed_bar_index()
         if idx is None:
@@ -1122,6 +1123,7 @@ class CVDSingleChartDialog(QDialog):
             "ema10": float(ema10[idx]),
             "ema51": float(ema51[idx]),
             "cvd_close": float(cvd_data_array[idx]),
+            "cvd_ema10": float(cvd_ema10[idx]),
             "cvd_ema51": float(cvd_ema51[idx]),
             "timestamp": ts_str,
         })
