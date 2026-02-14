@@ -44,7 +44,7 @@ from dialogs.strategy_builder_dialog import StrategyBuilderDialog
 from dialogs.order_confirmation_dialog import OrderConfirmationDialog
 from dialogs.market_monitor_dialog import MarketMonitorDialog
 from core.cvd.cvd_engine import CVDEngine
-from dialogs.cvd_single_chart_dialog import CVDSingleChartDialog
+from core.auto_trader import CVDSingleChartDialog
 from dialogs.cvd_multi_chart_dialog import CVDMultiChartDialog
 from core.cvd.cvd_symbol_sets import CVDSymbolSetManager
 from dialogs.cvd_symbol_set_multi_chart_dialog import CVDSetMultiChartDialog
