@@ -771,8 +771,37 @@ class CVDSingleChartDialog(QDialog):
                 self._live_cvd_offset = 0.0
 
         plotted_cvd = float(cvd_value) + float(self._live_cvd_offset)
-        self._live_tick_points.append((ts, plotted_cvd))
-        self._live_price_points.append((ts, float(last_price)))
+        current_price = float(last_price)
+
+        # 🔥 SMART TICK FILTERING - Only append if price/CVD changed meaningfully
+        # This prevents wick-like artifacts from back-and-forth movements
+        should_append = True
+
+        if self._live_tick_points:
+            # Get last recorded values
+            last_ts, last_cvd = self._live_tick_points[-1]
+            last_price_val = self._live_price_points[-1][1] if self._live_price_points else current_price
+
+            # Only append if:
+            # 1. Price changed (to avoid redundant points at same price level)
+            # 2. OR it's been more than 1 second (to ensure minimum sampling)
+            time_since_last = (ts - last_ts).total_seconds()
+            price_changed = abs(current_price - last_price_val) > 0.01
+            cvd_changed = abs(plotted_cvd - last_cvd) > 1.0
+
+            # Append only if there's actual movement or time gap
+            should_append = price_changed or cvd_changed or time_since_last > 1.0
+
+        if should_append:
+            self._live_tick_points.append((ts, plotted_cvd))
+            self._live_price_points.append((ts, current_price))
+        else:
+            # Update the last point in place (no new point, just update current value)
+            # This creates a "moving dot" effect rather than drawing lines
+            if self._live_tick_points:
+                self._live_tick_points[-1] = (ts, plotted_cvd)
+            if self._live_price_points:
+                self._live_price_points[-1] = (ts, current_price)
 
         # Trim stale points from previous sessions.
         today = ts.date()
@@ -1179,6 +1208,60 @@ class CVDSingleChartDialog(QDialog):
         self._historical_loaded_once = True
         if self.live_mode:
             self._last_live_refresh_minute = datetime.now().replace(second=0, microsecond=0)
+            # 🔥 Remove live ticks that are now covered by historical data
+            self._cleanup_overlapping_ticks()
+
+    def _cleanup_overlapping_ticks(self):
+        """
+        Remove live tick points that are now covered by historical minute data.
+        This prevents double-line rendering where live ticks overlap with historical candles.
+        """
+        if not self.all_timestamps or not self._live_tick_points:
+            return
+
+        # Get the last timestamp from historical data
+        last_historical_ts = self.all_timestamps[-1]
+
+        # Convert to pandas Timestamp and normalize timezone for comparison
+        cutoff_ts = pd.Timestamp(last_historical_ts)
+        if cutoff_ts.tz is not None:
+            cutoff_ts = cutoff_ts.tz_localize(None)  # Make timezone-naive
+
+        # Remove all tick points up to and including the last historical minute
+        # Keep only ticks that are AFTER the last historical candle
+
+        # Filter CVD tick points
+        while self._live_tick_points:
+            tick_ts, _ = self._live_tick_points[0]
+            # Normalize tick timestamp for comparison
+            tick_pd = pd.Timestamp(tick_ts)
+            if tick_pd.tz is not None:
+                tick_pd = tick_pd.tz_localize(None)
+
+            # If tick is before or in the same minute as historical data, remove it
+            if tick_pd.replace(second=0, microsecond=0) <= cutoff_ts.replace(second=0, microsecond=0):
+                self._live_tick_points.popleft()
+            else:
+                break
+
+        # Filter price tick points
+        while self._live_price_points:
+            tick_ts, _ = self._live_price_points[0]
+            # Normalize tick timestamp for comparison
+            tick_pd = pd.Timestamp(tick_ts)
+            if tick_pd.tz is not None:
+                tick_pd = tick_pd.tz_localize(None)
+
+            if tick_pd.replace(second=0, microsecond=0) <= cutoff_ts.replace(second=0, microsecond=0):
+                self._live_price_points.popleft()
+            else:
+                break
+
+        # 🔥 Reset offset so next tick aligns with updated historical data
+        # This ensures smooth continuation after historical refresh
+        self._live_cvd_offset = None
+
+    # ------------------------------------------------------------------
 
     def _on_fetch_error(self, msg: str):
         """Called on the GUI thread when background fetch fails."""
@@ -1865,7 +1948,7 @@ class CVDSingleChartDialog(QDialog):
             if focus_mode:
                 tick_dt = tick_ts.to_pydatetime()
                 x = self._time_to_session_index(tick_dt) + (tick_dt.second / 60.0) + (
-                            tick_dt.microsecond / 60_000_000.0)
+                        tick_dt.microsecond / 60_000_000.0)
             else:
                 minute_offset = (tick_ts - session_start_ts).total_seconds() / 60.0
                 x = self._current_session_x_base + minute_offset
@@ -1874,15 +1957,56 @@ class CVDSingleChartDialog(QDialog):
             y_vals.append(cvd)
             price_vals.append(float(price_map.get(ts, np.nan)))
 
-        self.today_tick_curve.setData(x_vals, y_vals)
-        if x_vals and y_vals:
-            self.live_dot.setData([x_vals[-1]], [y_vals[-1]])
+        # Convert to numpy arrays for consistent handling
+        x_arr = np.array(x_vals)
+        y_arr = np.array(y_vals)
+        price_arr = np.array(price_vals)
 
-        if price_vals:
-            self.price_today_tick_curve.setData(x_vals, price_vals)
-            finite_idx = next((i for i in range(len(price_vals) - 1, -1, -1) if np.isfinite(price_vals[i])), None)
-            if finite_idx is not None:
-                self.price_live_dot.setData([x_vals[finite_idx]], [price_vals[finite_idx]])
+        # Remove any NaN or invalid values to prevent vertical lines
+        valid_cvd_mask = np.isfinite(y_arr)
+        valid_price_mask = np.isfinite(price_arr)
+
+        # Detect large jumps in CVD that would create vertical lines
+        # This happens when offset changes or session restarts
+        if len(y_arr) > 1:
+            cvd_deltas = np.abs(np.diff(y_arr))
+            # If any jump is > 10x the median change, it's likely an offset issue
+            median_change = np.median(cvd_deltas[cvd_deltas > 0]) if np.any(cvd_deltas > 0) else 1
+            large_jump_threshold = max(median_change * 10, 10000)  # At least 10k or 10x median
+            large_jumps = cvd_deltas > large_jump_threshold
+
+            # Mark points after large jumps as invalid to break connection
+            if np.any(large_jumps):
+                jump_indices = np.where(large_jumps)[0] + 1  # +1 because diff is offset by 1
+                valid_cvd_mask[jump_indices] = False
+
+        # Plot CVD ticks - only connect finite values with consistent pen
+        if np.any(valid_cvd_mask):
+            # Ensure consistent rendering by setting pen explicitly
+            pen = pg.mkPen("#26A69A", width=1.4, cosmetic=True)
+            self.today_tick_curve.setPen(pen)
+            self.today_tick_curve.setData(
+                x_arr[valid_cvd_mask],
+                y_arr[valid_cvd_mask],
+                connect='finite'
+            )
+            # Update live dot with last valid CVD point
+            last_valid_idx = np.where(valid_cvd_mask)[0][-1]
+            self.live_dot.setData([x_arr[last_valid_idx]], [y_arr[last_valid_idx]])
+
+        # Plot price ticks - only connect finite values with consistent pen
+        if np.any(valid_price_mask):
+            # Ensure consistent rendering by setting pen explicitly
+            pen = pg.mkPen("#FFE57F", width=1.4, cosmetic=True)
+            self.price_today_tick_curve.setPen(pen)
+            self.price_today_tick_curve.setData(
+                x_arr[valid_price_mask],
+                price_arr[valid_price_mask],
+                connect='finite'
+            )
+            # Update live dot with last valid price point
+            last_valid_idx = np.where(valid_price_mask)[0][-1]
+            self.price_live_dot.setData([x_arr[last_valid_idx]], [price_arr[last_valid_idx]])
 
     # ------------------------------------------------------------------
     def showEvent(self, event):
