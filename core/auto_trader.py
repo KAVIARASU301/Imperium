@@ -16,7 +16,7 @@ from pyqtgraph import AxisItem, TextItem
 from kiteconnect import KiteConnect
 from core.cvd.cvd_historical import CVDHistoricalBuilder
 from core.cvd.cvd_mode import CVDMode
-
+from core.strategy_signal_detector import StrategySignalDetector
 logger = logging.getLogger(__name__)
 
 from datetime import time
@@ -232,6 +232,7 @@ class CVDSingleChartDialog(QDialog):
         self.symbol = symbol
         self.cvd_engine = cvd_engine
         self.timeframe_minutes = 1  # default = 1 minute
+        self.strategy_detector = StrategySignalDetector(timeframe_minutes=self.timeframe_minutes)
 
         self.live_mode = True
         self.current_date = None
@@ -1546,169 +1547,94 @@ class CVDSingleChartDialog(QDialog):
             cvd_below_ema51: np.ndarray,
             x_arr: np.ndarray,
     ):
-
         if not hasattr(self, "_confluence_line_map"):
             self._confluence_line_map = {}
 
-        # ----------------------------------------------------------
-        # Compute CVD cross (ONLY replacing price-cross trigger)
-        # ----------------------------------------------------------
-
+        # Calculate CVD EMAs and position masks
         cvd_data = np.array(self.all_cvd_data, dtype=float)
+        cvd_ema10 = self._calculate_ema(cvd_data, 10)
         cvd_ema51 = self._calculate_ema(cvd_data, 51)
 
-        cvd_prev = np.concatenate(([cvd_data[0]], cvd_data[:-1]))
-        cvd_ema_prev = np.concatenate(([cvd_ema51[0]], cvd_ema51[:-1]))
+        cvd_above_ema10 = cvd_data > cvd_ema10
+        cvd_below_ema10 = cvd_data < cvd_ema10
 
-        cvd_cross_above_raw = (cvd_prev <= cvd_ema_prev) & (cvd_data > cvd_ema51)
-        cvd_cross_below_raw = (cvd_prev >= cvd_ema_prev) & (cvd_data < cvd_ema51)
-        # ----------------------------------------------------------
-        # CVD Anti-Hug Filter
-        # ----------------------------------------------------------
-
-        gap = np.abs(cvd_data - cvd_ema51)
-
-        # Use your existing UI gap input as base
-        min_gap = self.cvd_ema_gap_input.value() * 0.5
-
-        cvd_cross_above_raw &= (gap > min_gap)
-        cvd_cross_below_raw &= (gap > min_gap)
-
-        # ----------------------------------------------------------
-        # Slope filter for EMA-cross entries (15m or 30m trend)
-        # - short cross: both price and CVD sloping down
-        # - long cross: both price and CVD sloping up
-        # ----------------------------------------------------------
-
+        # Calculate price EMAs
         price_data = np.array(self.all_price_data, dtype=float)
-        price_up_slope, price_down_slope = self._build_slope_direction_masks(price_data)
-        cvd_up_slope, cvd_down_slope = self._build_slope_direction_masks(cvd_data)
-
-        short_slope_ok = price_down_slope & cvd_down_slope
-        long_slope_ok = price_up_slope & cvd_up_slope
-
-        cvd_cross_above_filtered = cvd_cross_above_raw & long_slope_ok
-        cvd_cross_below_filtered = cvd_cross_below_raw & short_slope_ok
+        price_ema10 = self._calculate_ema(price_data, 10)
+        price_ema51 = self._calculate_ema(price_data, 51)
 
         # ----------------------------------------------------------
-        # CVD-only slope for ATR Divergence (Others)
-        # Divergence edge: Price and CVD NOT aligned, but CVD must be trending
+        # STRATEGY 1: ATR REVERSAL (Confluence of Price + CVD ATR signals)
         # ----------------------------------------------------------
-        cvd_short_slope_ok = cvd_down_slope  # CVD trending down for shorts
-        cvd_long_slope_ok = cvd_up_slope  # CVD trending up for longs
-
-        # ----------------------------------------------------------
-        # ORIGINAL STRUCTURE — only cross replaced
-        # ----------------------------------------------------------
-
-        short_to_51_mask = price_above_mask & cvd_above_mask
-
-        short_away_mask = (
-                (price_above_mask & (~cvd_above_mask) & cvd_below_ema51)
-                | (cvd_cross_below_raw & cvd_below_ema51)
-        )
-
-        long_to_51_mask = price_below_mask & cvd_below_mask
-
-        long_away_mask = (
-                (price_below_mask & (~cvd_below_mask) & cvd_above_ema51)
-                | (cvd_cross_above_raw & cvd_above_ema51)
-        )
-
-        short_mask = short_to_51_mask | short_away_mask
-        long_mask = long_to_51_mask | long_away_mask
-
-        # Trade qualification masks:
-        # keep ATR alignment behavior unchanged, apply slope filter only
-        # to EMA-cross derived branch.
-        short_away_mask_qualified = (
-                (price_above_mask & (~cvd_above_mask) & cvd_below_ema51)
-                | (cvd_cross_below_filtered & cvd_below_ema51)
-        )
-        long_away_mask_qualified = (
-                (price_below_mask & (~cvd_below_mask) & cvd_above_ema51)
-                | (cvd_cross_above_filtered & cvd_above_ema51)
-        )
-        short_mask_qualified = short_to_51_mask | short_away_mask_qualified
-        long_mask_qualified = long_to_51_mask | long_away_mask_qualified
-
-        ema_cross_short_mask = cvd_cross_below_raw & cvd_below_ema51
-        ema_cross_long_mask = cvd_cross_above_raw & cvd_above_ema51
-        ema_cross_short_mask_qualified = cvd_cross_below_filtered & cvd_below_ema51
-        ema_cross_long_mask_qualified = cvd_cross_above_filtered & cvd_above_ema51
-
-        # ----------------------------------------------------------
-        # Define distinct signal types
-        # ----------------------------------------------------------
-
-        # 1. ATR Reversal (to EMA51)
-        atr_reversal_short_mask = short_to_51_mask
-        atr_reversal_long_mask = long_to_51_mask
-
-        # 2. EMA Cross (pure, without ATR requirement)
-        ema_cross_short_mask = ema_cross_short_mask_qualified
-        ema_cross_long_mask = ema_cross_long_mask_qualified
-
-        # 3. ATR Divergence (ATR aligned, CVD diverging with slope, not crossing)
-        #    - Short: Price above ATR, CVD below EMA51, CVD trending down, no cross
-        #    - Long: Price below ATR, CVD above EMA51, CVD trending up, no cross
-        others_short_mask = (
-                price_above_mask &
-                (~cvd_above_mask) &
-                cvd_below_ema51 &
-                cvd_short_slope_ok &  # CVD must be trending down
-                (~ema_cross_short_mask_qualified)  # Not an EMA cross
-        )
-        others_long_mask = (
-                price_below_mask &
-                (~cvd_below_mask) &
-                cvd_above_ema51 &
-                cvd_long_slope_ok &  # CVD must be trending up
-                (~ema_cross_long_mask_qualified)  # Not an EMA cross
+        short_atr_reversal, long_atr_reversal = self.strategy_detector.detect_atr_reversal_strategy(
+            price_atr_above=price_above_mask,
+            price_atr_below=price_below_mask,
+            cvd_atr_above=cvd_above_mask,
+            cvd_atr_below=cvd_below_mask
         )
 
         # ----------------------------------------------------------
-        # Alignment safety
+        # STRATEGY 2: EMA & CVD CROSS
         # ----------------------------------------------------------
+        short_ema_cross, long_ema_cross = self.strategy_detector.detect_ema_cvd_cross_strategy(
+            price_data=price_data,
+            price_ema10=price_ema10,
+            price_ema51=price_ema51,
+            cvd_data=cvd_data,
+            cvd_ema10=cvd_ema10,
+            cvd_ema51=cvd_ema51,
+            cvd_ema_gap_threshold=self.cvd_ema_gap_input.value()
+        )
 
+        # ----------------------------------------------------------
+        # STRATEGY 3: ATR & CVD DIVERGENCE
+        # ----------------------------------------------------------
+        short_divergence, long_divergence = self.strategy_detector.detect_atr_cvd_divergence_strategy(
+            price_atr_above=price_above_mask,
+            price_atr_below=price_below_mask,
+            cvd_above_ema10=cvd_above_ema10,
+            cvd_below_ema10=cvd_below_ema10,
+            cvd_above_ema51=cvd_above_ema51,
+            cvd_below_ema51=cvd_below_ema51,
+            cvd_data=cvd_data,
+            ema_cross_short=short_ema_cross,
+            ema_cross_long=long_ema_cross
+        )
+
+        # ----------------------------------------------------------
+        # Combine signals based on selected filter
+        # ----------------------------------------------------------
+        signal_filter = self._selected_signal_filter()
+
+        if signal_filter == self.SIGNAL_FILTER_ATR_ONLY:
+            short_mask = short_atr_reversal
+            long_mask = long_atr_reversal
+            signal_label = "atr_reversal"
+
+        elif signal_filter == self.SIGNAL_FILTER_EMA_CROSS_ONLY:
+            short_mask = short_ema_cross
+            long_mask = long_ema_cross
+            signal_label = "ema_cvd_cross"
+
+        elif signal_filter == self.SIGNAL_FILTER_OTHERS:
+            short_mask = short_divergence
+            long_mask = long_divergence
+            signal_label = "atr_cvd_divergence"
+
+        else:  # SIGNAL_FILTER_ALL
+            short_mask = short_atr_reversal | short_ema_cross | short_divergence
+            long_mask = long_atr_reversal | long_ema_cross | long_divergence
+            signal_label = "all"
+
+        # Ensure array alignment
         length = min(len(x_arr), len(short_mask), len(long_mask))
         x_arr = x_arr[:length]
         short_mask = short_mask[:length]
         long_mask = long_mask[:length]
-        short_mask_qualified = short_mask_qualified[:length]
-        long_mask_qualified = long_mask_qualified[:length]
-        short_to_51_mask = short_to_51_mask[:length]
-        long_to_51_mask = long_to_51_mask[:length]
-        ema_cross_short_mask_qualified = ema_cross_short_mask_qualified[:length]
-        ema_cross_long_mask_qualified = ema_cross_long_mask_qualified[:length]
-        atr_reversal_short_mask = atr_reversal_short_mask[:length]
-        atr_reversal_long_mask = atr_reversal_long_mask[:length]
-        ema_cross_short_mask = ema_cross_short_mask[:length]
-        ema_cross_long_mask = ema_cross_long_mask[:length]
-        others_short_mask = others_short_mask[:length]
-        others_long_mask = others_long_mask[:length]
 
-        signal_filter = self._selected_signal_filter()
-        signal_label = "all"
-        if signal_filter == self.SIGNAL_FILTER_ATR_ONLY:
-            short_mask = atr_reversal_short_mask
-            long_mask = atr_reversal_long_mask
-            short_mask_qualified = atr_reversal_short_mask
-            long_mask_qualified = atr_reversal_long_mask
-            signal_label = "atr_reversal"
-        elif signal_filter == self.SIGNAL_FILTER_EMA_CROSS_ONLY:
-            short_mask = ema_cross_short_mask
-            long_mask = ema_cross_long_mask
-            short_mask_qualified = ema_cross_short_mask
-            long_mask_qualified = ema_cross_long_mask
-            signal_label = "ema_cross"
-        elif signal_filter == self.SIGNAL_FILTER_OTHERS:
-            short_mask = others_short_mask
-            long_mask = others_long_mask
-            short_mask_qualified = others_short_mask
-            long_mask_qualified = others_long_mask
-            signal_label = "atr_divergence"
-
+        # ----------------------------------------------------------
+        # Draw confluence lines
+        # ----------------------------------------------------------
         new_keys = set()
 
         def _add_line(key: str, x: float, color: str):
@@ -1736,14 +1662,16 @@ class CVDSingleChartDialog(QDialog):
             new_keys.add(key)
             _add_line(key, float(x_arr[idx]), "#00E676")
 
+        # Remove obsolete lines
         obsolete = set(self._confluence_line_map.keys()) - new_keys
         for key in obsolete:
             for plot, line in self._confluence_line_map[key]:
                 plot.removeItem(line)
             del self._confluence_line_map[key]
 
-        # ================= AUTOMATION =================
-
+        # ----------------------------------------------------------
+        # AUTOMATION signal emission (existing code)
+        # ----------------------------------------------------------
         if not self.automate_toggle.isChecked():
             return
 
@@ -1755,9 +1683,9 @@ class CVDSingleChartDialog(QDialog):
             return
 
         side = None
-        if short_mask_qualified[closed_idx]:
+        if short_mask[closed_idx]:
             side = "short"
-        elif long_mask_qualified[closed_idx]:
+        elif long_mask[closed_idx]:
             side = "long"
 
         if side is None:
@@ -1862,6 +1790,7 @@ class CVDSingleChartDialog(QDialog):
             return
 
         self.timeframe_minutes = minutes
+        self.strategy_detector.timeframe_minutes = minutes
 
         for m, btn in self.tf_buttons.items():
             btn.setChecked(m == minutes)
