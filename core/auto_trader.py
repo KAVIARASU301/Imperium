@@ -17,6 +17,7 @@ from kiteconnect import KiteConnect
 from core.cvd.cvd_historical import CVDHistoricalBuilder
 from core.cvd.cvd_mode import CVDMode
 from core.strategy_signal_detector import StrategySignalDetector
+
 logger = logging.getLogger(__name__)
 
 from datetime import time
@@ -216,6 +217,12 @@ class CVDSingleChartDialog(QDialog):
     SIGNAL_FILTER_EMA_CROSS_ONLY = "ema_cross_only"
     SIGNAL_FILTER_OTHERS = "others"
 
+    ATR_MARKER_SHOW_ALL = "show_all"
+    ATR_MARKER_CONFLUENCE_ONLY = "confluence_only"
+    ATR_MARKER_GREEN_ONLY = "green_only"
+    ATR_MARKER_RED_ONLY = "red_only"
+    ATR_MARKER_HIDE_ALL = "hide_all"
+
     def __init__(
             self,
             kite: KiteConnect,
@@ -255,7 +262,7 @@ class CVDSingleChartDialog(QDialog):
         self._last_emitted_signal_key: str | None = None
         self._last_emitted_closed_bar_ts: str | None = None
 
-        self.setWindowTitle(f"Price & Cumulative Volume Chart — {symbol}")
+        self.setWindowTitle(f"Auto Trader — {symbol}")
         self.setMinimumSize(1100, 680)
         self.setWindowFlags(
             Qt.Window |
@@ -326,7 +333,7 @@ class CVDSingleChartDialog(QDialog):
         top_bar.addWidget(self.navigator)
 
         # Focus Button (RIGHT of center)
-        self.btn_focus = QPushButton("🎯 Focus (1D)")
+        self.btn_focus = QPushButton("Single Day View")
         self.btn_focus.setCheckable(True)
         self.btn_focus.setFixedHeight(28)
         self.btn_focus.setMinimumWidth(120)
@@ -346,6 +353,53 @@ class CVDSingleChartDialog(QDialog):
         self.btn_focus.toggled.connect(self._on_focus_mode_changed)
 
         top_bar.addWidget(self.btn_focus)
+
+        # Automate Toggle (next to Single Day View)
+        self.automate_toggle = QCheckBox("Automate")
+        self.automate_toggle.setChecked(False)
+        self.automate_toggle.setStyleSheet("""
+            QCheckBox {
+                color: #7DD3FC;
+                font-weight: 600;
+                font-size: 12px;
+                spacing: 6px;
+            }
+            QCheckBox::indicator {
+                width: 16px;
+                height: 16px;
+                border: 2px solid #38BDF8;
+                border-radius: 3px;
+                background: #1B1F2B;
+            }
+            QCheckBox::indicator:checked {
+                background: #38BDF8;
+            }
+        """)
+        self.automate_toggle.toggled.connect(self._on_automation_settings_changed)
+        top_bar.addWidget(self.automate_toggle)
+
+        # Export button (compact)
+        self.btn_export = QPushButton("📸")
+        self.btn_export.setFixedSize(28, 28)
+        self.btn_export.setToolTip("Export current view as image")
+        self.btn_export.setStyleSheet("""
+            QPushButton {
+                background: #212635;
+                border: 1px solid #3A4458;
+                border-radius: 4px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background: #2A3142;
+                border: 1px solid #5B9BD5;
+            }
+            QPushButton:pressed {
+                background: #1B1F2B;
+            }
+        """)
+        self.btn_export.clicked.connect(self._export_chart_image)
+        top_bar.addWidget(self.btn_export)
+
         top_bar.addStretch()
 
         root.addLayout(top_bar)
@@ -358,24 +412,24 @@ class CVDSingleChartDialog(QDialog):
         ema_bar.addStretch()
 
         # ATR Trend Reversal controls
-        atr_label = QLabel("ATR Reversal:")
+        atr_label = QLabel("ATR Rev:")
         atr_label.setStyleSheet("color: #B0B0B0; font-weight: 600; font-size: 12px;")
         ema_bar.addWidget(atr_label)
 
-        base_ema_label = QLabel("Base EMA")
-        base_ema_label.setStyleSheet("color: #8A9BA8; font-size: 12px;")
+        base_ema_label = QLabel("Base")
+        base_ema_label.setStyleSheet("color: #8A9BA8; font-size: 11px;")
         ema_bar.addWidget(base_ema_label)
 
         self.atr_base_ema_input = QSpinBox()
         self.atr_base_ema_input.setRange(1, 500)
         self.atr_base_ema_input.setValue(51)
-        self.atr_base_ema_input.setFixedWidth(70)
+        self.atr_base_ema_input.setFixedWidth(55)
         self.atr_base_ema_input.setStyleSheet("QSpinBox { background:#1B1F2B; color:#E0E0E0; }")
         self.atr_base_ema_input.valueChanged.connect(self._on_atr_settings_changed)
         ema_bar.addWidget(self.atr_base_ema_input)
 
-        distance_label = QLabel("Distance")
-        distance_label.setStyleSheet("color: #8A9BA8; font-size: 12px;")
+        distance_label = QLabel("Dist")
+        distance_label.setStyleSheet("color: #8A9BA8; font-size: 11px;")
         ema_bar.addWidget(distance_label)
 
         self.atr_distance_input = QDoubleSpinBox()
@@ -383,22 +437,26 @@ class CVDSingleChartDialog(QDialog):
         self.atr_distance_input.setDecimals(2)
         self.atr_distance_input.setSingleStep(0.1)
         self.atr_distance_input.setValue(3.01)
-        self.atr_distance_input.setFixedWidth(80)
+        self.atr_distance_input.setFixedWidth(60)
         self.atr_distance_input.setStyleSheet("QDoubleSpinBox { background:#1B1F2B; color:#E0E0E0; }")
         self.atr_distance_input.valueChanged.connect(self._on_atr_settings_changed)
         ema_bar.addWidget(self.atr_distance_input)
 
         # CVD EMA Gap threshold (only applies to CVD reversal signals)
-        cvd_gap_label = QLabel("CVD Gap >")
-        cvd_gap_label.setStyleSheet("color: #8A9BA8; font-size: 12px;")
+        cvd_gap_label = QLabel("Gap >")
+        cvd_gap_label.setStyleSheet("color: #8A9BA8; font-size: 11px;")
+        cvd_gap_label.setToolTip(
+            "Minimum distance between CVD and its EMA to confirm signal validity.\nFilters out price-hugging conditions where CVD trends weakly.")
         ema_bar.addWidget(cvd_gap_label)
 
         self.cvd_ema_gap_input = QSpinBox()
         self.cvd_ema_gap_input.setRange(0, 500000)
         self.cvd_ema_gap_input.setSingleStep(1000)
         self.cvd_ema_gap_input.setValue(3000)
-        self.cvd_ema_gap_input.setFixedWidth(90)
+        self.cvd_ema_gap_input.setFixedWidth(70)
         self.cvd_ema_gap_input.setStyleSheet("QSpinBox { background:#1B1F2B; color:#26A69A; font-weight:600; }")
+        self.cvd_ema_gap_input.setToolTip(
+            "Minimum distance between CVD and its EMA to confirm signal validity.\nFilters out price-hugging conditions where CVD trends weakly.")
         self.cvd_ema_gap_input.valueChanged.connect(self._on_atr_settings_changed)
         ema_bar.addWidget(self.cvd_ema_gap_input)
 
@@ -445,52 +503,107 @@ class CVDSingleChartDialog(QDialog):
 
         ema_bar.addStretch()
 
-        self.automate_toggle = QCheckBox("🤖 Automate")
-        self.automate_toggle.setChecked(False)
-        self.automate_toggle.setStyleSheet("""
-            QCheckBox {
-                color: #7DD3FC;
-                font-weight: 600;
-                font-size: 12px;
-                spacing: 6px;
-            }
-            QCheckBox::indicator {
-                width: 16px;
-                height: 16px;
-                border: 2px solid #38BDF8;
-                border-radius: 3px;
-                background: #1B1F2B;
-            }
-            QCheckBox::indicator:checked {
-                background: #38BDF8;
-            }
-        """)
-        self.automate_toggle.toggled.connect(self._on_automation_settings_changed)
-        ema_bar.addWidget(self.automate_toggle)
-
-        signal_filter_label = QLabel("Signals")
-        signal_filter_label.setStyleSheet("color: #8A9BA8; font-size: 12px;")
+        signal_filter_label = QLabel("Filter")
+        signal_filter_label.setStyleSheet("color: #8A9BA8; font-size: 11px;")
         ema_bar.addWidget(signal_filter_label)
 
         self.signal_filter_combo = QComboBox()
-        self.signal_filter_combo.setFixedWidth(260)
-        self.signal_filter_combo.setStyleSheet("QComboBox { background:#1B1F2B; color:#E0E0E0; font-weight:600; }")
-        self.signal_filter_combo.addItem("All Trade Signals", self.SIGNAL_FILTER_ALL)
-        self.signal_filter_combo.addItem("Only ATR Reversal Signals", self.SIGNAL_FILTER_ATR_ONLY)
-        self.signal_filter_combo.addItem("Only EMA Cross Signals", self.SIGNAL_FILTER_EMA_CROSS_ONLY)
-        self.signal_filter_combo.addItem("ATR Divergence Signals", self.SIGNAL_FILTER_OTHERS)
+        self.signal_filter_combo.setFixedWidth(180)
+        self.signal_filter_combo.setStyleSheet("""
+            QComboBox {
+                background: #1B1F2B;
+                color: #E0E0E0;
+                font-weight: 600;
+                font-size: 12px;
+                padding: 4px 8px;
+                border: 1px solid #3A4458;
+                border-radius: 3px;
+            }
+            QComboBox:hover {
+                border: 1px solid #5B9BD5;
+            }
+            QComboBox::drop-down {
+                border: none;
+                width: 20px;
+            }
+            QComboBox::down-arrow {
+                image: none;
+                border-left: 4px solid transparent;
+                border-right: 4px solid transparent;
+                border-top: 5px solid #8A9BA8;
+                margin-right: 5px;
+            }
+            QComboBox QAbstractItemView {
+                background: #1B1F2B;
+                color: #E0E0E0;
+                selection-background-color: #5B9BD5;
+                selection-color: #000;
+                border: 1px solid #3A4458;
+            }
+        """)
+        self.signal_filter_combo.addItem("All Signals", self.SIGNAL_FILTER_ALL)
+        self.signal_filter_combo.addItem("ATR Reversal Only", self.SIGNAL_FILTER_ATR_ONLY)
+        self.signal_filter_combo.addItem("EMA Cross Only", self.SIGNAL_FILTER_EMA_CROSS_ONLY)
+        self.signal_filter_combo.addItem("ATR Divergence", self.SIGNAL_FILTER_OTHERS)
         self.signal_filter_combo.currentIndexChanged.connect(self._on_signal_filter_changed)
         ema_bar.addWidget(self.signal_filter_combo)
 
-        sl_points_label = QLabel("SL Pts")
-        sl_points_label.setStyleSheet("color: #8A9BA8; font-size: 12px;")
+        # ATR Marker Display Filter
+        atr_marker_label = QLabel("ATR Markers")
+        atr_marker_label.setStyleSheet("color: #8A9BA8; font-size: 11px;")
+        ema_bar.addWidget(atr_marker_label)
+
+        self.atr_marker_filter_combo = QComboBox()
+        self.atr_marker_filter_combo.setFixedWidth(150)
+        self.atr_marker_filter_combo.setStyleSheet("""
+            QComboBox {
+                background: #1B1F2B;
+                color: #E0E0E0;
+                font-weight: 600;
+                font-size: 12px;
+                padding: 4px 8px;
+                border: 1px solid #3A4458;
+                border-radius: 3px;
+            }
+            QComboBox:hover {
+                border: 1px solid #5B9BD5;
+            }
+            QComboBox::drop-down {
+                border: none;
+                width: 20px;
+            }
+            QComboBox::down-arrow {
+                image: none;
+                border-left: 4px solid transparent;
+                border-right: 4px solid transparent;
+                border-top: 5px solid #8A9BA8;
+                margin-right: 5px;
+            }
+            QComboBox QAbstractItemView {
+                background: #1B1F2B;
+                color: #E0E0E0;
+                selection-background-color: #5B9BD5;
+                selection-color: #000;
+                border: 1px solid #3A4458;
+            }
+        """)
+        self.atr_marker_filter_combo.addItem("Show All", self.ATR_MARKER_SHOW_ALL)
+        self.atr_marker_filter_combo.addItem("Confluence Only", self.ATR_MARKER_CONFLUENCE_ONLY)
+        self.atr_marker_filter_combo.addItem("Green Only", self.ATR_MARKER_GREEN_ONLY)
+        self.atr_marker_filter_combo.addItem("Red Only", self.ATR_MARKER_RED_ONLY)
+        self.atr_marker_filter_combo.addItem("Hide All", self.ATR_MARKER_HIDE_ALL)
+        self.atr_marker_filter_combo.currentIndexChanged.connect(self._on_atr_marker_filter_changed)
+        ema_bar.addWidget(self.atr_marker_filter_combo)
+
+        sl_points_label = QLabel("SL")
+        sl_points_label.setStyleSheet("color: #8A9BA8; font-size: 11px;")
         ema_bar.addWidget(sl_points_label)
 
         self.automation_stoploss_input = QSpinBox()
         self.automation_stoploss_input.setRange(1, 1000)
         self.automation_stoploss_input.setValue(50)
         self.automation_stoploss_input.setSingleStep(5)
-        self.automation_stoploss_input.setFixedWidth(70)
+        self.automation_stoploss_input.setFixedWidth(55)
         self.automation_stoploss_input.setStyleSheet("QSpinBox { background:#1B1F2B; color:#FCA5A5; font-weight:600; }")
         self.automation_stoploss_input.valueChanged.connect(self._on_automation_settings_changed)
         ema_bar.addWidget(self.automation_stoploss_input)
@@ -542,13 +655,13 @@ class CVDSingleChartDialog(QDialog):
         # ATR Trend Reversal markers
         self.price_atr_above_markers = pg.ScatterPlotItem(
             size=9,
-            symbol="t1",
+            symbol="t",
             brush=pg.mkBrush("#FF4444"),
             pen=pg.mkPen("#FFFFFF", width=0.8),
         )
         self.price_atr_below_markers = pg.ScatterPlotItem(
             size=9,
-            symbol="t",
+            symbol="t1",
             brush=pg.mkBrush("#00E676"),
             pen=pg.mkPen("#FFFFFF", width=0.8),
         )
@@ -651,13 +764,13 @@ class CVDSingleChartDialog(QDialog):
         # ATR Trend Reversal markers (CVD chart)
         self.cvd_atr_above_markers = pg.ScatterPlotItem(
             size=9,
-            symbol="t1",
+            symbol="t",
             brush=pg.mkBrush("#FF4444"),
             pen=pg.mkPen("#FFFFFF", width=0.8),
         )
         self.cvd_atr_below_markers = pg.ScatterPlotItem(
             size=9,
-            symbol="t",
+            symbol="t1",
             brush=pg.mkBrush("#00E676"),
             pen=pg.mkPen("#FFFFFF", width=0.8),
         )
@@ -747,6 +860,10 @@ class CVDSingleChartDialog(QDialog):
     def _on_signal_filter_changed(self, *_):
         self._update_atr_reversal_markers()
         self._on_automation_settings_changed()
+
+    def _on_atr_marker_filter_changed(self, *_):
+        """Handle ATR marker display filter changes"""
+        self._update_atr_reversal_markers()
 
     def _selected_signal_filter(self) -> str:
         return self.signal_filter_combo.currentData() or self.SIGNAL_FILTER_ALL
@@ -851,7 +968,7 @@ class CVDSingleChartDialog(QDialog):
             self.cvd_legend.addItem(self.cvd_ema51_curve, "EMA 51")
 
     def _on_focus_mode_changed(self, enabled: bool):
-        self.btn_focus.setText("🎯 FOCUS ON" if enabled else "Focus (1D)")
+        self.btn_focus.setText("Single Day View" if enabled else "Two Day View")
         if self.cvd_engine:
             if enabled:
                 self.cvd_engine.set_mode(CVDMode.SINGLE_DAY)
@@ -1070,6 +1187,52 @@ class CVDSingleChartDialog(QDialog):
                 x_arr[below_mask_c],
                 cvd_low[below_mask_c] - atr_offset_c[below_mask_c],
             )
+
+        # ── Apply ATR Marker Display Filter ──────────────────────────────
+        marker_filter = self.atr_marker_filter_combo.currentData()
+
+        if marker_filter == self.ATR_MARKER_HIDE_ALL:
+            # Hide all markers
+            self.price_atr_above_markers.clear()
+            self.price_atr_below_markers.clear()
+            self.cvd_atr_above_markers.clear()
+            self.cvd_atr_below_markers.clear()
+        elif marker_filter == self.ATR_MARKER_GREEN_ONLY:
+            # Show only green (below) markers
+            self.price_atr_above_markers.clear()
+            self.cvd_atr_above_markers.clear()
+        elif marker_filter == self.ATR_MARKER_RED_ONLY:
+            # Show only red (above) markers
+            self.price_atr_below_markers.clear()
+            self.cvd_atr_below_markers.clear()
+        elif marker_filter == self.ATR_MARKER_CONFLUENCE_ONLY and has_price and has_cvd:
+            # Show only markers where both price and CVD have signals at same bar
+            if len(above_mask) == len(above_mask_c) == len(x_arr):
+                confluence_above = above_mask & above_mask_c
+                confluence_below = below_mask & below_mask_c
+
+                if has_price:
+                    atr_offset = np.nan_to_num(atr_values, nan=0.0) * 0.15
+                    self.price_atr_above_markers.setData(
+                        x_arr[confluence_above],
+                        high_data_array[confluence_above] + atr_offset[confluence_above],
+                    )
+                    self.price_atr_below_markers.setData(
+                        x_arr[confluence_below],
+                        low_data_array[confluence_below] - atr_offset[confluence_below],
+                    )
+
+                if has_cvd:
+                    atr_offset_c = np.nan_to_num(atr_cvd, nan=0.0) * 0.15
+                    self.cvd_atr_above_markers.setData(
+                        x_arr[confluence_above],
+                        cvd_high[confluence_above] + atr_offset_c[confluence_above],
+                    )
+                    self.cvd_atr_below_markers.setData(
+                        x_arr[confluence_below],
+                        cvd_low[confluence_below] - atr_offset_c[confluence_below],
+                    )
+        # else: ATR_MARKER_SHOW_ALL - markers already set above, do nothing
 
         # ── Confluence: price reversal + CVD confirmation ─────────────────
         if has_price and has_cvd:
@@ -1413,13 +1576,25 @@ class CVDSingleChartDialog(QDialog):
                     labels.append("")
             return labels
 
+        def two_day_time_formatter(values, *_):
+            """Maps sequential indices to actual timestamps for two-day view"""
+            labels = []
+            for v in values:
+                idx = int(v)
+                if 0 <= idx < len(self.all_timestamps):
+                    ts = self.all_timestamps[idx]
+                    labels.append(ts.strftime("%H:%M"))
+                else:
+                    labels.append("")
+            return labels
+
         if focus_mode:
             self.axis.tickStrings = time_formatter
             self.price_axis.tickStrings = time_formatter
         else:
-            # Restore default numeric axis behavior
-            self.axis.tickStrings = self.axis.__class__.tickStrings.__get__(self.axis, AxisItem)
-            self.price_axis.tickStrings = self.price_axis.__class__.tickStrings.__get__(self.price_axis, AxisItem)
+            # Use timestamp-based formatter for two-day view
+            self.axis.tickStrings = two_day_time_formatter
+            self.price_axis.tickStrings = two_day_time_formatter
 
         # 🔥 PLOT INSTITUTIONAL EMAS
         if len(self.all_cvd_data) > 0:
@@ -1677,6 +1852,12 @@ class CVDSingleChartDialog(QDialog):
 
         closed_idx = self._latest_closed_bar_index()
         if closed_idx is None or closed_idx >= length:
+            return
+
+        # Time filter: skip first 5 minutes (9:15-9:20) and last 30 minutes (15:00 onwards)
+        bar_ts = self.all_timestamps[closed_idx]
+        bar_time = bar_ts.time()
+        if bar_time < time(9, 20) or bar_time >= time(15, 0):
             return
 
         if self._is_chop_regime(closed_idx):
@@ -2034,6 +2215,42 @@ class CVDSingleChartDialog(QDialog):
                 low_adx
                 or (hugging and flat and adx[idx] < 22)
         )
+
+    def _export_chart_image(self):
+        """Export current chart view as PNG image"""
+        from PySide6.QtWidgets import QFileDialog
+        from PySide6.QtGui import QPixmap
+        from PySide6.QtCore import QPoint
+        from datetime import datetime
+
+        # Generate default filename with timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        default_filename = f"chart_{self.symbol}_{timestamp}.png"
+
+        # Open save dialog
+        filepath, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Chart Image",
+            default_filename,
+            "PNG Images (*.png);;All Files (*)"
+        )
+
+        if not filepath:
+            return
+
+        # Ensure .png extension
+        if not filepath.lower().endswith('.png'):
+            filepath += '.png'
+
+        try:
+            # Grab the widget as a pixmap
+            pixmap = self.grab()
+
+            # Save the image
+            pixmap.save(filepath, "PNG")
+            logger.info(f"Chart exported successfully to: {filepath}")
+        except Exception as e:
+            logger.error(f"Failed to export chart: {e}")
 
     def changeEvent(self, event):
         # Intentionally NOT stopping/starting the refresh_timer on activation changes.

@@ -631,11 +631,11 @@ class ScalperMainWindow(QMainWindow):
         QTimer.singleShot(1000, self._log_active_subscriptions)
 
     def _open_cvd_chart_after_subscription(
-        self,
-        cvd_token: int,
-        symbol: str,
-        suffix: str = "",
-        link_to_header: bool = False
+            self,
+            cvd_token: int,
+            symbol: str,
+            suffix: str = "",
+            link_to_header: bool = False
     ):
         """Helper to open CVD chart after subscription is confirmed."""
         try:
@@ -728,20 +728,46 @@ class ScalperMainWindow(QMainWindow):
         active_trade = self._cvd_automation_positions.get(token)
         if active_trade:
             active_side = active_trade.get("signal_side")
-            if active_side == signal_side:
-                return
+            last_signal_time = active_trade.get("signal_timestamp")
 
-            active_symbol = active_trade.get("tradingsymbol")
-            active_position = self.position_manager.get_position(active_symbol) if active_symbol else None
-            if active_position:
-                logger.info(
-                    "[AUTO] Opposite signal detected for token=%s (%s -> %s). Reversing position.",
-                    token,
-                    active_side,
-                    signal_side,
-                )
-                self._exit_position_automated(active_position, reason="AUTO_REVERSE")
-            self._cvd_automation_positions.pop(token, None)
+            # Parse signal timestamp
+            if last_signal_time:
+                try:
+                    last_time = datetime.fromisoformat(last_signal_time)
+                    current_time = datetime.fromisoformat(payload.get("timestamp"))
+                    time_diff_minutes = (current_time - last_time).total_seconds() / 60
+                except (ValueError, TypeError):
+                    time_diff_minutes = 0
+            else:
+                time_diff_minutes = 0
+
+            # Same direction trade
+            if active_side == signal_side:
+                # Allow stacking if 15+ minutes have passed
+                if time_diff_minutes < 15:
+                    logger.info(
+                        "[AUTO] Skipping same-side signal (%.1f mins since last). Need 15+ mins for stacking.",
+                        time_diff_minutes
+                    )
+                    return
+                else:
+                    logger.info(
+                        "[AUTO] Allowing stacking: same side after %.1f mins (15+ allowed)",
+                        time_diff_minutes
+                    )
+            # Opposite direction trade - always reverse
+            else:
+                active_symbol = active_trade.get("tradingsymbol")
+                active_position = self.position_manager.get_position(active_symbol) if active_symbol else None
+                if active_position:
+                    logger.info(
+                        "[AUTO] Opposite signal detected for token=%s (%s -> %s). Reversing position.",
+                        token,
+                        active_side,
+                        signal_side,
+                    )
+                    self._exit_position_automated(active_position, reason="AUTO_REVERSE")
+                self._cvd_automation_positions.pop(token, None)
 
         contract = self._get_atm_contract_for_signal(signal_side)
         if not contract:
@@ -792,6 +818,7 @@ class ScalperMainWindow(QMainWindow):
         self._cvd_automation_positions[token] = {
             "tradingsymbol": contract.tradingsymbol,
             "signal_side": signal_side,
+            "signal_timestamp": payload.get("timestamp"),  # Track when signal was generated
             "strategy_type": strategy_type,
             "stoploss_points": stoploss_points,
             "sl_underlying": sl_underlying,
@@ -977,7 +1004,6 @@ class ScalperMainWindow(QMainWindow):
         except Exception as e:
             logger.error("[AUTO] Failed automated exit for %s: %s", position.tradingsymbol, e, exc_info=True)
 
-
     def _update_cvd_chart_symbol(self, symbol: str, cvd_token: int, suffix: str = ""):
         """Update menu-opened (header-linked) CVD single chart dialog with new symbol."""
         if self.header_linked_cvd_token is None:
@@ -998,12 +1024,12 @@ class ScalperMainWindow(QMainWindow):
         self.header_linked_cvd_token = cvd_token
 
     def _retarget_cvd_dialog(
-        self,
-        dialog: CVDSingleChartDialog,
-        old_token: int,
-        new_token: int,
-        symbol: str,
-        suffix: str = ""
+            self,
+            dialog: CVDSingleChartDialog,
+            old_token: int,
+            new_token: int,
+            symbol: str,
+            suffix: str = ""
     ):
         """Retarget an existing CVD dialog from one token/symbol to another."""
         if old_token == new_token:
@@ -2472,10 +2498,10 @@ class ScalperMainWindow(QMainWindow):
             # Use QTimer.singleShot to do the confirmation check asynchronously instead.
             if not isinstance(self.trader, PaperTradingManager):
                 QTimer.singleShot(500, lambda oid=order_id, c=contract_to_trade, qty=quantity,
-                                          p=price, tt=transaction_type, prod=product,
-                                          sl=stop_loss_price, tp=target_price,
-                                          tsl=trailing_stop_loss, gn=group_name:
-                    self._confirm_and_finalize_order(oid, c, qty, p, tt, prod, sl, tp, tsl, gn))
+                                              p=price, tt=transaction_type, prod=product,
+                                              sl=stop_loss_price, tp=target_price,
+                                              tsl=trailing_stop_loss, gn=group_name:
+                self._confirm_and_finalize_order(oid, c, qty, p, tt, prod, sl, tp, tsl, gn))
                 return
 
         except Exception as e:
@@ -2486,9 +2512,9 @@ class ScalperMainWindow(QMainWindow):
             self._show_order_results([], [{'symbol': contract_to_trade.tradingsymbol, 'error': str(e)}])
 
     def _confirm_and_finalize_order(
-        self, order_id, contract_to_trade, quantity, price,
-        transaction_type, product, stop_loss_price, target_price,
-        trailing_stop_loss, group_name
+            self, order_id, contract_to_trade, quantity, price,
+            transaction_type, product, stop_loss_price, target_price,
+            trailing_stop_loss, group_name
     ):
         """
         Async callback (called via QTimer.singleShot) that replaces the old
@@ -3517,7 +3543,7 @@ class ScalperMainWindow(QMainWindow):
                     self._update_market_subscriptions()
 
                     if hasattr(self.market_data_worker, 'subscribed_tokens') and (
-                        cvd_token not in self.market_data_worker.subscribed_tokens
+                            cvd_token not in self.market_data_worker.subscribed_tokens
                     ):
                         QMessageBox.warning(
                             self,
