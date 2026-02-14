@@ -753,9 +753,13 @@ class ScalperMainWindow(QMainWindow):
         stoploss_points = float(payload.get("stoploss_points") or state.get("stoploss_points") or 50.0)
         entry_price = float(contract.ltp or 0.0)
         entry_underlying = float(payload.get("price_close") or state.get("price_close") or 0.0)
-        trade_tag = payload.get("trade_tag")
-        if trade_tag not in {"to_51_ema", "away_from_51_ema"}:
-            trade_tag = "to_51_ema"
+        signal_type = payload.get("signal_type") or state.get("signal_filter")
+        if signal_type == "ema_cross":
+            strategy_type = "ema_cross"
+        elif signal_type == "atr_divergence":
+            strategy_type = "atr_divergence"
+        else:
+            strategy_type = "atr_reversal"
         if entry_price <= 0:
             logger.warning("[AUTO] Invalid LTP for %s, skipping entry.", contract.tradingsymbol)
             return
@@ -763,29 +767,14 @@ class ScalperMainWindow(QMainWindow):
             logger.warning("[AUTO] Invalid underlying close for %s, skipping entry.", contract.tradingsymbol)
             return
 
-        # Strategy controls:
-        # - to_51_ema: underlying-based SL and EMA51 close-cross exit
-        # - away_from_51_ema: option-premium fixed SL/target (₹1000/lot, ₹1500/lot)
-        sl_underlying = None
-        target_underlying = None
-        if trade_tag == "to_51_ema":
+            # All auto-trader exits now use underlying-based stop-loss points from UI.
+            # Additional exit triggers are strategy-specific and handled in
+            # _on_cvd_automation_market_state.
             sl_underlying = (
                 entry_underlying - stoploss_points
                 if signal_side == "long"
                 else entry_underlying + stoploss_points
             )
-
-        # EMA-cross (away-from-51) uses fixed rupee risk/reward per lot on option premium.
-        # 1000/lot SL and 1500/lot target are converted to per-unit premium deltas.
-        option_stop_loss_price = None
-        option_target_price = None
-        if trade_tag == "away_from_51_ema":
-            total_sl_amount = 1000.0 * lots
-            total_target_amount = 1500.0 * lots
-            sl_per_unit = total_sl_amount / quantity
-            target_per_unit = total_target_amount / quantity
-            option_stop_loss_price = max(0.05, entry_price - sl_per_unit)
-            option_target_price = entry_price + target_per_unit
 
         order_params = {
             "contract": contract,
@@ -793,8 +782,8 @@ class ScalperMainWindow(QMainWindow):
             "order_type": self.trader.ORDER_TYPE_MARKET,
             "product": self.settings.get('default_product', self.trader.PRODUCT_MIS),
             "transaction_type": self.trader.TRANSACTION_TYPE_BUY,
-            "stop_loss_price": option_stop_loss_price,
-            "target_price": option_target_price,
+            "stop_loss_price": None,
+            "target_price": None,
             "group_name": f"CVD_AUTO_{token}",
         }
 
@@ -803,20 +792,23 @@ class ScalperMainWindow(QMainWindow):
         self._cvd_automation_positions[token] = {
             "tradingsymbol": contract.tradingsymbol,
             "signal_side": signal_side,
-            "trade_tag": trade_tag,
+            "strategy_type": strategy_type,
             "stoploss_points": stoploss_points,
             "sl_underlying": sl_underlying,
-            "target_underlying": target_underlying,
-        }
+            "last_price_close": entry_underlying,
+            "last_ema10": state.get("ema10"),
+            "last_ema51": state.get("ema51"),
+            "last_cvd_close": state.get("cvd_close"),
+            "last_cvd_ema51": state.get("cvd_ema51"),        }
         self._execute_single_strike_order(order_params)
         logger.info(
-            "[AUTO] Entered %s via %s | tag=%s qty=%s underlying_sl=%s underlying_target=%s",
+            "[AUTO] Entered %s via %s | strategy=%s qty=%s underlying_sl=%s",
             contract.tradingsymbol,
             signal_side,
-            trade_tag,
+            strategy_type,
             quantity,
             f"{sl_underlying:.2f}" if sl_underlying is not None else "N/A",
-            f"{target_underlying:.2f}" if target_underlying else "N/A",
+            f"{sl_underlying:.2f}" if sl_underlying is not None else "N/A",
         )
 
     def _on_cvd_automation_market_state(self, payload: dict):
@@ -841,15 +833,17 @@ class ScalperMainWindow(QMainWindow):
             return
 
         price_close = float(payload.get("price_close") or 0.0)
+        ema10 = float(payload.get("ema10") or 0.0)
         ema51 = float(payload.get("ema51") or 0.0)
+        cvd_close = float(payload.get("cvd_close") or 0.0)
+        cvd_ema51 = float(payload.get("cvd_ema51") or 0.0)
         if price_close <= 0:
             return
 
         signal_side = active_trade.get("signal_side")
+        strategy_type = active_trade.get("strategy_type") or "atr_reversal"
         sl_underlying = active_trade.get("sl_underlying")
-        target_underlying = active_trade.get("target_underlying")
         hit_stop = False
-        hit_target = False
 
         if sl_underlying is not None:
             if signal_side == "long":
@@ -857,29 +851,65 @@ class ScalperMainWindow(QMainWindow):
             else:
                 hit_stop = price_close >= float(sl_underlying)
 
-        if target_underlying is not None:
-            if signal_side == "long":
-                hit_target = price_close >= float(target_underlying)
-            else:
-                hit_target = price_close <= float(target_underlying)
+        prev_price = active_trade.get("last_price_close")
+        prev_ema10 = active_trade.get("last_ema10")
+        prev_ema51 = active_trade.get("last_ema51")
+        prev_cvd = active_trade.get("last_cvd_close")
+        prev_cvd_ema51 = active_trade.get("last_cvd_ema51")
 
-        trade_tag = active_trade.get("trade_tag")
-        cross_ema51_exit = False
-        if trade_tag == "to_51_ema" and ema51 > 0:
-            if signal_side == "long":
-                cross_ema51_exit = price_close >= ema51
-            else:
-                cross_ema51_exit = price_close <= ema51
+        has_price_ema51 = all(v is not None for v in (prev_price, prev_ema51)) and ema51 > 0
+        has_price_ema10 = all(v is not None for v in (prev_price, prev_ema10)) and ema10 > 0
+        has_cvd_ema51 = all(v is not None for v in (prev_cvd, prev_cvd_ema51)) and cvd_ema51 != 0
+
+        price_cross_above_ema51 = (
+                has_price_ema51 and prev_price <= prev_ema51 and price_close > ema51
+        )
+        price_cross_below_ema51 = (
+                has_price_ema51 and prev_price >= prev_ema51 and price_close < ema51
+        )
+        price_cross_above_ema10 = (
+                has_price_ema10 and prev_price <= prev_ema10 and price_close > ema10
+        )
+        price_cross_below_ema10 = (
+                has_price_ema10 and prev_price >= prev_ema10 and price_close < ema10
+        )
+        cvd_cross_above_ema51 = (
+                has_cvd_ema51 and prev_cvd <= prev_cvd_ema51 and cvd_close > cvd_ema51
+        )
+        cvd_cross_below_ema51 = (
+                has_cvd_ema51 and prev_cvd >= prev_cvd_ema51 and cvd_close < cvd_ema51
+        )
+
+        exit_reason = None
 
         if hit_stop:
-            self._exit_position_automated(position, reason="AUTO_SL")
+            exit_reason = "AUTO_SL"
+        elif strategy_type == "ema_cross":
+            if signal_side == "long" and price_cross_below_ema10:
+                exit_reason = "AUTO_EMA10_CROSS"
+            elif signal_side == "short" and price_cross_above_ema10:
+                exit_reason = "AUTO_EMA10_CROSS"
+        elif strategy_type == "atr_divergence":
+            if signal_side == "long" and price_cross_above_ema51:
+                exit_reason = "AUTO_EMA51_CROSS"
+            elif signal_side == "short" and price_cross_below_ema51:
+                exit_reason = "AUTO_EMA51_CROSS"
+        else:  # atr_reversal
+            if signal_side == "long" and (price_cross_above_ema51 or cvd_cross_above_ema51):
+                exit_reason = "AUTO_ATR_REVERSAL_EXIT"
+            elif signal_side == "short" and (price_cross_below_ema51 or cvd_cross_below_ema51):
+                exit_reason = "AUTO_ATR_REVERSAL_EXIT"
+
+        if exit_reason:
+            self._exit_position_automated(position, reason=exit_reason)
             self._cvd_automation_positions.pop(token, None)
-        elif hit_target:
-            self._exit_position_automated(position, reason="AUTO_TARGET")
-            self._cvd_automation_positions.pop(token, None)
-        elif cross_ema51_exit:
-            self._exit_position_automated(position, reason="AUTO_EMA51_CROSS")
-            self._cvd_automation_positions.pop(token, None)
+            return
+
+        active_trade["last_price_close"] = price_close
+        active_trade["last_ema10"] = ema10
+        active_trade["last_ema51"] = ema51
+        active_trade["last_cvd_close"] = cvd_close
+        active_trade["last_cvd_ema51"] = cvd_ema51
 
     def _is_cvd_auto_cutoff_reached(self) -> bool:
         """Stop CVD single-chart automation entries/exits handling after 3:00 PM."""

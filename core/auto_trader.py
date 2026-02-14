@@ -395,7 +395,7 @@ class CVDSingleChartDialog(QDialog):
         self.cvd_ema_gap_input = QSpinBox()
         self.cvd_ema_gap_input.setRange(0, 500000)
         self.cvd_ema_gap_input.setSingleStep(1000)
-        self.cvd_ema_gap_input.setValue(4000)
+        self.cvd_ema_gap_input.setValue(3000)
         self.cvd_ema_gap_input.setFixedWidth(90)
         self.cvd_ema_gap_input.setStyleSheet("QSpinBox { background:#1B1F2B; color:#26A69A; font-weight:600; }")
         self.cvd_ema_gap_input.valueChanged.connect(self._on_atr_settings_changed)
@@ -1088,13 +1088,15 @@ class CVDSingleChartDialog(QDialog):
         self._emit_automation_market_state()
 
     def _emit_automation_market_state(self):
-        if not self._last_plot_x_indices or not self.all_price_data:
+        if not self._last_plot_x_indices or not self.all_price_data or not self.all_cvd_data:
             return
 
         x_arr = np.array(self._last_plot_x_indices, dtype=float)
         price_data_array = np.array(self.all_price_data, dtype=float)
+        cvd_data_array = np.array(self.all_cvd_data, dtype=float)
         ema10 = self._calculate_ema(price_data_array, 10)
         ema51 = self._calculate_ema(price_data_array, 51)
+        cvd_ema51 = self._calculate_ema(cvd_data_array, 51)
         idx = self._latest_closed_bar_index()
         if idx is None:
             return
@@ -1119,6 +1121,8 @@ class CVDSingleChartDialog(QDialog):
             "price_close": new_price_close,
             "ema10": float(ema10[idx]),
             "ema51": float(ema51[idx]),
+            "cvd_close": float(cvd_data_array[idx]),
+            "cvd_ema51": float(cvd_ema51[idx]),
             "timestamp": ts_str,
         })
 
