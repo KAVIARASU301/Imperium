@@ -11,7 +11,7 @@ class TitleBar(QWidget):
         self.dragging = False
         self.drag_position = QPoint()
 
-        self.setFixedHeight(32)
+        self.setFixedHeight(28)
         self.setStyleSheet("""
             CustomTitleBar {
                 background-color: #1a1a1a;
@@ -36,10 +36,10 @@ class TitleBar(QWidget):
             QMenuBar {
 
                 background-color: transparent; color: #E0E0E0; border: none;
-                font-size: 13px; padding: 4px 0px;
+                font-size: 12px; padding: 2px 0px;
             }
             QMenuBar::item {
-                background-color: transparent; padding: 6px 12px;
+                background-color: transparent; padding: 4px 10px;
                 border-radius: 4px; margin: 0px 2px;
             }
             QMenuBar::item:selected { background-color: #29C7C9; color: #161A25; }
@@ -52,7 +52,7 @@ class TitleBar(QWidget):
 
                 background-color: transparent; border: none; color: #E0E0E0;
                 font-size: 16px; font-weight: bold; padding: 0px; margin: 0px;
-                width: 45px; height: 32px;
+                width: 42px; height: 28px;
             }
             QPushButton:hover { background-color: rgba(255, 255, 255, 0.1); }
             QPushButton:pressed { background-color: rgba(255, 255, 255, 0.2); }
@@ -61,7 +61,7 @@ class TitleBar(QWidget):
             QPushButton {
                 background-color: transparent; border: none; color: #E0E0E0;
                 font-size: 14px; font-weight: bold; padding: 0px; margin: 0px;
-                width: 45px; height: 32px;
+                width: 42px; height: 28px;
             }
             QPushButton:hover { background-color: rgba(255, 255, 255, 0.1); }
             QPushButton:pressed { background-color: rgba(255, 255, 255, 0.2); }

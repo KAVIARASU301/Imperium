@@ -118,14 +118,14 @@ class HeaderToolbar(QFrame):
 
     def _setup_ui(self):
         """Initialize the toolbar UI."""
-        self.setFixedHeight(46)
+        self.setFixedHeight(40)
         main_layout = QHBoxLayout(self)
-        main_layout.setContentsMargins(15, 0, 15, 0)
-        main_layout.setSpacing(15)
+        main_layout.setContentsMargins(10, 0, 10, 0)
+        main_layout.setSpacing(10)
 
         # Quick access buttons
         self.index_buttons = {}
-        indices = ["NIFTY", "BANKNIFTY", "FINNIFTY", "SENSEX"]
+        indices = ["BANKNIFTY", "NIFTY", "FINNIFTY", "SENSEX"]
         for symbol in indices:
             btn = AnimatedButton(symbol)
             btn.setCheckable(True)
@@ -165,27 +165,22 @@ class HeaderToolbar(QFrame):
         self.journal_button.clicked.connect(self.journal_clicked.emit)
 
     def _create_status_layout(self) -> QVBoxLayout:
-        """Enhanced status display with pulsing market indicator."""
+        """Compact status display with pulsing market indicator."""
         status_layout = QVBoxLayout()
-        status_layout.setSpacing(2)
+        status_layout.setSpacing(0)
         status_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.account_label = QLabel("Account: Loading...")
         self.account_label.setObjectName("statusLabel")
 
-        # Market status with pulsing dot
         market_container = QWidget()
         market_layout = QHBoxLayout(market_container)
         market_layout.setContentsMargins(0, 0, 0, 0)
-        market_layout.setSpacing(5)
+        market_layout.setSpacing(0)
         market_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.status_dot = PulsingDot()
-        self.market_status_label = QLabel("MARKET CLOSED")
-        self.market_status_label.setObjectName("marketStatusLabel")
-
         market_layout.addWidget(self.status_dot)
-        market_layout.addWidget(self.market_status_label)
 
         status_layout.addWidget(self.account_label)
         status_layout.addWidget(market_container)
@@ -214,7 +209,7 @@ class HeaderToolbar(QFrame):
     def _create_symbol_combo(self):
         """Create custom symbol picker button."""
         self.symbol_button = AnimatedButton("Select Symbol")
-        self.symbol_button.setFixedWidth(130)
+        self.symbol_button.setFixedWidth(118)
         self.symbol_button.setObjectName("symbolPickerButton")
         self.symbol_button.clicked.connect(self._show_symbol_picker)
 
@@ -235,7 +230,7 @@ class HeaderToolbar(QFrame):
 
     def _create_expiry_combo(self):
         self.expiry_combo = QComboBox()
-        self.expiry_combo.setFixedWidth(110)
+        self.expiry_combo.setFixedWidth(96)
         return self.expiry_combo
 
     def _create_lot_spinbox(self):
@@ -244,7 +239,7 @@ class HeaderToolbar(QFrame):
         self.lot_size_spin.setValue(1)
         self.lot_size_spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         self.lot_size_spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.lot_size_spin.setFixedWidth(50)
+        self.lot_size_spin.setFixedWidth(42)
         return self.lot_size_spin
 
     def _on_quick_symbol_selected(self, symbol: str):
@@ -336,15 +331,13 @@ class HeaderToolbar(QFrame):
         is_open = is_weekday and market_open_time <= now <= market_close_time
 
         if is_open:
-            self.market_status_label.setText("MARKET OPEN")
-            self.market_status_label.setStyleSheet("color: #29C7C9;")
+            self.status_dot.show()
             self.status_dot.setStyleSheet("background-color: #29C7C9; border-radius: 3px;")
+            self.status_dot.setToolTip("Market open")
             self.status_dot.set_market_open(True)
         else:
-            self.market_status_label.setText("MARKET CLOSED")
-            self.market_status_label.setStyleSheet("color: #F85149;")
-            self.status_dot.setStyleSheet("background-color: #F85149; border-radius: 3px;")
             self.status_dot.set_market_open(False)
+            self.status_dot.hide()
 
     def _apply_styles(self):
         """Enhanced dark theme with subtle improvements."""
@@ -383,8 +376,8 @@ class HeaderToolbar(QFrame):
                 );
                 border: 1px solid rgba(58, 68, 88, 0.3);
                 font-weight: 600;
-                font-size: 13px;
-                padding: 6px 10px;
+                font-size: 11px;
+                padding: 4px 8px;
                 border-radius: 6px;
             }
 
@@ -410,7 +403,7 @@ class HeaderToolbar(QFrame):
 
             #controlLabel {
                 color: #A9B1C3;
-                font-size: 11px;
+                font-size: 10px;
                 font-weight: bold;
             }
 
@@ -423,8 +416,8 @@ class HeaderToolbar(QFrame):
                 color: #E0E0E0;
                 border: 1px solid #3A4458;
                 border-radius: 5px;
-                padding: 4px 8px;
-                font-size: 13px;
+                padding: 3px 6px;
+                font-size: 12px;
                 font-weight: 500;
             }
 
@@ -442,21 +435,16 @@ class HeaderToolbar(QFrame):
 
             #statusLabel {
                 color: #A9B1C3;
-                font-size: 11px;
+                font-size: 10px;
                 font-weight: 600;
             }
 
-            #marketStatusLabel {
-                font-size: 9px;
-                font-weight: 500;
-            }
-
             #iconButton {
-                font-size: 18px;
+                font-size: 15px;
                 color: #A9B1C3;
                 background: transparent;
                 border: none;
-                padding: 5px;
+                padding: 2px;
             }
 
             #iconButton:hover {
@@ -472,8 +460,8 @@ class HeaderToolbar(QFrame):
                 color: #E0F6F6;
                 border: 1px solid rgba(41, 199, 201, 0.4);
                 border-radius: 6px;
-                padding: 6px 12px;
-                font-size: 11px;
+                padding: 4px 10px;
+                font-size: 10px;
                 font-weight: 700;
             }
 
@@ -492,8 +480,8 @@ class HeaderToolbar(QFrame):
                 font-weight: bold;
                 border: 1px solid #F85149;
                 border-radius: 3px;
-                padding: 5px 14px;
-                font-size: 11px;
+                padding: 4px 10px;
+                font-size: 10px;
             }
 
             #dangerButton:hover {
@@ -510,8 +498,8 @@ class HeaderToolbar(QFrame):
                 color: #E0E0E0;
                 border: 1px solid #3A4458;
                 border-radius: 5px;
-                padding: 4px 8px;
-                font-size: 13px;
+                padding: 3px 6px;
+                font-size: 12px;
                 font-weight: 500;
                 text-align: left;
             }

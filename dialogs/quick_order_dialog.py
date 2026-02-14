@@ -343,6 +343,11 @@ class QuickOrderDialog(QDialog):
             'stop_loss_price': stop_loss_price,
             'target_price': take_profit_price,
             'trailing_stop_loss': trailing_sl_per_unit,  # ✅ Now in per-share units
+            # Keep original cash-risk inputs so entry flow can re-anchor SL/TP
+            # from actual fill price exactly like modify flow does.
+            'stop_loss_amount': stop_loss_value,
+            'target_amount': take_profit_value,
+            'trailing_stop_loss_amount': trailing_sl_value,
         }
 
     def _apply_styles(self):

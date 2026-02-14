@@ -2525,6 +2525,9 @@ class ScalperMainWindow(QMainWindow):
         stop_loss_price = order_params.get('stop_loss_price')
         target_price = order_params.get('target_price')
         trailing_stop_loss = order_params.get('trailing_stop_loss')
+        stop_loss_amount = float(order_params.get('stop_loss_amount') or 0)
+        target_amount = float(order_params.get('target_amount') or 0)
+        trailing_stop_loss_amount = float(order_params.get('trailing_stop_loss_amount') or 0)
         group_name = order_params.get('group_name')
 
         if not contract_to_trade or not quantity:
@@ -2547,24 +2550,76 @@ class ScalperMainWindow(QMainWindow):
             order_id = self.trader.place_order(**order_args)
             logger.info(f"Single strike order placed attempt: {order_id} for {contract_to_trade.tradingsymbol}")
 
+            # Re-anchor SL/TP from actual average fill, so entry behaves like MODIFY flow.
+            def _build_fill_anchored_risk_values(position):
+                qty = abs(position.quantity)
+                if qty <= 0:
+                    return None, None, None
+
+                is_buy_position = position.quantity > 0
+                avg_fill_price = float(position.average_price or 0)
+                if avg_fill_price <= 0:
+                    return None, None, None
+
+                anchored_sl = None
+                anchored_tp = None
+                anchored_tsl = None
+
+                if stop_loss_amount > 0:
+                    sl_per_unit = stop_loss_amount / qty
+                    anchored_sl = (
+                        avg_fill_price - sl_per_unit
+                        if is_buy_position
+                        else avg_fill_price + sl_per_unit
+                    )
+
+                if target_amount > 0:
+                    tp_per_unit = target_amount / qty
+                    anchored_tp = (
+                        avg_fill_price + tp_per_unit
+                        if is_buy_position
+                        else avg_fill_price - tp_per_unit
+                    )
+
+                if trailing_stop_loss_amount > 0:
+                    anchored_tsl = trailing_stop_loss_amount / qty
+
+                return anchored_sl, anchored_tp, anchored_tsl
+
+            def _apply_risk_after_fill():
+                if transaction_type != self.trader.TRANSACTION_TYPE_BUY:
+                    return
+
+                position = self.position_manager.get_position(contract_to_trade.tradingsymbol)
+                if not position:
+                    logger.warning(
+                        "Position not yet available for risk application: %s",
+                        contract_to_trade.tradingsymbol,
+                    )
+                    return
+
+                anchored_sl, anchored_tp, anchored_tsl = _build_fill_anchored_risk_values(position)
+                self.position_manager.update_sl_tp_for_position(
+                    contract_to_trade.tradingsymbol,
+                    anchored_sl,
+                    anchored_tp,
+                    anchored_tsl,
+                )
+                logger.info(
+                    "✅ Applied fill-anchored SL/TP for %s | SL=%s TP=%s TSL=%s",
+                    contract_to_trade.tradingsymbol,
+                    anchored_sl,
+                    anchored_tp,
+                    anchored_tsl,
+                )
+
             # 🔥 FIX: For paper trading, schedule SL/TP application AFTER position refresh
             if isinstance(self.trader, PaperTradingManager):
                 # Store SL/TP to apply after position is created
                 if transaction_type == self.trader.TRANSACTION_TYPE_BUY:
-                    def apply_sl_tp_after_refresh():
-                        """Apply SL/TP after position is created from API"""
-                        if stop_loss_price or target_price or (trailing_stop_loss and trailing_stop_loss > 0):
-                            self.position_manager.update_sl_tp_for_position(
-                                contract_to_trade.tradingsymbol,
-                                stop_loss_price,
-                                target_price,
-                                trailing_stop_loss if trailing_stop_loss and trailing_stop_loss > 0 else None
-                            )
-                            logger.info(f"✅ Applied SL/TP for paper position {contract_to_trade.tradingsymbol}")
-
                     # Refresh positions first, then apply SL/TP
                     QTimer.singleShot(500, self._refresh_positions)
-                    QTimer.singleShot(1000, apply_sl_tp_after_refresh)  # Apply SL/TP 1 second after order
+                    QTimer.singleShot(1000, _apply_risk_after_fill)  # Apply SL/TP 1 second after order
                 else:
                     QTimer.singleShot(500, self._refresh_positions)
 
@@ -2579,8 +2634,11 @@ class ScalperMainWindow(QMainWindow):
                 QTimer.singleShot(500, lambda oid=order_id, c=contract_to_trade, qty=quantity,
                                               p=price, tt=transaction_type, prod=product,
                                               sl=stop_loss_price, tp=target_price,
-                                              tsl=trailing_stop_loss, gn=group_name:
-                self._confirm_and_finalize_order(oid, c, qty, p, tt, prod, sl, tp, tsl, gn))
+                                              tsl=trailing_stop_loss,
+                                              sl_amt=stop_loss_amount, tp_amt=target_amount,
+                                              tsl_amt=trailing_stop_loss_amount, gn=group_name:
+                self._confirm_and_finalize_order(oid, c, qty, p, tt, prod, sl, tp, tsl,
+                                                 sl_amt, tp_amt, tsl_amt, gn))
                 return
 
         except Exception as e:
@@ -2593,7 +2651,8 @@ class ScalperMainWindow(QMainWindow):
     def _confirm_and_finalize_order(
             self, order_id, contract_to_trade, quantity, price,
             transaction_type, product, stop_loss_price, target_price,
-            trailing_stop_loss, group_name
+            trailing_stop_loss, stop_loss_amount, target_amount,
+            trailing_stop_loss_amount, group_name
     ):
         """
         Async callback (called via QTimer.singleShot) that replaces the old
@@ -2616,6 +2675,20 @@ class ScalperMainWindow(QMainWindow):
                 filled_quantity = confirmed_order_api_data.get('filled_quantity', quantity)
 
                 if transaction_type == self.trader.TRANSACTION_TYPE_BUY:
+                    avg_fill_price = avg_price_from_order
+                    risk_qty = abs(filled_quantity)
+
+                    if stop_loss_amount and stop_loss_amount > 0 and risk_qty > 0:
+                        sl_per_unit = stop_loss_amount / risk_qty
+                        stop_loss_price = avg_fill_price - sl_per_unit
+
+                    if target_amount and target_amount > 0 and risk_qty > 0:
+                        tp_per_unit = target_amount / risk_qty
+                        target_price = avg_fill_price + tp_per_unit
+
+                    if trailing_stop_loss_amount and trailing_stop_loss_amount > 0 and risk_qty > 0:
+                        trailing_stop_loss = trailing_stop_loss_amount / risk_qty
+
                     new_position = Position(
                         symbol=f"{contract_to_trade.symbol}{contract_to_trade.strike}{contract_to_trade.option_type}",
                         tradingsymbol=contract_to_trade.tradingsymbol,

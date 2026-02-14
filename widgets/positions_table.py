@@ -84,11 +84,11 @@ class PositionsTable(QWidget):
 
         # 🔥 REDESIGNED FOOTER
         self.footer = QWidget()
-        self.footer.setFixedHeight(32)
+        self.footer.setFixedHeight(28)
         self.footer.setObjectName("footer")
         footer_layout = QHBoxLayout(self.footer)
-        footer_layout.setContentsMargins(10, 0, 10, 0)
-        footer_layout.setSpacing(12)
+        footer_layout.setContentsMargins(8, 0, 8, 0)
+        footer_layout.setSpacing(8)
         self.footer.setContextMenuPolicy(Qt.CustomContextMenu)
         self.footer.customContextMenuRequested.connect(
             self._show_footer_context_menu
@@ -97,7 +97,7 @@ class PositionsTable(QWidget):
         # --- LEFT: Refresh button ---
         self.refresh_button = QPushButton("⟳")
         self.refresh_button.setObjectName("footerIconButton")
-        self.refresh_button.setFixedSize(24, 24)
+        self.refresh_button.setFixedSize(20, 20)
         self.refresh_button.setToolTip("Refresh Positions")
 
         # --- CENTER: Portfolio SL/TP ---
@@ -193,13 +193,17 @@ class PositionsTable(QWidget):
                     self.table.setCurrentCell(row, self.SYMBOL_COL)
 
             elif event.type() == QEvent.Type.Leave:
-                # Avoid clearing current cell here to prevent visual flicker while dragging/hovering.
+                # Explicitly clear visual hover state when mouse exits viewport.
                 self._hovered_row = -1
+                if not self._drag_active:
+                    self.table.clearSelection()
+                    self.table.setCurrentCell(-1, -1)
 
             elif event.type() == QEvent.Type.DragLeave:
                 self._hovered_row = -1
                 self._drag_active = False
-                # Don't clear selection here - drag might still be in progress
+                self.table.clearSelection()
+                self.table.setCurrentCell(-1, -1)
 
         return super().eventFilter(obj, event)
     # ------------------------------------------------------------------
@@ -364,6 +368,7 @@ class PositionsTable(QWidget):
         self._rebuild_table_from_order()
 
     def _rebuild_table_from_order(self):
+        self.table.setUpdatesEnabled(False)
         self.table.setRowCount(0)
         self.position_row_map.clear()
         self.group_row_map.clear()
@@ -382,6 +387,7 @@ class PositionsTable(QWidget):
                 self._add_position_rows(self.positions[symbol])
 
         self._update_footer()
+        self.table.setUpdatesEnabled(True)
 
     def _add_position_rows(self, pos_data: dict):
         symbol = pos_data['tradingsymbol']
@@ -390,7 +396,7 @@ class PositionsTable(QWidget):
         main_row = self.table.rowCount()
         self.table.insertRow(main_row)
         self.position_row_map[symbol] = main_row
-        self.table.setRowHeight(main_row, 32)
+        self.table.setRowHeight(main_row, 30)
         self.table.setProperty(f"row_pid_{main_row}", symbol)
         self.table.setProperty(f"row_role_{main_row}", "MAIN")
         self.table.setProperty(f"row_kind_{main_row}", "POSITION")
@@ -409,7 +415,7 @@ class PositionsTable(QWidget):
         if (sl and sl > 0) or (tp and tp > 0) or (tsl and tsl > 0):
             sltp_row = self.table.rowCount()
             self.table.insertRow(sltp_row)
-            self.table.setRowHeight(sltp_row, 32)
+            self.table.setRowHeight(sltp_row, 24)
             self.table.setProperty(f"row_type_{sltp_row}", "SLTP")
             self._set_sltp_row(sltp_row, pos_data)
             self.table.setProperty(f"row_pid_{sltp_row}", symbol)
@@ -420,12 +426,12 @@ class PositionsTable(QWidget):
         """Insert a bright thin row to clearly mark the end of a group."""
         row = self.table.rowCount()
         self.table.insertRow(row)
-        self.table.setRowHeight(row, 5)
+        self.table.setRowHeight(row, 3)
         self.table.setProperty(f"row_kind_{row}", "DIVIDER")
 
         divider_item = QTableWidgetItem("")
         divider_item.setFlags(Qt.ItemFlag.NoItemFlags)
-        divider_item.setBackground(QColor("#FFD60A"))
+        divider_item.setBackground(QColor("#2A3350"))
         self.table.setItem(row, 0, divider_item)
         self.table.setSpan(row, 0, 1, self.table.columnCount())
 
@@ -1170,6 +1176,8 @@ class PositionsTable(QWidget):
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setFocusPolicy(Qt.StrongFocus)
         self.table.setTabKeyNavigation(False)
+        self.table.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self.table.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
 
         # IMPORTANT: enable row selection (used for hover)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
@@ -1199,6 +1207,7 @@ class PositionsTable(QWidget):
                 color: #E0E0E0;
                 border: none;
                 font-size: 13px;
+                selection-background-color: #184540;
             }
 
             QHeaderView::section {
@@ -1289,7 +1298,7 @@ class PositionsTable(QWidget):
 
             /* MAIN ROW SEPARATOR */
             QTableWidget::item {
-                padding: 6px 8px;
+                padding: 5px 8px;
                 border-bottom: 1px solid #1E2430;
             }
 
@@ -1368,7 +1377,7 @@ class PositionsTable(QWidget):
                 border: 1px solid #3A4458;
                 border-radius: 4px;
                 padding: 0px;
-                font-size: 15px;
+                font-size: 13px;
                 font-weight: 600;
             }
 
@@ -1379,13 +1388,13 @@ class PositionsTable(QWidget):
             }
             #portfolioSLTPLabel {
                 color: #A9B1C3;
-                font-size: 11.5px;
+                font-size: 11px;
                 font-weight: 500;
                 padding: 0px 8px;
             }
             #footerTitleLabel {
                 color: #A9B1C3;
-                font-size: 11.5px;
+                font-size: 11px;
                 font-weight: 600;
                 letter-spacing: 0.3px;
             }
