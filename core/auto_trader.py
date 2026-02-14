@@ -223,6 +223,9 @@ class CVDSingleChartDialog(QDialog):
     ATR_MARKER_RED_ONLY = "red_only"
     ATR_MARKER_HIDE_ALL = "hide_all"
 
+    ROUTE_BUY_EXIT_PANEL = "buy_exit_panel"
+    ROUTE_DIRECT = "direct"
+
     def __init__(
             self,
             kite: KiteConnect,
@@ -290,6 +293,41 @@ class CVDSingleChartDialog(QDialog):
         root.setContentsMargins(8, 4, 8, 4)
         root.setSpacing(4)
 
+        compact_spinbox_style = """
+            QSpinBox, QDoubleSpinBox {
+                background: #1B1F2B;
+                color: #E0E0E0;
+                font-weight: 600;
+                font-size: 11px;
+                border: 1px solid #3A4458;
+                border-radius: 4px;
+                padding: 2px 4px;
+                min-height: 22px;
+            }
+            QSpinBox:hover, QDoubleSpinBox:hover {
+                border: 1px solid #5B9BD5;
+            }
+        """
+
+        compact_toggle_style = """
+            QCheckBox {
+                color: #9CCAF4;
+                font-weight: 600;
+                font-size: 11px;
+                spacing: 4px;
+            }
+            QCheckBox::indicator {
+                width: 14px;
+                height: 14px;
+                border: 1px solid #5B9BD5;
+                border-radius: 3px;
+                background: #1B1F2B;
+            }
+            QCheckBox::indicator:checked {
+                background: #5B9BD5;
+            }
+        """
+
         # ================= TOP CONTROL BAR =================
         top_bar = QHBoxLayout()
         top_bar.setContentsMargins(0, 0, 0, 0)
@@ -332,7 +370,7 @@ class CVDSingleChartDialog(QDialog):
         self.navigator = DateNavigator(self)
         top_bar.addWidget(self.navigator)
 
-        # Focus Button (RIGHT of center)
+        # Focus Button (placed on second row, right side)
         self.btn_focus = QPushButton("Single Day View")
         self.btn_focus.setCheckable(True)
         self.btn_focus.setFixedHeight(28)
@@ -352,30 +390,63 @@ class CVDSingleChartDialog(QDialog):
         """)
         self.btn_focus.toggled.connect(self._on_focus_mode_changed)
 
-        top_bar.addWidget(self.btn_focus)
-
         # Automate Toggle (next to Single Day View)
         self.automate_toggle = QCheckBox("Automate")
         self.automate_toggle.setChecked(False)
-        self.automate_toggle.setStyleSheet("""
-            QCheckBox {
-                color: #7DD3FC;
-                font-weight: 600;
-                font-size: 12px;
-                spacing: 6px;
-            }
-            QCheckBox::indicator {
-                width: 16px;
-                height: 16px;
-                border: 2px solid #38BDF8;
-                border-radius: 3px;
+        self.automate_toggle.setStyleSheet(compact_toggle_style)
+        self.automate_toggle.toggled.connect(self._on_automation_settings_changed)
+
+        sl_top_label = QLabel("SL")
+        sl_top_label.setStyleSheet("color: #9CCAF4; font-size: 11px; font-weight: 600;")
+        top_bar.addWidget(sl_top_label)
+
+        self.automation_stoploss_input = QSpinBox()
+        self.automation_stoploss_input.setRange(1, 1000)
+        self.automation_stoploss_input.setValue(50)
+        self.automation_stoploss_input.setSingleStep(5)
+        self.automation_stoploss_input.setFixedWidth(58)
+        self.automation_stoploss_input.setStyleSheet(compact_spinbox_style)
+        self.automation_stoploss_input.valueChanged.connect(self._on_automation_settings_changed)
+        top_bar.addWidget(self.automation_stoploss_input)
+
+        route_top_label = QLabel("Route")
+        route_top_label.setStyleSheet("color: #9CCAF4; font-size: 11px; font-weight: 600;")
+        top_bar.addWidget(route_top_label)
+
+        self.automation_route_combo = QComboBox()
+        self.automation_route_combo.setFixedWidth(128)
+        self.automation_route_combo.setStyleSheet("""
+            QComboBox {
                 background: #1B1F2B;
+                color: #E0E0E0;
+                font-weight: 600;
+                font-size: 11px;
+                padding: 2px 8px;
+                border: 1px solid #3A4458;
+                border-radius: 4px;
+                min-height: 22px;
             }
-            QCheckBox::indicator:checked {
-                background: #38BDF8;
+            QComboBox:hover {
+                border: 1px solid #5B9BD5;
+            }
+            QComboBox::drop-down {
+                border: none;
+                width: 20px;
+            }
+            QComboBox::down-arrow {
+                image: none;
+                border-left: 4px solid transparent;
+                border-right: 4px solid transparent;
+                border-top: 5px solid #8A9BA8;
+                margin-right: 5px;
             }
         """)
-        self.automate_toggle.toggled.connect(self._on_automation_settings_changed)
+        self.automation_route_combo.addItem("Buy Exit Panel", self.ROUTE_BUY_EXIT_PANEL)
+        self.automation_route_combo.addItem("Direct", self.ROUTE_DIRECT)
+        self.automation_route_combo.setCurrentIndex(0)
+        self.automation_route_combo.currentIndexChanged.connect(self._on_automation_settings_changed)
+        top_bar.addWidget(self.automation_route_combo)
+
         top_bar.addWidget(self.automate_toggle)
 
         # Export button (compact)
@@ -398,7 +469,6 @@ class CVDSingleChartDialog(QDialog):
             }
         """)
         self.btn_export.clicked.connect(self._export_chart_image)
-        top_bar.addWidget(self.btn_export)
 
         top_bar.addStretch()
 
@@ -407,7 +477,7 @@ class CVDSingleChartDialog(QDialog):
         # ================= EMA CONTROL BAR (NEW) =================
         ema_bar = QHBoxLayout()
         ema_bar.setContentsMargins(0, 0, 0, 4)
-        ema_bar.setSpacing(16)
+        ema_bar.setSpacing(8)
 
         ema_bar.addStretch()
 
@@ -423,8 +493,8 @@ class CVDSingleChartDialog(QDialog):
         self.atr_base_ema_input = QSpinBox()
         self.atr_base_ema_input.setRange(1, 500)
         self.atr_base_ema_input.setValue(51)
-        self.atr_base_ema_input.setFixedWidth(55)
-        self.atr_base_ema_input.setStyleSheet("QSpinBox { background:#1B1F2B; color:#E0E0E0; }")
+        self.atr_base_ema_input.setFixedWidth(50)
+        self.atr_base_ema_input.setStyleSheet(compact_spinbox_style)
         self.atr_base_ema_input.valueChanged.connect(self._on_atr_settings_changed)
         ema_bar.addWidget(self.atr_base_ema_input)
 
@@ -437,8 +507,8 @@ class CVDSingleChartDialog(QDialog):
         self.atr_distance_input.setDecimals(2)
         self.atr_distance_input.setSingleStep(0.1)
         self.atr_distance_input.setValue(3.01)
-        self.atr_distance_input.setFixedWidth(60)
-        self.atr_distance_input.setStyleSheet("QDoubleSpinBox { background:#1B1F2B; color:#E0E0E0; }")
+        self.atr_distance_input.setFixedWidth(56)
+        self.atr_distance_input.setStyleSheet(compact_spinbox_style)
         self.atr_distance_input.valueChanged.connect(self._on_atr_settings_changed)
         ema_bar.addWidget(self.atr_distance_input)
 
@@ -453,8 +523,8 @@ class CVDSingleChartDialog(QDialog):
         self.cvd_ema_gap_input.setRange(0, 500000)
         self.cvd_ema_gap_input.setSingleStep(1000)
         self.cvd_ema_gap_input.setValue(3000)
-        self.cvd_ema_gap_input.setFixedWidth(70)
-        self.cvd_ema_gap_input.setStyleSheet("QSpinBox { background:#1B1F2B; color:#26A69A; font-weight:600; }")
+        self.cvd_ema_gap_input.setFixedWidth(66)
+        self.cvd_ema_gap_input.setStyleSheet(compact_spinbox_style)
         self.cvd_ema_gap_input.setToolTip(
             "Minimum distance between CVD and its EMA to confirm signal validity.\nFilters out price-hugging conditions where CVD trends weakly.")
         self.cvd_ema_gap_input.valueChanged.connect(self._on_atr_settings_changed)
@@ -483,13 +553,13 @@ class CVDSingleChartDialog(QDialog):
                 QCheckBox {{
                     color: {color};
                     font-weight: 600;
-                    font-size: 12px;
-                    spacing: 6px;
+                    font-size: 11px;
+                    spacing: 3px;
                 }}
                 QCheckBox::indicator {{
-                    width: 16px;
-                    height: 16px;
-                    border: 2px solid {color};
+                    width: 14px;
+                    height: 14px;
+                    border: 1px solid {color};
                     border-radius: 3px;
                     background: #1B1F2B;
                 }}
@@ -501,23 +571,24 @@ class CVDSingleChartDialog(QDialog):
             self.ema_checkboxes[period] = cb
             ema_bar.addWidget(cb)
 
-        ema_bar.addStretch()
+        ema_bar.addSpacing(4)
 
         signal_filter_label = QLabel("Filter")
         signal_filter_label.setStyleSheet("color: #8A9BA8; font-size: 11px;")
         ema_bar.addWidget(signal_filter_label)
 
         self.signal_filter_combo = QComboBox()
-        self.signal_filter_combo.setFixedWidth(180)
+        self.signal_filter_combo.setFixedWidth(160)
         self.signal_filter_combo.setStyleSheet("""
             QComboBox {
                 background: #1B1F2B;
                 color: #E0E0E0;
                 font-weight: 600;
                 font-size: 12px;
-                padding: 4px 8px;
+                padding: 2px 8px;
                 border: 1px solid #3A4458;
                 border-radius: 3px;
+                min-height: 22px;
             }
             QComboBox:hover {
                 border: 1px solid #5B9BD5;
@@ -554,16 +625,17 @@ class CVDSingleChartDialog(QDialog):
         ema_bar.addWidget(atr_marker_label)
 
         self.atr_marker_filter_combo = QComboBox()
-        self.atr_marker_filter_combo.setFixedWidth(150)
+        self.atr_marker_filter_combo.setFixedWidth(136)
         self.atr_marker_filter_combo.setStyleSheet("""
             QComboBox {
                 background: #1B1F2B;
                 color: #E0E0E0;
                 font-weight: 600;
                 font-size: 12px;
-                padding: 4px 8px;
+                padding: 2px 8px;
                 border: 1px solid #3A4458;
                 border-radius: 3px;
+                min-height: 22px;
             }
             QComboBox:hover {
                 border: 1px solid #5B9BD5;
@@ -592,22 +664,12 @@ class CVDSingleChartDialog(QDialog):
         self.atr_marker_filter_combo.addItem("Green Only", self.ATR_MARKER_GREEN_ONLY)
         self.atr_marker_filter_combo.addItem("Red Only", self.ATR_MARKER_RED_ONLY)
         self.atr_marker_filter_combo.addItem("Hide All", self.ATR_MARKER_HIDE_ALL)
+        self.atr_marker_filter_combo.setCurrentIndex(1)
         self.atr_marker_filter_combo.currentIndexChanged.connect(self._on_atr_marker_filter_changed)
         ema_bar.addWidget(self.atr_marker_filter_combo)
 
-        sl_points_label = QLabel("SL")
-        sl_points_label.setStyleSheet("color: #8A9BA8; font-size: 11px;")
-        ema_bar.addWidget(sl_points_label)
-
-        self.automation_stoploss_input = QSpinBox()
-        self.automation_stoploss_input.setRange(1, 1000)
-        self.automation_stoploss_input.setValue(50)
-        self.automation_stoploss_input.setSingleStep(5)
-        self.automation_stoploss_input.setFixedWidth(55)
-        self.automation_stoploss_input.setStyleSheet("QSpinBox { background:#1B1F2B; color:#FCA5A5; font-weight:600; }")
-        self.automation_stoploss_input.valueChanged.connect(self._on_automation_settings_changed)
-        ema_bar.addWidget(self.automation_stoploss_input)
-
+        ema_bar.addWidget(self.btn_focus)
+        ema_bar.addWidget(self.btn_export)
         ema_bar.addStretch()
         root.addLayout(ema_bar)
 
@@ -854,6 +916,7 @@ class CVDSingleChartDialog(QDialog):
             "symbol": self.symbol,
             "enabled": self.automate_toggle.isChecked(),
             "stoploss_points": float(self.automation_stoploss_input.value()),
+            "route": self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL,
             "signal_filter": self._selected_signal_filter(),
         })
 
@@ -1281,6 +1344,7 @@ class CVDSingleChartDialog(QDialog):
             "symbol": self.symbol,
             "enabled": self.automate_toggle.isChecked(),
             "stoploss_points": float(self.automation_stoploss_input.value()),
+            "route": self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL,
             "signal_filter": self._selected_signal_filter(),
             "bar_x": float(x_arr[idx]),
             "price_close": new_price_close,
@@ -1821,7 +1885,7 @@ class CVDSingleChartDialog(QDialog):
 
             for plot in (self.price_plot, self.plot):
                 line = pg.InfiniteLine(pos=x, angle=90, movable=False, pen=pen)
-                line.setZValue(2)
+                line.setZValue(-10)
                 plot.addItem(line)
                 pairs.append((plot, line))
 
@@ -1887,6 +1951,7 @@ class CVDSingleChartDialog(QDialog):
             "signal_x": float(x_arr[closed_idx]),
             "price_close": float(self.all_price_data[closed_idx]),
             "stoploss_points": float(self.automation_stoploss_input.value()),
+            "route": self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL,
             "timestamp": closed_bar_ts,
         }
 

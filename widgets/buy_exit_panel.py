@@ -413,16 +413,28 @@ class BuyExitPanel(QWidget):
             self.style().polish(radio)
         self._update_margin()
 
-    def _on_buy_clicked(self):
+    def build_order_details(self) -> Optional[dict]:
         generated_strikes = self._generate_strikes_with_skip_logic()
         if not generated_strikes:
             logger.error("No strikes generated for order")
-            return
+            return None
+
         total_premium = sum(s['ltp'] * self.lot_size * self.lot_quantity for s in generated_strikes)
-        order_details = {"symbol": self.current_symbol, "option_type": self.option_type, "expiry": self.expiry,
-                         "contracts_above": self.contracts_above, "contracts_below": self.contracts_below,
-                         "lot_size": self.lot_size, "strikes": generated_strikes,
-                         "total_premium_estimate": total_premium}
+        return {
+            "symbol": self.current_symbol,
+            "option_type": self.option_type,
+            "expiry": self.expiry,
+            "contracts_above": self.contracts_above,
+            "contracts_below": self.contracts_below,
+            "lot_size": self.lot_size,
+            "strikes": generated_strikes,
+            "total_premium_estimate": total_premium,
+        }
+
+    def _on_buy_clicked(self):
+        order_details = self.build_order_details()
+        if not order_details:
+            return
         self.buy_clicked.emit(order_details)
 
     def _update_margin(self):

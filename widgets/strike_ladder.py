@@ -3,7 +3,7 @@ from typing import Dict, List, Optional, Union
 from datetime import date
 
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QSizePolicy,
     QMenu, QDialog, QFormLayout, QSpinBox, QCheckBox,
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QProgressBar, QStyle
 )
@@ -128,11 +128,11 @@ class StrikeLadderWidget(QWidget):
         """Institutional-grade footer with key metrics."""
         self.footer = QWidget()
         self.footer.setObjectName("ladderFooter")
-        self.footer.setFixedHeight(28)
+        self.footer.setFixedHeight(34)
 
         layout = QHBoxLayout(self.footer)
         layout.setContentsMargins(8, 0, 8, 0)
-        layout.setSpacing(8)
+        layout.setSpacing(6)
 
         # Settings button
         self.settings_btn = QPushButton("⚙")
@@ -144,14 +144,11 @@ class StrikeLadderWidget(QWidget):
         self.underlying_lbl = QLabel("—")
         self.underlying_lbl.setObjectName("underlyingLabel")
         self.underlying_lbl.setToolTip("Underlying LTP & Change")
+        self.underlying_lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
 
         # self.range_lbl = QLabel("Range: —")
         # self.range_lbl.setObjectName("footerStat")
         # self.range_lbl.setToolTip("Day High/Low")
-
-        self.vol_lbl = QLabel("Vol: —")
-        self.vol_lbl.setObjectName("footerStat")
-        self.vol_lbl.setToolTip("Volume Traded")
 
         # --- OPTIONS METRICS ---
         self.call_oi_lbl = QLabel("CE OI: —")
@@ -167,34 +164,33 @@ class StrikeLadderWidget(QWidget):
         self.vix_label.setObjectName("vixLabel")
 
         # Alignment
-        for lbl in [self.underlying_lbl, self.vol_lbl,
+        for lbl in [self.underlying_lbl,
                     self.call_oi_lbl, self.put_oi_lbl, self.pcr_label, self.vix_label]:
-            lbl.setAlignment(Qt.AlignVCenter)
+            lbl.setAlignment(Qt.AlignCenter)
+            lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
 
         # Assemble left → right
-        layout.addWidget(self.settings_btn)
-        layout.addSpacing(6)
+        layout.addWidget(self.settings_btn, 0, Qt.AlignVCenter)
 
-        # Underlying section
-        layout.addWidget(self.underlying_lbl)
-        layout.addWidget(self._footer_sep())
-        layout.addWidget(self.vol_lbl)
-        layout.addWidget(self._footer_sep())
-
-        # Options section
-        layout.addWidget(self.call_oi_lbl)
-        layout.addWidget(self._footer_sep())
-        layout.addWidget(self.put_oi_lbl)
-        layout.addWidget(self._footer_sep())
-        layout.addWidget(self.pcr_label)
-        layout.addWidget(self._footer_sep())
-        layout.addWidget(self.vix_label)
-
-        layout.addStretch(1)
+        metrics_layout = QHBoxLayout()
+        metrics_layout.setSpacing(0)
+        metrics_layout.setContentsMargins(0, 0, 0, 0)
+        metrics_layout.addWidget(self.underlying_lbl, 1)
+        metrics_layout.addWidget(self._footer_sep())
+        metrics_layout.addWidget(self.call_oi_lbl, 1)
+        metrics_layout.addWidget(self._footer_sep())
+        metrics_layout.addWidget(self.put_oi_lbl, 1)
+        metrics_layout.addWidget(self._footer_sep())
+        metrics_layout.addWidget(self.pcr_label, 1)
+        metrics_layout.addWidget(self._footer_sep())
+        metrics_layout.addWidget(self.vix_label, 1)
+        layout.addLayout(metrics_layout, 1)
 
     def _footer_sep(self):
-        sep = QLabel("│")
-        sep.setStyleSheet("color: #3A4458; font-size: 10px;")
+        sep = QLabel("|")
+        sep.setObjectName("footerDivider")
+        sep.setAlignment(Qt.AlignCenter)
+        sep.setFixedWidth(12)
         return sep
 
     def _apply_styles(self):
@@ -331,13 +327,24 @@ class StrikeLadderWidget(QWidget):
                 background: #2A3350;
             }
             #underlyingLabel {
-                font-size: 10.5px;
+                font-size: 12px;
                 font-weight: 700;
+                color: #E6EDF8;
             }
 
             #vixLabel {
-                font-size: 10.5px;
+                font-size: 11px;
                 font-weight: 700;
+            }
+
+            #footerDivider {
+                color: #3A4458;
+                font-size: 11px;
+                font-weight: 600;
+            }
+
+            #ladderFooter QLabel {
+                letter-spacing: 0.2px;
             }
         """)
 
@@ -874,28 +881,14 @@ class StrikeLadderWidget(QWidget):
             color = "#A9B1C3"
             sign = ""
 
-        # Format: "NIFTY 24,850 +0.45%"
+        # Format: "NIFTY 24,850.50  +0.45%"
         self.underlying_lbl.setText(
-            f"{self.symbol} {d['ltp']:.2f} {sign}{d['change_pct']:.2f}%"
+            f"{self.symbol} {d['ltp']:,.2f}  {sign}{d['change_pct']:.2f}%"
         )
         self.underlying_lbl.setStyleSheet(
-            f"color: {color}; font-weight: 700; font-size: 10.5px;"
+            f"color: {color}; font-weight: 700; font-size: 12px;"
         )
 
-
-        # Update volume (abbreviated)
-        vol_str = self._format_volume(d['volume'])
-        self.vol_lbl.setText(f"Vol: {vol_str}")
-
-    def _format_volume(self, vol: int) -> str:
-        """Format volume in K/M/Cr notation."""
-        if vol >= 10_000_000:  # 1 Crore
-            return f"{vol / 10_000_000:.1f}Cr"
-        elif vol >= 100_000:  # 1 Lakh
-            return f"{vol / 100_000:.1f}L"
-        elif vol >= 1_000:
-            return f"{vol / 1_000:.1f}K"
-        return str(vol)
 
     def _format_oi_lakhs(self, oi: int) -> str:
         """Format OI in Lakhs notation."""

@@ -725,6 +725,8 @@ class ScalperMainWindow(QMainWindow):
         if signal_side not in {"long", "short"}:
             return
 
+        route = payload.get("route") or state.get("route") or "buy_exit_panel"
+
         active_trade = self._cvd_automation_positions.get(token)
         if active_trade:
             active_side = active_trade.get("signal_side")
@@ -818,6 +820,7 @@ class ScalperMainWindow(QMainWindow):
         self._cvd_automation_positions[token] = {
             "tradingsymbol": contract.tradingsymbol,
             "signal_side": signal_side,
+            "route": route,
             "signal_timestamp": payload.get("timestamp"),  # Track when signal was generated
             "strategy_type": strategy_type,
             "stoploss_points": stoploss_points,
@@ -829,12 +832,22 @@ class ScalperMainWindow(QMainWindow):
             "last_cvd_ema10": state.get("cvd_ema10"),
             "last_cvd_ema51": state.get("cvd_ema51"),
         }
-        self._execute_single_strike_order(order_params)
+
+        if route == "buy_exit_panel" and self.buy_exit_panel and self.strike_ladder:
+            desired_option_type = OptionType.CALL if signal_side == "long" else OptionType.PUT
+            if self.buy_exit_panel.option_type != desired_option_type:
+                self.buy_exit_panel.option_type = desired_option_type
+                self.buy_exit_panel._update_ui_for_option_type()
+            self._buy_exact_relative_strike(0)
+        else:
+            self._execute_single_strike_order(order_params)
+
         logger.info(
-            "[AUTO] Entered %s via %s | strategy=%s qty=%s underlying_sl=%s",
+            "[AUTO] Entered %s via %s | strategy=%s route=%s qty=%s underlying_sl=%s",
             contract.tradingsymbol,
             signal_side,
             strategy_type,
+            route,
             quantity,
             f"{sl_underlying:.2f}" if sl_underlying is not None else "N/A",
         )
