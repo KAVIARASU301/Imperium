@@ -9,7 +9,7 @@ from core.cvd.cvd_mode import CVDMode
 from utils.time_utils import TRADING_DAY_START
 from uuid import uuid4
 from PySide6.QtWidgets import (QMainWindow, QApplication, QWidget, QVBoxLayout,
-                               QMessageBox, QDialog, QSplitter)
+                               QMessageBox, QDialog, QSplitter, QLabel, QFrame)
 from PySide6.QtCore import Qt, QTimer, QUrl, QByteArray
 from PySide6.QtMultimedia import QSoundEffect
 from kiteconnect import KiteConnect
@@ -263,7 +263,29 @@ class ScalperMainWindow(QMainWindow):
             QMessageBox QPushButton:hover { background-color: #29C7C9 !important; color: #04b3bd !important; border-color: #29C7C9; }
             QMessageBox QPushButton:pressed { background-color: #1f8a8c !important; }
             QDialog { background-color: #161A25; color: #E0E0E0; }
-            QStatusBar { background-image: url("assets/textures/texture_darker.png"); background-color: #161A25; color: #A0A0A0; border-top: 1px solid #3A4458; padding: 4px 8px; font-size: 12px; }
+            QStatusBar {
+                background-image: url("assets/textures/texture_darker.png");
+                background-color: #141A27;
+                color: #8F9CB2;
+                border-top: 1px solid #242C3B;
+                padding: 1px 8px;
+                font-size: 11px;
+            }
+            QStatusBar::item { border: none; }
+            #footerModeChip, #footerStatusChip, #footerClockChip {
+                color: #8390A7;
+                background: transparent;
+                border: none;
+                padding: 0px;
+                margin: 0px 2px;
+                font-weight: 400;
+            }
+            #footerSeparator {
+                color: #202736;
+                background-color: #202736;
+                max-width: 1px;
+                margin: 0 4px;
+            }
             QDockWidget { background-color: #1a1a1a; color: #fff; border: 1px solid #333; }
             QDockWidget::title { background-color: #2a2a2a; padding: 5px; border-bottom: 1px solid #333; }
         """)
@@ -422,8 +444,52 @@ class ScalperMainWindow(QMainWindow):
         main_content_layout.addWidget(self.main_splitter)
 
         self._setup_menu_bar()
+        self._setup_status_footer()
 
         QTimer.singleShot(3000, self._update_account_info)
+
+    def _setup_status_footer(self):
+        """Build a richer status footer with persistent operational telemetry."""
+        status_bar = self.statusBar()
+        status_bar.setSizeGripEnabled(False)
+
+        self.footer_mode_chip = QLabel(self.trading_mode.upper())
+        self.footer_mode_chip.setObjectName("footerModeChip")
+
+        self.footer_network_chip = QLabel("Connecting")
+        self.footer_network_chip.setObjectName("footerStatusChip")
+
+        self.footer_market_chip = QLabel("Market --")
+        self.footer_market_chip.setObjectName("footerStatusChip")
+
+        self.footer_api_chip = QLabel("API --")
+        self.footer_api_chip.setObjectName("footerStatusChip")
+
+        self.footer_clock_chip = QLabel("--:--:--")
+        self.footer_clock_chip.setObjectName("footerClockChip")
+
+        for widget in (
+            self.footer_mode_chip,
+            self._footer_separator(),
+            self.footer_network_chip,
+            self._footer_separator(),
+            self.footer_market_chip,
+            self._footer_separator(),
+            self.footer_api_chip,
+            self._footer_separator(),
+            self.footer_clock_chip,
+        ):
+            status_bar.addPermanentWidget(widget)
+
+        status_bar.showMessage("Ready")
+
+    @staticmethod
+    def _footer_separator() -> QFrame:
+        separator = QFrame()
+        separator.setObjectName("footerSeparator")
+        separator.setFrameShape(QFrame.Shape.VLine)
+        separator.setFrameShadow(QFrame.Shadow.Plain)
+        return separator
 
     def _create_main_widgets(self):
         self.buy_exit_panel = BuyExitPanel(self.trader)
@@ -3154,25 +3220,31 @@ class ScalperMainWindow(QMainWindow):
         market_open_time = time(9, 15)
         market_close_time = time(15, 30)
         is_market_open = (market_open_time <= now.time() <= market_close_time) and (now.weekday() < 5)
-        status = "Market Open" if is_market_open else "Market Closed"
+        market_status = "Open" if is_market_open else "Closed"
 
-        api_status = ""
         if self.margin_circuit_breaker.state == "OPEN" or self.profile_circuit_breaker.state == "OPEN":
-            api_status = " | ⚠️ API Issues"
+            api_status = "Degraded"
         elif self.margin_circuit_breaker.state == "HALF_OPEN" or self.profile_circuit_breaker.state == "HALF_OPEN":
-            api_status = " | 🔄 API Recovering"
-
-        network_display_status = ""
-        if "Connected" in self.network_status:
-            network_display_status = "  📡  Connected"
-        elif "Disconnected" in self.network_status:
-            network_display_status = " | ❌ Disconnected"
-        elif "Connecting" in self.network_status or "Reconnecting" in self.network_status:
-            network_display_status = f" | 🔄 {self.network_status}"
+            api_status = "Recovering"
         else:
-            network_display_status = f" | ⚠️ {self.network_status}"
+            api_status = "Healthy"
 
-        self.statusBar().showMessage(f"{network_display_status} | {status} | {now.strftime('%H:%M:%S')}{api_status}")
+        if "Connected" in self.network_status:
+            network_chip_status = "Connected"
+        elif "Disconnected" in self.network_status:
+            network_chip_status = "Disconnected"
+        elif "Connecting" in self.network_status or "Reconnecting" in self.network_status:
+            network_chip_status = self.network_status
+        else:
+            network_chip_status = self.network_status
+
+        if hasattr(self, "footer_network_chip"):
+            self.footer_network_chip.setText(network_chip_status)
+            self.footer_market_chip.setText(f"Market {market_status}")
+            self.footer_api_chip.setText(f"API {api_status}")
+            self.footer_clock_chip.setText(now.strftime("%H:%M:%S"))
+
+        self.statusBar().showMessage("Ready")
 
     def _get_cached_positions(self) -> List[Position]:
         return self.position_manager.get_all_positions()

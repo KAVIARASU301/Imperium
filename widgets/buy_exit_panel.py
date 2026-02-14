@@ -293,6 +293,13 @@ class BuyExitPanel(QWidget):
                 selection-background-color: #29C7C9;
                 selection-color: #0B0F14;
             }
+
+            QSpinBox QLineEdit {
+                background: transparent;
+                border: none;
+                color: #E8EAF0;
+                selection-background-color: transparent;
+            }
             
             /* Hover = subtle readiness */
             QSpinBox:hover {
@@ -366,27 +373,33 @@ class BuyExitPanel(QWidget):
             /* --- MODIFIED BUTTON STYLES --- */
             QPushButton {
                 font-weight: bold;
-                border-radius: 6px; /* MODIFIED: Added corner radius */
-                padding: 8px; 
+                border-radius: 6px;
+                padding: 8px;
                 font-size: 14px;
-                background-color: #161A25           
+                background-color: #1A1F2B;
+                color: #A9B1C3;
+                border: 1px solid #313B4D;
             }
             #primaryButton { /* BUY button */
-                color: #28a745; /* Green text */
-                border: 1px solid #12291F; 
+                background-color: #1A1F2B;
+                color: #A9B1C3;
+                border: 1px solid #313B4D;
             }
             #primaryButton:hover {
-                background: #35503A;
-                color: white; /* White text on hover for better contrast */
+                background: #244233;
+                color: #D9F5E4;
+                border: 1px solid #2F7F56;
             }
-            
+
             #dangerButton { /* EXIT button */
-                color: #dc3545; /* Red text */
-                border: 1px solid #12291F;
+                background-color: #1A1F2B;
+                color: #A9B1C3;
+                border: 1px solid #313B4D;
             }
             #dangerButton:hover {
-                background: #D14A45;                
-                color: white; /* White text on hover for better contrast */
+                background: #3A2628;
+                color: #F5DFE0;
+                border: 1px solid #8E4A4E;
             }
             
         """)
@@ -522,4 +535,3 @@ class BuyExitPanel(QWidget):
                 if contract:
                     strikes.append({"strike": data['strike'], "ltp": contract.ltp, "contract": contract})
         return strikes
-

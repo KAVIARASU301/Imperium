@@ -7,30 +7,32 @@ logger = logging.getLogger(__name__)
 
 
 def format_indian_currency(amount: float) -> str:
-    """Format number in Indian currency style (lakhs, crores) without rupee symbol."""
+    """Format number in full Indian comma style as a whole number."""
     if amount == 0:
         return "0"
 
-    abs_amount = abs(amount)
-    sign = "-" if amount < 0 else ""
+    rounded_amount = int(round(amount))
+    sign = "-" if rounded_amount < 0 else ""
+    digits = str(abs(rounded_amount))
 
-    if abs_amount >= 10000000:  # 1 crore
-        crores = abs_amount / 10000000
-        return f"{sign}{crores:.1f}Cr"
-    elif abs_amount >= 100000:  # 1 lakh
-        lakhs = abs_amount / 100000
-        return f"{sign}{lakhs:.1f}L"
-    elif abs_amount >= 1000:  # 1 thousand
-        thousands = abs_amount / 1000
-        return f"{sign}{thousands:.1f}K"
+    if len(digits) > 3:
+        prefix = digits[:-3]
+        suffix = digits[-3:]
+        chunks = []
+        while len(prefix) > 2:
+            chunks.insert(0, prefix[-2:])
+            prefix = prefix[:-2]
+        if prefix:
+            chunks.insert(0, prefix)
+        formatted_integer = f"{','.join(chunks)},{suffix}"
     else:
-        return f"{sign}{abs_amount:,.0f}"
+        formatted_integer = digits
+
+    return f"{sign}{formatted_integer}"
 
 
 class AccountSummaryWidget(QWidget):
-    """
-    A premium account summary widget with a semi-transparent, black and cyan theme.
-    """
+    """A polished account summary card rendered in a compact table layout."""
     pnl_history_requested = Signal()
 
     def __init__(self):
@@ -48,55 +50,65 @@ class AccountSummaryWidget(QWidget):
         self.update_summary()  # Initialize with default zero values
 
     def _setup_ui(self):
-        """Initializes the UI components with a professional grid layout."""
+        """Initializes the UI components in a clean, table-style layout."""
         self.setObjectName("accountSummary")
-        self.setMinimumWidth(280) # Restored to original width
+        self.setMinimumWidth(280)
         self.setCursor(QCursor(Qt.PointingHandCursor))
 
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(15, 15, 15, 15) # Restored to original margins
-        main_layout.setSpacing(0)
+        main_layout.setContentsMargins(6, 6, 6, 6)
+        main_layout.setSpacing(4)
+
+        title_label = QLabel("ACCOUNT SUMMARY")
+        title_label.setObjectName("tableTitle")
+        title_label.setAlignment(Qt.AlignCenter)
+        main_layout.addWidget(title_label)
 
         content_frame = QFrame()
-        content_frame.setObjectName("contentFrame")
-        main_layout.addWidget(content_frame)
+        content_frame.setObjectName("tableFrame")
+        content_frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        main_layout.addWidget(content_frame, 1)
 
         grid_layout = QGridLayout(content_frame)
-        grid_layout.setContentsMargins(0, 0, 0, 0)
-        grid_layout.setSpacing(10) # Restored to original spacing
+        grid_layout.setContentsMargins(1, 1, 1, 1)
+        grid_layout.setHorizontalSpacing(0)
+        grid_layout.setVerticalSpacing(0)
 
-        # Create metrics
-        self.labels['unrealized_pnl'] = self._create_metric_widget(grid_layout, "Unrealized", 0, 0)
-        self.labels['realized_pnl'] = self._create_metric_widget(grid_layout, "Realized", 0, 1)
-        self.labels['used_margin'] = self._create_metric_widget(grid_layout, "Used Margin", 1, 0)
-        self.labels['available_margin'] = self._create_metric_widget(grid_layout, "Available", 1, 1)
-        self.labels['win_rate'] = self._create_metric_widget(grid_layout, "Win Rate", 2, 0)
-        self.labels['trade_count'] = self._create_metric_widget(grid_layout, "Trades", 2, 1)
+        metrics = [
+            ("unrealized_pnl", "Unrealized P&L"),
+            ("realized_pnl", "Realized P&L"),
+            ("used_margin", "Used Margin"),
+            ("available_margin", "Available Margin"),
+            ("win_rate", "Win Rate"),
+            ("trade_count", "Total Trades"),
+        ]
 
-    def _create_metric_widget(self, layout, title_text, row, col):
-        """Factory method for creating a single metric display box."""
-        frame = QFrame()
-        frame.setObjectName("metricFrame")
-        frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        frame.setFixedHeight(53) # 5% height reduction on metric boxes ONLY
+        for row, (key, title) in enumerate(metrics):
+            self.labels[key] = self._create_metric_row(grid_layout, row, title)
 
-        metric_layout = QVBoxLayout(frame)
-        metric_layout.setContentsMargins(5, 5, 5, 6)
-        metric_layout.setSpacing(2)
-        metric_layout.setAlignment(Qt.AlignCenter)
+        grid_layout.setColumnStretch(0, 1)
+        grid_layout.setColumnStretch(1, 1)
+        for row in range(len(metrics)):
+            grid_layout.setRowStretch(row, 1)
+
+    def _create_metric_row(self, layout, row, title_text):
+        """Build one table row consisting of a metric label and value."""
+        name_label = QLabel(title_text)
+        name_label.setObjectName("metricTitleLabel")
+        name_label.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+        name_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
         value_label = QLabel("0")
         value_label.setObjectName("metricValueLabel")
-        value_label.setAlignment(Qt.AlignCenter)
+        value_label.setAlignment(Qt.AlignVCenter | Qt.AlignRight)
+        value_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
-        title_label = QLabel(title_text.upper())
-        title_label.setObjectName("metricTitleLabel")
-        title_label.setAlignment(Qt.AlignCenter)
+        row_style = "metricRow" if row == 0 else "metricRow metricRowBorder"
+        name_label.setProperty("class", row_style)
+        value_label.setProperty("class", row_style)
 
-        metric_layout.addWidget(value_label)
-        metric_layout.addWidget(title_label)
-
-        layout.addWidget(frame, row, col)
+        layout.addWidget(name_label, row, 0)
+        layout.addWidget(value_label, row, 1)
         return value_label
 
     def update_summary(self, unrealized_pnl=0.0, realized_pnl=0.0,
@@ -110,10 +122,10 @@ class AccountSummaryWidget(QWidget):
 
         # P&L Breakdown
         self.labels['unrealized_pnl'].setText(format_indian_currency(unrealized_pnl))
-        self.labels['unrealized_pnl'].setStyleSheet(f"color: {'{profit_color}' if unrealized_pnl >= 0 else '{loss_color}'};")
+        self.labels['unrealized_pnl'].setStyleSheet(f"color: {profit_color if unrealized_pnl >= 0 else loss_color};")
 
         self.labels['realized_pnl'].setText(format_indian_currency(realized_pnl))
-        self.labels['realized_pnl'].setStyleSheet(f"color: {'{profit_color}' if realized_pnl >= 0 else '{loss_color}'};")
+        self.labels['realized_pnl'].setStyleSheet(f"color: {profit_color if realized_pnl >= 0 else loss_color};")
 
         # Margin Details
         self.labels['used_margin'].setText(format_indian_currency(used_margin))
@@ -131,45 +143,53 @@ class AccountSummaryWidget(QWidget):
         self.labels['trade_count'].setStyleSheet(f"color: {neutral_color};")
 
     def _apply_styles(self):
-        """Applies a semi-transparent, high-contrast black and cyan theme."""
+        """Applies a high-contrast dark theme for a modern table presentation."""
         self.setStyleSheet("""
             #accountSummary {
-                background: rgba(0, 0, 0, 0.5);
-                border: 1px solid rgba(13, 115, 119, 0.5);
+                background: qlineargradient(
+                    x1: 0, y1: 0, x2: 1, y2: 1,
+                    stop: 0 rgba(2, 13, 20, 0.93),
+                    stop: 1 rgba(6, 26, 35, 0.93)
+                );
+                border: 1px solid rgba(23, 156, 168, 0.65);
                 border-radius: 12px;
             }
 
-            #contentFrame {
-                
-                background: transparent;
-                border: none;
+            #tableTitle {
+                color: #E3F2FD;
+                font-size: 12px;
+                font-weight: 700;
+                letter-spacing: 1px;
+                padding: 0 0 1px 0;
             }
 
-            #metricFrame {
-                background-color: #041926;
-                border: 1px solid rgba(13, 115, 119, 0.5);
+            #tableFrame {
+                background: rgba(4, 25, 38, 0.75);
+                border: 1px solid rgba(13, 115, 119, 0.55);
                 border-radius: 6px;
             }
 
-            #metricFrame:hover {
-                border-color: rgba(29, 233, 182, 0.6);
+            QLabel[class~="metricRow"] {
+                padding: 4px 8px;
+                background: transparent;
+            }
+
+            QLabel[class~="metricRowBorder"] {
+                border-top: 1px solid rgba(91, 141, 153, 0.28);
             }
 
             #metricTitleLabel {
-                color: #B0BEC5;
-                font-size: 9px;
-                font-weight: 700;
-                letter-spacing: 0.5px;
-                text-transform: uppercase;
-                background: transparent;
+                color: #AFC8D2;
+                font-size: 10px;
+                font-weight: 600;
+                letter-spacing: 0.3px;
             }
 
             #metricValueLabel {
                 color: #FFFFFF;
-                font-size: 15px; /* Scaled down to fit smaller boxes */
+                font-size: 14px;
                 font-weight: 600;
                 font-family: 'Segoe UI', 'Roboto Mono', monospace;
-                background: transparent;
             }
         """)
 

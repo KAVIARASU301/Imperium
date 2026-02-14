@@ -128,7 +128,7 @@ class StrikeLadderWidget(QWidget):
         """Institutional-grade footer with key metrics."""
         self.footer = QWidget()
         self.footer.setObjectName("ladderFooter")
-        self.footer.setFixedHeight(34)
+        self.footer.setFixedHeight(28)
 
         layout = QHBoxLayout(self.footer)
         layout.setContentsMargins(8, 0, 8, 0)

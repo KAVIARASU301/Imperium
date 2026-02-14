@@ -701,10 +701,8 @@ class CVDSingleChartDialog(QDialog):
         self.price_crosshair.hide()
         self.price_plot.addItem(self.price_crosshair)
 
-        # 🔥 Price EMA Legend (top-right corner)
-        self.price_legend = pg.LegendItem(offset=(10, 10))
-        self.price_legend.setParentItem(self.price_plot.plotItem)
-        self.price_legend.anchor((1, 0), (1, 0))  # Top-right
+        # EMA legends intentionally disabled to avoid overlap with chart lines.
+        self.price_legend = None
 
         root.addWidget(self.price_plot, 1)
 
@@ -820,10 +818,8 @@ class CVDSingleChartDialog(QDialog):
         self.x_time_label.hide()
         self.plot.addItem(self.x_time_label, ignoreBounds=True)
 
-        # 🔥 CVD EMA Legend (top-right corner)
-        self.cvd_legend = pg.LegendItem(offset=(10, 10))
-        self.cvd_legend.setParentItem(self.plot.plotItem)
-        self.cvd_legend.anchor((1, 0), (1, 0))  # Top-right
+        # EMA legends intentionally disabled to avoid overlap with chart lines.
+        self.cvd_legend = None
 
         # Connect mouse events
         self.price_plot.scene().sigMouseMoved.connect(self._on_mouse_moved)
@@ -1064,21 +1060,8 @@ class CVDSingleChartDialog(QDialog):
         self._update_ema_legends()
 
     def _update_ema_legends(self):
-        """Update legend visibility based on checkbox state"""
-        self.price_legend.clear()
-        self.cvd_legend.clear()
-
-        if self.ema_checkboxes[10].isChecked():
-            self.price_legend.addItem(self.price_ema10_curve, "EMA 10")
-            self.cvd_legend.addItem(self.cvd_ema10_curve, "EMA 10")
-
-        if self.ema_checkboxes[21].isChecked():
-            self.price_legend.addItem(self.price_ema21_curve, "EMA 21")
-            self.cvd_legend.addItem(self.cvd_ema21_curve, "EMA 21")
-
-        if self.ema_checkboxes[51].isChecked():
-            self.price_legend.addItem(self.price_ema51_curve, "EMA 51")
-            self.cvd_legend.addItem(self.cvd_ema51_curve, "EMA 51")
+        """EMA legends are disabled to keep chart area unobstructed."""
+        return
 
     def _on_focus_mode_changed(self, enabled: bool):
         self.btn_focus.setText("Single Day View" if enabled else "Two Day View")

@@ -495,7 +495,18 @@ class CVDChartWidget(QWidget):
                 else pg.mkPen("#26A69A", width=1.6)
             )
 
-            self.plot.addItem(pg.PlotCurveItem(x, y, pen=pen))
+            # Keep live minute simple: one thin segment from previous close
+            # to the latest tick of current minute (no intra-minute trail).
+            is_live_current_session = (
+                is_current_session and self.live_mode and len(y) >= 2
+            )
+
+            if is_live_current_session:
+                self.plot.addItem(pg.PlotCurveItem(x[:-1], y[:-1], pen=pen))
+                live_pen = pg.mkPen("#26A69A", width=0.8)
+                self.plot.addItem(pg.PlotCurveItem([x[-2], x[-1]], [y[-2], y[-1]], pen=live_pen))
+            else:
+                self.plot.addItem(pg.PlotCurveItem(x, y, pen=pen))
 
             if i == len(sessions) - 1 and len(y) >= 2:
                 last_two_y = y[-2:].tolist()
@@ -614,6 +625,7 @@ class CVDChartWidget(QWidget):
             self.title_label.setText(self.symbol)
 
         self._plot()
+
 
     # ------------------------------------------------------------------
     # Cleanup
