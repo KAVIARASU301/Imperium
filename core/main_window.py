@@ -143,6 +143,8 @@ class ScalperMainWindow(QMainWindow):
         self._init_background_workers()
         self._schedule_trading_day_reset()
 
+        self._publish_status("App startup successful. Initializing live data flows...", 6000, level="success")
+
         if isinstance(self.trader, PaperTradingManager):
             self.trader.order_update.connect(self._on_paper_trade_update)
             self.trader.order_rejected.connect(self._on_paper_order_rejected)
@@ -164,7 +166,7 @@ class ScalperMainWindow(QMainWindow):
         self.live_order_monitor_timer.start(1000)  # 1s polling (safe)
 
         self.restore_window_state()
-        self.statusBar().showMessage("Loading instruments...")
+        self._publish_status("Loading instruments...", 5000, level="action")
 
     def _on_market_data(self, data: list):
         # 1️⃣ CVD FIRST
@@ -481,7 +483,21 @@ class ScalperMainWindow(QMainWindow):
         ):
             status_bar.addPermanentWidget(widget)
 
-        status_bar.showMessage("Ready")
+        status_bar.showMessage("Happy trading! 🚀")
+
+    def _publish_status(self, message: str, timeout_ms: int = 4000, level: str = "info"):
+        icon_map = {
+            "success": "✅",
+            "warning": "⚠️",
+            "error": "❌",
+            "action": "⏳",
+            "info": "ℹ️",
+        }
+        icon = icon_map.get(level, "ℹ️")
+        formatted_message = message if message[:1] in {"✅", "⚠", "❌", "⏳", "ℹ"} else f"{icon} {message}"
+
+        self.statusBar().showMessage(formatted_message, timeout_ms)
+
 
     @staticmethod
     def _footer_separator() -> QFrame:
@@ -1420,7 +1436,7 @@ class ScalperMainWindow(QMainWindow):
             logger.error("No valid symbols found in instrument data. Cannot initialize UI.")
 
         self._refresh_positions()
-        self.statusBar().showMessage("Instruments loaded and settings applied.", 3000)
+        self._publish_status("Instruments loaded successfully.", 4000, level="success")
 
     def _on_instrument_error(self, error: str):
         logger.error(f"Instrument loading failed: {error}")
@@ -1574,7 +1590,7 @@ class ScalperMainWindow(QMainWindow):
                 self.margin_circuit_breaker.record_failure()
                 api_logger.error(f"Margins fetch failed: {e}")
                 if self.margin_circuit_breaker.state == "OPEN":
-                    self.statusBar().showMessage("⚠️ API issues (margins) - using cached data.", 5000)
+                    self._publish_status("API issues (margins) - using cached data.", 5000, level="warning")
         if hasattr(self, 'header'):
             self.header.update_account_info(self.last_successful_user_id, current_balance_to_display)
 
@@ -1612,7 +1628,7 @@ class ScalperMainWindow(QMainWindow):
         message = f"❌ PAPER RMS REJECTED\n{symbol} × {qty}\n\n{reason}"
 
         # Status bar (non-intrusive)
-        self.statusBar().showMessage(message, 7000)
+        self._publish_status(message, 7000, level="error")
 
         # Optional: modal dialog for visibility
         QMessageBox.warning(
@@ -1635,15 +1651,15 @@ class ScalperMainWindow(QMainWindow):
 
     def _on_refresh_completed(self, success: bool):
         if success:
-            self.statusBar().showMessage("Positions refreshed successfully.", 2000)
+            self._publish_status("Positions refreshed successfully.", 2500, level="success")
             logger.info("Position refresh completed successfully via PositionManager.")
         else:
-            self.statusBar().showMessage("Position refresh failed. Check logs.", 3000)
+            self._publish_status("Position refresh failed. Check logs.", 3500, level="warning")
             logger.warning("Position refresh failed via PositionManager.")
 
     def _on_api_error(self, error_message: str):
         logger.error(f"PositionManager reported API error: {error_message}")
-        self.statusBar().showMessage(f"API Error: {error_message}", 5000)
+        self._publish_status(f"API Error: {error_message}", 5000, level="error")
 
     def _on_portfolio_exit_triggered(self, reason: str, pnl: float):
         logger.info(
@@ -2067,11 +2083,11 @@ class ScalperMainWindow(QMainWindow):
         ]
 
         if not positions_to_exit:
-            self.statusBar().showMessage("No valid positions to exit.", 2000)
+            self._publish_status("No valid positions to exit.", 2500, level="warning")
             return
 
-        self.statusBar().showMessage(
-            f"Exiting {len(positions_to_exit)} positions...", 2000
+        self._publish_status(
+            f"Exiting {len(positions_to_exit)} positions...", 2500, level="action"
         )
 
         for pos in positions_to_exit:
@@ -2129,8 +2145,8 @@ class ScalperMainWindow(QMainWindow):
         ]
 
         if not remaining_positions:
-            self.statusBar().showMessage(
-                "All positions exited successfully.", 5000
+            self._publish_status(
+                "All positions exited successfully.", 5000, level="success"
             )
 
             # 🔑 FORCE UI SYNC AFTER BULK EXIT
@@ -2211,7 +2227,7 @@ class ScalperMainWindow(QMainWindow):
         if reply != QMessageBox.StandardButton.Yes:
             return
 
-        self.statusBar().showMessage(f"Exiting position {tradingsymbol}...", 1500)
+        self._publish_status(f"Exiting position {tradingsymbol}...", 2000, level="action")
 
         # --------------------------------------------------
         # Place exit order
@@ -2268,9 +2284,10 @@ class ScalperMainWindow(QMainWindow):
                 else:
                     realized_pnl = (entry_price - exit_price) * filled_qty
 
-                self.statusBar().showMessage(
-                    f"Exit confirmed. Realized P&L: ₹{realized_pnl:,.2f}",
-                    5000
+                self._publish_status(
+                    f"Exit confirmed for {tradingsymbol}. Realized P&L: ₹{realized_pnl:,.2f}",
+                    5000,
+                    level="success"
                 )
                 self._play_sound(success=True)
 
@@ -2279,9 +2296,10 @@ class ScalperMainWindow(QMainWindow):
                     f"Exit order {order_id} for {tradingsymbol} "
                     f"placed but confirmation pending or failed."
                 )
-                self.statusBar().showMessage(
-                    f"Exit order {order_id} placed, confirmation pending.",
-                    5000
+                self._publish_status(
+                    f"Exit order {order_id} placed for {tradingsymbol}; confirmation pending.",
+                    5000,
+                    level="warning"
                 )
                 self._play_sound(success=False)
 
@@ -2394,7 +2412,7 @@ class ScalperMainWindow(QMainWindow):
             QMessageBox.critical(self, "Order Error", "Order quantity is zero. Cannot place order.")
             return
 
-        self.statusBar().showMessage("Placing orders...", 1000)
+        self._publish_status("Placing orders...", 2000, level="action")
         for strike_detail in confirmed_order_details.get('strikes', []):
             contract_to_trade: Optional[Contract] = strike_detail.get('contract')
             if not contract_to_trade or not contract_to_trade.tradingsymbol:
@@ -2468,7 +2486,7 @@ class ScalperMainWindow(QMainWindow):
         self._refresh_positions()
         self._play_sound(success=not failed_orders_info)
         self._show_order_results(successful_orders_info, failed_orders_info)
-        self.statusBar().clearMessage()
+        self._publish_status("Order placement flow completed.", 3000, level="info")
 
     def _show_order_results(self, successful_list: List[Dict], failed_list: List[Dict]):
         if not failed_list:
@@ -2712,10 +2730,10 @@ class ScalperMainWindow(QMainWindow):
                     action_msg = "sold"
 
                 self._play_sound(success=True)
-                self.statusBar().showMessage(
-                    f"Order {order_id} ({action_msg} {filled_quantity} "
-                    f"{contract_to_trade.tradingsymbol} @ {avg_price_from_order:.2f}) successful.",
-                    5000)
+                self._publish_status(
+                    f"Order {order_id} {action_msg} {filled_quantity} {contract_to_trade.tradingsymbol} @ {avg_price_from_order:.2f}.",
+                    5000,
+                    level="success")
                 self._show_order_results(
                     [{'order_id': order_id, 'symbol': contract_to_trade.tradingsymbol}], [])
         else:
@@ -3152,16 +3170,16 @@ class ScalperMainWindow(QMainWindow):
         logger.debug(f"Lot size updated to {num_lots} without refreshing ladder.")
 
     def _refresh_data(self):
-        self.statusBar().showMessage("Refreshing data...", 0)
+        self._publish_status("Refreshing data...", 3000, level="action")
         self._refresh_positions()
         self._refresh_orders()
         self._update_account_info()
-        self.statusBar().showMessage("Data refreshed", 3000)
+        self._publish_status("Data refreshed.", 3000, level="success")
 
     def _refresh_positions(self):
         if not self.trader:
             logger.warning("Kite client not available for position refresh.")
-            self.statusBar().showMessage("API client not set. Cannot refresh positions.", 3000)
+            self._publish_status("API client not set. Cannot refresh positions.", 3500, level="error")
             return
         logger.debug("Attempting to refresh positions from API via PositionManager.")
         self.position_manager.refresh_from_api()
@@ -3194,7 +3212,7 @@ class ScalperMainWindow(QMainWindow):
             logger.info(f"Fetched {len(orders)} orders.")
         except Exception as e:
             logger.error(f"Failed to fetch orders: {e}")
-            self.statusBar().showMessage(f"Failed to fetch orders: {e}", 3000)
+            self._publish_status(f"Failed to fetch orders: {e}", 3500, level="warning")
 
     def _update_performance(self):
         if not self.performance_dialog:
@@ -3317,8 +3335,6 @@ class ScalperMainWindow(QMainWindow):
             self.footer_api_chip.setText(f"API {api_status}")
             self.footer_clock_chip.setText(now.strftime("%H:%M:%S"))
 
-        self.statusBar().showMessage("Ready")
-
     def _get_cached_positions(self) -> List[Position]:
         return self.position_manager.get_all_positions()
 
@@ -3366,7 +3382,7 @@ class ScalperMainWindow(QMainWindow):
         try:
             self.trader.cancel_order(self.trader.VARIETY_REGULAR, order_id)
             logger.info(f"Order {order_id} cancelled for modification.")
-            self.statusBar().showMessage(f"Order {order_id} cancelled. Please enter new order details.", 4000)
+            self._publish_status(f"Order {order_id} cancelled. Please enter new order details.", 4000, level="info")
         except Exception as e:
             logger.warning(f"Failed to cancel order {order_id} for modification, it might have been executed: {e}")
             QMessageBox.information(self, "Order Not Found",
