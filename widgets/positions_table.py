@@ -191,6 +191,22 @@ class PositionsTable(QWidget):
                 if row != self._hovered_row:
                     self._hovered_row = row
                     self.table.setCurrentCell(row, self.SYMBOL_COL)
+            elif event.type() == QEvent.Type.MouseButtonRelease:
+                # A simple click should not keep the table in drag mode;
+                # reset so hover highlighting can continue to update.
+                self._drag_active = False
+
+                # Prevent persistent click-selection; this table uses hover-style highlighting.
+                self.table.clearSelection()
+                if self._hovered_row >= 0 and not self._is_sltp_row(self._hovered_row):
+                    self.table.setCurrentCell(self._hovered_row, self.SYMBOL_COL)
+                else:
+                    self.table.setCurrentCell(-1, -1)
+
+            elif event.type() == QEvent.Type.MouseButtonRelease:
+                # A simple click should not keep the table in drag mode;
+                # reset so hover highlighting can continue to update.
+                self._drag_active = False
 
             elif event.type() == QEvent.Type.Leave:
                 # Explicitly clear visual hover state when mouse exits viewport.
@@ -507,7 +523,7 @@ class PositionsTable(QWidget):
         if sl and sl > 0:
             sl_pnl = abs(avg - sl) * qty
             parts.append(
-                f"<span style='color:#F87171;'>SL</span> "
+                f"<span style='color:#F87171;'>Stop Loss</span> "
                 f"<span style='color:#E5E7EB;'>₹{sl_pnl:,.0f}</span> "
                 f"<span style='color:#9CA3AF;'>@ {sl:.2f}</span>"
             )
@@ -515,7 +531,7 @@ class PositionsTable(QWidget):
         if tp and tp > 0:
             tp_pnl = abs(tp - avg) * qty
             parts.append(
-                f"<span style='color:#34D399;'>Target</span> "
+                f"<span style='color:#34D399;'>Take Profit</span> "
                 f"<span style='color:#E5E7EB;'>₹{tp_pnl:,.0f}</span> "
                 f"<span style='color:#9CA3AF;'>@ {tp:.2f}</span>"
             )
