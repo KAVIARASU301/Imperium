@@ -1,7 +1,8 @@
 # core/utils/instrument_loader.py
 
-"""Robust instrument loader for options trading with caching and retry logic
-Supports both NFO (NIFTY, BANKNIFTY, FINNIFTY) and BFO (SENSEX) exchanges
+"""Robust instrument loader for options trading with caching and retry logic.
+
+Supports filtered index and stock options from NFO exchange.
 """
 
 import logging
@@ -18,14 +19,41 @@ from urllib3.util.retry import Retry
 
 logger = logging.getLogger(__name__)
 
+CACHE_SCHEMA_VERSION = 4
+
+INDEX_SYMBOLS = {"NIFTY", "BANKNIFTY", "FINNIFTY"}
+INDEX_EXPIRY_LIMIT = 4
+STOCK_EXPIRY_LIMIT = 2
+
 ALLOWED_SYMBOLS = {
     "NIFTY",
     "BANKNIFTY",
     "FINNIFTY",
+    # Top NFO stocks (filtered to keep load low)
+    "RELIANCE",
+    "TCS",
+    "HDFCBANK",
+    "ICICIBANK",
+    "INFY",
+    "SBIN",
+    "BHARTIARTL",
+    "LT",
+    "ITC",
+    "HINDUNILVR",
+    "KOTAKBANK",
+    "AXISBANK",
+    "BAJFINANCE",
+    "HCLTECH",
+    "MARUTI",
+    "ASIANPAINT",
+    "SUNPHARMA",
+    "TITAN",
+    "ULTRACEMCO",
+    "NTPC",
 }
 
 class InstrumentLoader(QThread):
-    """Background thread for loading NFO and BFO instruments with robust retry logic and caching"""
+    """Background thread for loading filtered NFO instruments with robust retry logic and caching"""
 
     instruments_loaded = Signal(dict)
     error_occurred = Signal(str)
@@ -72,6 +100,13 @@ class InstrumentLoader(QThread):
             if not cache_time:
                 return False
 
+            cache_version = cache_info.get('schema_version', 1)
+            if cache_version != CACHE_SCHEMA_VERSION:
+                logger.info(
+                    f"Cache schema mismatch ({cache_version} != {CACHE_SCHEMA_VERSION}), refreshing"
+                )
+                return False
+
             # Check if cache is less than 12 hours old
             cache_age = datetime.now() - cache_time
             is_valid = cache_age < timedelta(hours=12)
@@ -110,6 +145,7 @@ class InstrumentLoader(QThread):
             total_instruments = sum(len(data['instruments']) for data in symbol_data.values())
             cache_info: Dict[str, Any] = {
                 'timestamp': datetime.now(),
+                'schema_version': CACHE_SCHEMA_VERSION,
                 'symbols_count': len(symbol_data),
                 'instruments_count': total_instruments
             }
@@ -122,8 +158,8 @@ class InstrumentLoader(QThread):
             logger.error(f"Error saving instruments to cache: {e}")
 
     def process_instruments(self, instruments: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Process raw NFO instruments into organized symbol data (filtered & fast)"""
-        self.progress_update.emit("Processing NFO instruments...")
+        """Process raw exchange instruments into organized symbol data (filtered & fast)"""
+        self.progress_update.emit("Processing instruments...")
         self.loading_progress.emit(70)
 
         symbol_data: Dict[str, Any] = {}
@@ -184,15 +220,31 @@ class InstrumentLoader(QThread):
         self.progress_update.emit("Finalizing instruments...")
         self.loading_progress.emit(90)
 
+        pre_prune_count = sum(len(data["instruments"]) for data in symbol_data.values())
+
         for symbol, data in symbol_data.items():
             if self._stop_requested:
                 raise Exception("Operation cancelled by user")
 
-            data["expiries"] = sorted(data["expiries"])
-            data["strikes"] = sorted(data["strikes"])
+            sorted_expiries = sorted(data["expiries"])
+            expiry_limit = INDEX_EXPIRY_LIMIT if symbol in INDEX_SYMBOLS else STOCK_EXPIRY_LIMIT
+            filtered_expiries = sorted_expiries[:expiry_limit]
+            allowed_expiries = set(filtered_expiries)
 
+            data["expiries"] = filtered_expiries
+            data["instruments"] = [
+                inst for inst in data["instruments"] if inst.get("expiry") in allowed_expiries
+            ]
+            data["strikes"] = sorted({inst["strike"] for inst in data["instruments"]})
+            data["futures"] = [
+                fut for fut in sorted(data["futures"], key=lambda item: item["expiry"])
+                if fut["expiry"] in allowed_expiries
+            ]
+
+        post_prune_count = sum(len(data["instruments"]) for data in symbol_data.values())
         logger.info(
-            f"Processed {len(symbol_data)} symbols from {total_instruments} instruments (filtered)"
+            f"Processed {len(symbol_data)} symbols from {total_instruments} instruments (filtered); "
+            f"options kept after expiry cap: {post_prune_count}/{pre_prune_count}"
         )
 
         return symbol_data
@@ -257,13 +309,13 @@ class InstrumentLoader(QThread):
         return []
 
     def run(self) -> None:
-        """Load ONLY NFO instruments (fast & lightweight)"""
+        """Load filtered NFO instruments (fast & lightweight)."""
         try:
             self.loading_progress.emit(0)
 
             # 1️⃣ Use cache if valid
             if self.is_cache_valid():
-                self.progress_update.emit("Loading cached NFO instruments...")
+                self.progress_update.emit("Loading cached instruments...")
                 self.loading_progress.emit(60)
 
                 cached_symbol_data = self.load_cached_instruments()
@@ -292,7 +344,7 @@ class InstrumentLoader(QThread):
 
         except Exception as e:
             if not self._stop_requested:
-                logger.error(f"NFO InstrumentLoader failed: {e}")
+                logger.error(f"InstrumentLoader failed: {e}")
 
                 cached = self.load_cached_instruments()
                 if cached:
