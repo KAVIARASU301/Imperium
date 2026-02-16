@@ -2934,25 +2934,38 @@ class CVDSingleChartDialog(QDialog):
                 signal_side = active_trade["signal_side"]
                 sl_underlying = active_trade["sl_underlying"]
 
+                favorable_move = (
+                    price_close - active_trade["entry_price"]
+                    if signal_side == "long"
+                    else active_trade["entry_price"] - price_close
+                )
+
+                trail_offset = 0.0
                 if active_trade.get("strategy_type") == "atr_reversal":
-                    favorable_move = (
-                        price_close - active_trade["entry_price"]
-                        if signal_side == "long"
-                        else active_trade["entry_price"] - price_close
-                    )
                     trail_steps = int(max(0.0, favorable_move) // atr_trailing_step_points)
                     if trail_steps > 0:
                         trail_offset = trail_steps * atr_trailing_step_points
-                        new_sl = (
-                            active_trade["entry_price"] - stop_points + trail_offset
-                            if signal_side == "long"
-                            else active_trade["entry_price"] + stop_points - trail_offset
+                elif active_trade.get("strategy_type") in {"ema_cross", "range_breakout"}:
+                    initial_trigger_points = 200.0
+                    incremental_trigger_points = 100.0
+                    trail_step_points = 100.0
+                    if favorable_move >= initial_trigger_points:
+                        trail_steps = 1 + int(
+                            (favorable_move - initial_trigger_points) // incremental_trigger_points
                         )
-                        if signal_side == "long":
-                            sl_underlying = max(sl_underlying, new_sl)
-                        else:
-                            sl_underlying = min(sl_underlying, new_sl)
-                        active_trade["sl_underlying"] = sl_underlying
+                        trail_offset = trail_steps * trail_step_points
+
+                if trail_offset > 0:
+                    new_sl = (
+                        active_trade["entry_price"] - stop_points + trail_offset
+                        if signal_side == "long"
+                        else active_trade["entry_price"] + stop_points - trail_offset
+                    )
+                    if signal_side == "long":
+                        sl_underlying = max(sl_underlying, new_sl)
+                    else:
+                        sl_underlying = min(sl_underlying, new_sl)
+                    active_trade["sl_underlying"] = sl_underlying
 
                 hit_stop = price_close <= sl_underlying if signal_side == "long" else price_close >= sl_underlying
 

@@ -1041,22 +1041,30 @@ class ScalperMainWindow(QMainWindow):
         sl_underlying = active_trade.get("sl_underlying")
         hit_stop = False
 
-        # ATR trend-reversal trades: trail SL in 10-point blocks as the
-        # underlying moves in favor on each minute update.
-        if (
-                strategy_type == "atr_reversal"
-                and stoploss_points > 0
-                and atr_trailing_step_points > 0
-                and entry_underlying > 0
-        ):
+        # Strategy-specific trailing logic based on favorable underlying movement.
+        if stoploss_points > 0 and entry_underlying > 0:
             favorable_move = (
                 price_close - entry_underlying
                 if signal_side == "long"
                 else entry_underlying - price_close
             )
-            trail_steps = int(max(0.0, favorable_move) // atr_trailing_step_points)
-            if trail_steps > 0:
-                trail_offset = trail_steps * atr_trailing_step_points
+
+            trail_offset = 0.0
+            if strategy_type == "atr_reversal" and atr_trailing_step_points > 0:
+                trail_steps = int(max(0.0, favorable_move) // atr_trailing_step_points)
+                if trail_steps > 0:
+                    trail_offset = trail_steps * atr_trailing_step_points
+            elif strategy_type in {"ema_cross", "range_breakout"}:
+                initial_trigger_points = 200.0
+                incremental_trigger_points = 100.0
+                trail_step_points = 100.0
+                if favorable_move >= initial_trigger_points:
+                    trail_steps = 1 + int(
+                        (favorable_move - initial_trigger_points) // incremental_trigger_points
+                    )
+                    trail_offset = trail_steps * trail_step_points
+
+            if trail_offset > 0:
                 new_sl_underlying = (
                     entry_underlying - stoploss_points + trail_offset
                     if signal_side == "long"
