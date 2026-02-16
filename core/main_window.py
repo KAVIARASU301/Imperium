@@ -96,6 +96,7 @@ class ScalperMainWindow(QMainWindow):
         self.active_quick_order_dialog: Optional[QuickOrderDialog] = None
         self.active_order_confirmation_dialog: Optional[OrderConfirmationDialog] = None
         self._auto_confirm_next_panel_order = False
+        self._auto_confirm_next_quick_order = False  # Flag for quick order auto-confirm in automation
         self.positions_dialog = None
         self.performance_dialog = None
         self.order_history_dialog = None
@@ -481,15 +482,15 @@ class ScalperMainWindow(QMainWindow):
         self.footer_clock_chip.setObjectName("footerClockChip")
 
         for widget in (
-            self.footer_mode_chip,
-            self._footer_separator(),
-            self.footer_network_chip,
-            self._footer_separator(),
-            self.footer_market_chip,
-            self._footer_separator(),
-            self.footer_api_chip,
-            self._footer_separator(),
-            self.footer_clock_chip,
+                self.footer_mode_chip,
+                self._footer_separator(),
+                self.footer_network_chip,
+                self._footer_separator(),
+                self.footer_market_chip,
+                self._footer_separator(),
+                self.footer_api_chip,
+                self._footer_separator(),
+                self.footer_clock_chip,
         ):
             status_bar.addPermanentWidget(widget)
 
@@ -507,7 +508,6 @@ class ScalperMainWindow(QMainWindow):
         formatted_message = message if message[:1] in {"✅", "⚠", "❌", "⏳", "ℹ"} else f"{icon} {message}"
 
         self.statusBar().showMessage(formatted_message, timeout_ms)
-
 
     @staticmethod
     def _footer_separator() -> QFrame:
@@ -930,9 +930,29 @@ class ScalperMainWindow(QMainWindow):
             if self.buy_exit_panel.option_type != desired_option_type:
                 self.buy_exit_panel.option_type = desired_option_type
                 self.buy_exit_panel._update_ui_for_option_type()
-            self._auto_confirm_next_panel_order = True
-            self._buy_exact_relative_strike(0)
+
+            # For automation via buy_exit_panel: use panel's CURRENT settings
+            # DO NOT override above/below - respect what user has configured
+            # Panel will select strikes based on its own logic (radio buttons, above/below settings)
+
+            # Build order details directly from the panel with its current settings
+            order_details = self.buy_exit_panel.build_order_details()
+            if order_details and order_details.get('strikes'):
+                # Execute orders directly without showing confirmation dialog
+                symbol = order_details.get('symbol')
+                if symbol and symbol in self.instrument_data:
+                    instrument_lot_quantity = self.instrument_data[symbol].get('lot_size', 1)
+                    num_lots = order_details.get('lot_size', 1)
+                    order_details['total_quantity_per_strike'] = num_lots * instrument_lot_quantity
+                    order_details['product'] = self.settings.get('default_product', 'MIS')
+                    self._execute_orders(order_details)
+                    logger.info("[AUTO] Executed buy_exit_panel order directly without dialog - used panel settings")
+                else:
+                    logger.warning("[AUTO] Symbol data not found for buy_exit_panel order")
+            else:
+                logger.warning("[AUTO] Failed to build order details from buy_exit_panel")
         else:
+            # Direct route: execute single strike order directly
             self._execute_single_strike_order(order_params)
 
         logger.info(
