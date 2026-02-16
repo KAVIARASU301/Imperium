@@ -18,8 +18,14 @@ env/
 /data/
 data/
 data
-logs
+
 
 dist/
 dist
 
+logs
+!/np
+!/pd
+!/pg
+!/=
+!/logging
