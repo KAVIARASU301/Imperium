@@ -1,32 +1,51 @@
-# IDE files
+# ==============================
+# IDE
+# ==============================
 .idea/
+.vscode/
 
-# User data
-user_data/
-
-# Byte-compiled / optimized / DLL files
+# ==============================
+# Python
+# ==============================
 __pycache__/
 *.py[cod]
-*.pyc
+*$py.class
+
+# Virtual Environments
+.venv/
+venv/
+env/
+
+# ==============================
+# Logs
+# ==============================
 logs/
+logging/
 *.log
 
-.venv/
-# Virtual environment
-
-env/
-/data/
-data/
-data
-
-
+# ==============================
+# Build / Packaging
+# ==============================
+build/
 dist/
-dist
+*.spec
+*.egg-info/
+*.egg
 
-logs
-/logging
-logging
-logging/
-/=
+# ==============================
+# OS Files
+# ==============================
+.DS_Store
+Thumbs.db
+
+# ==============================
+# App Runtime Data
+# ==============================
+data/
+user_data/
+
+# ==============================
+# Accidental / Invalid Filenames
+# ==============================
 =
-=/
+/=
