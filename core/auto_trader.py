@@ -10,9 +10,10 @@ import pyqtgraph as pg
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QLabel, QHBoxLayout,
     QPushButton, QWidget, QCheckBox, QSpinBox, QDoubleSpinBox, QComboBox,
-    QFormLayout, QGroupBox
+    QFormLayout, QGroupBox, QColorDialog, QFileDialog
 )
 from PySide6.QtCore import Qt, QTimer, Signal, QEvent, QObject, QThread, QSettings
+from PySide6.QtGui import QColor
 from pyqtgraph import AxisItem, TextItem
 
 from kiteconnect import KiteConnect
@@ -233,6 +234,10 @@ class CVDSingleChartDialog(QDialog):
     ROUTE_BUY_EXIT_PANEL = "buy_exit_panel"
     ROUTE_DIRECT = "direct"
 
+    BG_TARGET_NONE = "none"
+    BG_TARGET_CHART = "chart"
+    BG_TARGET_WINDOW = "window"
+
     def __init__(
             self,
             kite: KiteConnect,
@@ -273,8 +278,18 @@ class CVDSingleChartDialog(QDialog):
         self._last_emitted_signal_key: str | None = None
         self._last_emitted_closed_bar_ts: str | None = None
         self._simulator_results: dict | None = None
+        self._chart_line_color = "#26A69A"
+        self._price_line_color = "#FFE57F"
+        self._confluence_short_color = "#FF4444"
+        self._confluence_long_color = "#00E676"
+        self._chart_line_width = 2.5
+        self._chart_line_opacity = 1.0
+        self._ema_line_opacity = 0.85
+        self._window_bg_image_path = ""
+        self._window_bg_target = self.BG_TARGET_NONE
 
         self.setWindowTitle(f"Auto Trader — {self._display_symbol_for_title(symbol)}")
+        self.setObjectName("autoTraderWindow")
         self.setMinimumSize(1100, 680)
         self.setWindowFlags(
             Qt.Window |
@@ -642,7 +657,7 @@ class CVDSingleChartDialog(QDialog):
         self.simulator_summary_label.setStyleSheet("color: #8A9BA8; font-size: 11px; font-weight: 600;")
         ema_bar.addWidget(self.simulator_summary_label)
 
-        self._build_setup_dialog(compact_combo_style)
+        self._build_setup_dialog(compact_combo_style, compact_spinbox_style)
 
         ema_bar.addWidget(self.btn_focus)
         ema_bar.addWidget(self.btn_export)
@@ -909,6 +924,8 @@ class CVDSingleChartDialog(QDialog):
         self._tick_repaint_timer.setSingleShot(True)
         self._tick_repaint_timer.timeout.connect(self._plot_live_ticks_only)
 
+        self._apply_visual_settings()
+
     # ------------------------------------------------------------------
 
     def _connect_signals(self):
@@ -922,11 +939,12 @@ class CVDSingleChartDialog(QDialog):
                 Qt.QueuedConnection
             )
 
-    def _build_setup_dialog(self, compact_combo_style: str):
+    def _build_setup_dialog(self, compact_combo_style: str, compact_spinbox_style: str):
         self.setup_dialog = QDialog(self)
         self.setup_dialog.setWindowTitle("Auto Trader Setup")
         self.setup_dialog.setModal(False)
-        self.setup_dialog.setMinimumWidth(420)
+        self.setup_dialog.setMinimumWidth(980)
+        self.setup_dialog.setMinimumHeight(620)
         self.setup_dialog.setStyleSheet("""
             QDialog {
                 background: #161A25;
@@ -956,12 +974,20 @@ class CVDSingleChartDialog(QDialog):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(10)
 
+        content_row = QHBoxLayout()
+        content_row.setSpacing(12)
+
+        left_col = QVBoxLayout()
+        left_col.setSpacing(10)
+        right_col = QVBoxLayout()
+        right_col.setSpacing(10)
+
         auto_group = QGroupBox("Automation")
         auto_form = QFormLayout(auto_group)
         auto_form.setLabelAlignment(Qt.AlignLeft)
         auto_form.addRow("Stop Loss", self.automation_stoploss_input)
         auto_form.addRow("Route", self.automation_route_combo)
-        layout.addWidget(auto_group)
+        left_col.addWidget(auto_group)
 
         signal_group = QGroupBox("ATR / Signal")
         signal_form = QFormLayout(signal_group)
@@ -993,7 +1019,7 @@ class CVDSingleChartDialog(QDialog):
         self.setup_atr_marker_filter_combo.setCurrentIndex(self.atr_marker_filter_combo.currentIndex())
         self.setup_atr_marker_filter_combo.currentIndexChanged.connect(self._on_setup_atr_marker_filter_changed)
         signal_form.addRow("ATR Markers", self.setup_atr_marker_filter_combo)
-        layout.addWidget(signal_group)
+        left_col.addWidget(signal_group)
 
         # 🆕 Range Breakout Settings
         breakout_group = QGroupBox("Range Breakout")
@@ -1002,7 +1028,7 @@ class CVDSingleChartDialog(QDialog):
 
         self.range_lookback_input = QSpinBox()
         self.range_lookback_input.setRange(10, 120)
-        self.range_lookback_input.setValue(30)
+        self.range_lookback_input.setValue()
         self.range_lookback_input.setSuffix(" min")
         self.range_lookback_input.setStyleSheet("""
             QSpinBox {
@@ -1040,7 +1066,7 @@ class CVDSingleChartDialog(QDialog):
         )
         self.breakout_switch_mode_combo.currentIndexChanged.connect(self._on_breakout_settings_changed)
         breakout_form.addRow("Breakout vs ATR", self.breakout_switch_mode_combo)
-        layout.addWidget(breakout_group)
+        left_col.addWidget(breakout_group)
 
         simulator_group = QGroupBox("Simulator")
         simulator_layout = QVBoxLayout(simulator_group)
@@ -1051,7 +1077,100 @@ class CVDSingleChartDialog(QDialog):
         simulator_info.setWordWrap(True)
         simulator_info.setStyleSheet("color:#B0B0B0; font-size:11px;")
         simulator_layout.addWidget(simulator_info)
-        layout.addWidget(simulator_group)
+        left_col.addWidget(simulator_group)
+
+        self.hide_simulator_btn_check = QCheckBox("Hide 'Run Simulator' button")
+        self.hide_simulator_btn_check.toggled.connect(self._on_setup_visual_settings_changed)
+        simulator_layout.addWidget(self.hide_simulator_btn_check)
+
+        appearance_group = QGroupBox("Chart Appearance")
+        appearance_form = QFormLayout(appearance_group)
+        appearance_form.setLabelAlignment(Qt.AlignLeft)
+
+        self.chart_line_width_input = QDoubleSpinBox()
+        self.chart_line_width_input.setRange(0.5, 8.0)
+        self.chart_line_width_input.setDecimals(1)
+        self.chart_line_width_input.setSingleStep(0.1)
+        self.chart_line_width_input.setValue(self._chart_line_width)
+        self.chart_line_width_input.setFixedWidth(120)
+        self.chart_line_width_input.setStyleSheet(compact_spinbox_style)
+        self.chart_line_width_input.valueChanged.connect(self._on_setup_visual_settings_changed)
+        appearance_form.addRow("Line Width", self.chart_line_width_input)
+
+        self.chart_line_opacity_input = QDoubleSpinBox()
+        self.chart_line_opacity_input.setRange(0.1, 1.0)
+        self.chart_line_opacity_input.setDecimals(2)
+        self.chart_line_opacity_input.setSingleStep(0.05)
+        self.chart_line_opacity_input.setValue(self._chart_line_opacity)
+        self.chart_line_opacity_input.setFixedWidth(120)
+        self.chart_line_opacity_input.setStyleSheet(compact_spinbox_style)
+        self.chart_line_opacity_input.valueChanged.connect(self._on_setup_visual_settings_changed)
+        appearance_form.addRow("Line Opacity", self.chart_line_opacity_input)
+
+        self.ema_line_opacity_input = QDoubleSpinBox()
+        self.ema_line_opacity_input.setRange(0.1, 1.0)
+        self.ema_line_opacity_input.setDecimals(2)
+        self.ema_line_opacity_input.setSingleStep(0.05)
+        self.ema_line_opacity_input.setValue(self._ema_line_opacity)
+        self.ema_line_opacity_input.setFixedWidth(120)
+        self.ema_line_opacity_input.setStyleSheet(compact_spinbox_style)
+        self.ema_line_opacity_input.valueChanged.connect(self._on_setup_visual_settings_changed)
+        appearance_form.addRow("EMA Opacity", self.ema_line_opacity_input)
+
+        self.chart_line_color_btn = QPushButton("Chart Line Color")
+        self.chart_line_color_btn.clicked.connect(lambda: self._pick_color("chart_line_color_btn", "_chart_line_color"))
+        appearance_form.addRow("CVD Line Color", self.chart_line_color_btn)
+
+        self.price_line_color_btn = QPushButton("Price Line Color")
+        self.price_line_color_btn.clicked.connect(lambda: self._pick_color("price_line_color_btn", "_price_line_color"))
+        appearance_form.addRow("Price Line Color", self.price_line_color_btn)
+
+        self.confluence_short_color_btn = QPushButton("Short Color")
+        self.confluence_short_color_btn.clicked.connect(lambda: self._pick_color("confluence_short_color_btn", "_confluence_short_color"))
+        appearance_form.addRow("Confluence Short", self.confluence_short_color_btn)
+
+        self.confluence_long_color_btn = QPushButton("Long Color")
+        self.confluence_long_color_btn.clicked.connect(lambda: self._pick_color("confluence_long_color_btn", "_confluence_long_color"))
+        appearance_form.addRow("Confluence Long", self.confluence_long_color_btn)
+
+        ema_defaults_row = QHBoxLayout()
+        self.setup_ema_default_checks = {}
+        for period in (10, 21, 51):
+            cb = QCheckBox(str(period))
+            cb.setChecked(period == 51)
+            cb.toggled.connect(self._on_setup_visual_settings_changed)
+            self.setup_ema_default_checks[period] = cb
+            ema_defaults_row.addWidget(cb)
+        ema_defaults_row.addStretch()
+        appearance_form.addRow("Default EMAs", ema_defaults_row)
+
+        self.bg_target_combo = QComboBox()
+        self.bg_target_combo.setFixedWidth(220)
+        self.bg_target_combo.setStyleSheet(compact_combo_style)
+        self.bg_target_combo.addItem("No Background Image", self.BG_TARGET_NONE)
+        self.bg_target_combo.addItem("Apply to Chart", self.BG_TARGET_CHART)
+        self.bg_target_combo.addItem("Apply to Entire Window", self.BG_TARGET_WINDOW)
+        self.bg_target_combo.currentIndexChanged.connect(self._on_setup_visual_settings_changed)
+        appearance_form.addRow("Background Target", self.bg_target_combo)
+
+        bg_row = QHBoxLayout()
+        self.bg_image_label = QLabel("No image selected")
+        self.bg_image_label.setStyleSheet("color:#8A9BA8; font-size:10px;")
+        self.bg_upload_btn = QPushButton("Upload")
+        self.bg_upload_btn.clicked.connect(self._on_pick_background_image)
+        self.bg_clear_btn = QPushButton("Clear")
+        self.bg_clear_btn.clicked.connect(self._on_clear_background_image)
+        bg_row.addWidget(self.bg_image_label, 1)
+        bg_row.addWidget(self.bg_upload_btn)
+        bg_row.addWidget(self.bg_clear_btn)
+        appearance_form.addRow("Background Image", bg_row)
+        right_col.addWidget(appearance_group)
+
+        left_col.addStretch()
+        right_col.addStretch()
+        content_row.addLayout(left_col, 1)
+        content_row.addLayout(right_col, 1)
+        layout.addLayout(content_row, 1)
 
         close_row = QHBoxLayout()
         close_row.addStretch()
@@ -1064,6 +1183,125 @@ class CVDSingleChartDialog(QDialog):
         self.setup_dialog.show()
         self.setup_dialog.raise_()
         self.setup_dialog.activateWindow()
+
+    def _set_color_button(self, btn: QPushButton, color_hex: str):
+        btn.setText(color_hex.upper())
+        btn.setStyleSheet(
+            f"""
+            QPushButton {{
+                background: {color_hex};
+                color: #111;
+                font-weight: 700;
+                border: 1px solid #3A4458;
+                border-radius: 4px;
+                padding: 4px 8px;
+            }}
+            """
+        )
+
+    def _pick_color(self, button_attr: str, color_attr: str):
+        current = getattr(self, color_attr, "#26A69A")
+        picked = QColorDialog.getColor(QColor(current), self, "Select Color")
+        if not picked.isValid():
+            return
+        new_color = picked.name()
+        setattr(self, color_attr, new_color)
+        self._set_color_button(getattr(self, button_attr), new_color)
+        self._apply_visual_settings()
+        self._persist_setup_values()
+
+    def _on_pick_background_image(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Background Image",
+            "",
+            "Images (*.png *.jpg *.jpeg *.bmp *.webp)",
+        )
+        if not file_path:
+            return
+        self._window_bg_image_path = file_path
+        self._update_bg_image_label()
+        self._apply_background_image()
+        self._persist_setup_values()
+
+    def _on_clear_background_image(self):
+        self._window_bg_image_path = ""
+        self._update_bg_image_label()
+        self._apply_background_image()
+        self._persist_setup_values()
+
+    def _update_bg_image_label(self):
+        if not self._window_bg_image_path:
+            self.bg_image_label.setText("No image selected")
+            return
+        self.bg_image_label.setText(self._window_bg_image_path.split('/')[-1])
+
+    def _apply_background_image(self):
+        image_path = self._window_bg_image_path
+        target = self.bg_target_combo.currentData() if hasattr(self, 'bg_target_combo') else self.BG_TARGET_NONE
+        self._window_bg_target = target or self.BG_TARGET_NONE
+
+        # reset to defaults
+        self.setStyleSheet("")
+        self.price_plot.setStyleSheet("")
+        self.plot.setStyleSheet("")
+        self.price_plot.setBackground("#161A25")
+        self.plot.setBackground("#161A25")
+
+        if not image_path or target == self.BG_TARGET_NONE:
+            return
+
+        normalized = image_path.replace('\\', '/')
+        if target == self.BG_TARGET_WINDOW:
+            self.setStyleSheet(
+                f"QDialog#autoTraderWindow {{background-image: url('{normalized}'); background-position: center;}}"
+            )
+        elif target == self.BG_TARGET_CHART:
+            chart_style = f"QWidget {{background-image: url('{normalized}'); background-position: center;}}"
+            self.price_plot.setStyleSheet(chart_style)
+            self.plot.setStyleSheet(chart_style)
+
+    def _on_setup_visual_settings_changed(self, *_):
+        self._apply_visual_settings()
+        self._persist_setup_values()
+
+    def _apply_visual_settings(self):
+        self._chart_line_width = float(self.chart_line_width_input.value())
+        self._chart_line_opacity = float(self.chart_line_opacity_input.value())
+        self._ema_line_opacity = float(self.ema_line_opacity_input.value())
+
+        self.price_prev_curve.setPen(pg.mkPen(self._price_line_color, width=max(1.0, self._chart_line_width - 0.4), style=Qt.DashLine))
+        self.price_today_curve.setPen(pg.mkPen(self._price_line_color, width=self._chart_line_width))
+        self.price_today_tick_curve.setPen(pg.mkPen(self._price_line_color, width=max(0.8, self._chart_line_width - 1.0)))
+
+        self.prev_curve.setPen(pg.mkPen(self._chart_line_color, width=max(1.0, self._chart_line_width - 0.4), style=Qt.DashLine))
+        self.today_curve.setPen(pg.mkPen(self._chart_line_color, width=self._chart_line_width))
+        self.today_tick_curve.setPen(pg.mkPen(self._chart_line_color, width=max(0.8, self._chart_line_width - 1.0)))
+
+        for curve in (self.price_prev_curve, self.price_today_curve, self.price_today_tick_curve, self.prev_curve, self.today_curve, self.today_tick_curve):
+            curve.setOpacity(self._chart_line_opacity)
+
+        self._set_color_button(self.chart_line_color_btn, self._chart_line_color)
+        self._set_color_button(self.price_line_color_btn, self._price_line_color)
+        self._set_color_button(self.confluence_short_color_btn, self._confluence_short_color)
+        self._set_color_button(self.confluence_long_color_btn, self._confluence_long_color)
+
+        for period, cb in self.setup_ema_default_checks.items():
+            self.ema_checkboxes[period].setChecked(cb.isChecked())
+            self._on_ema_toggled(period, cb.isChecked())
+
+        self.simulator_run_btn.setVisible(not self.hide_simulator_btn_check.isChecked())
+        self._apply_background_image()
+        self._recolor_existing_confluence_lines()
+
+    def _recolor_existing_confluence_lines(self):
+        line_map = getattr(self, "_confluence_line_map", {})
+        for key, pairs in line_map.items():
+            is_short = key.startswith("S:")
+            color = self._confluence_short_color if is_short else self._confluence_long_color
+            for _, line in pairs:
+                line.setPen(pg.mkPen(color, width=2.0))
+                line.setOpacity(self._chart_line_opacity)
 
     def _settings_key_prefix(self) -> str:
         return f"chart_setup/{self.instrument_token}"
@@ -1087,6 +1325,13 @@ class CVDSingleChartDialog(QDialog):
         self.setup_atr_marker_filter_combo.blockSignals(True)
         self.range_lookback_input.blockSignals(True)  # 🆕 NEW
         self.breakout_switch_mode_combo.blockSignals(True)
+        self.hide_simulator_btn_check.blockSignals(True)
+        self.chart_line_width_input.blockSignals(True)
+        self.chart_line_opacity_input.blockSignals(True)
+        self.ema_line_opacity_input.blockSignals(True)
+        self.bg_target_combo.blockSignals(True)
+        for cb in self.setup_ema_default_checks.values():
+            cb.blockSignals(True)
 
         self.automate_toggle.setChecked(
             self._settings.value(f"{key_prefix}/enabled", self.automate_toggle.isChecked(), type=bool)
@@ -1160,6 +1405,36 @@ class CVDSingleChartDialog(QDialog):
             fallback_index=2,
         )
 
+        self.hide_simulator_btn_check.setChecked(
+            self._settings.value(f"{key_prefix}/hide_simulator_button", False, type=bool)
+        )
+        self.chart_line_width_input.setValue(
+            self._settings.value(f"{key_prefix}/chart_line_width", self.chart_line_width_input.value(), type=float)
+        )
+        self.chart_line_opacity_input.setValue(
+            self._settings.value(f"{key_prefix}/chart_line_opacity", self.chart_line_opacity_input.value(), type=float)
+        )
+        self.ema_line_opacity_input.setValue(
+            self._settings.value(f"{key_prefix}/ema_line_opacity", self.ema_line_opacity_input.value(), type=float)
+        )
+
+        self._chart_line_color = self._settings.value(f"{key_prefix}/chart_line_color", self._chart_line_color)
+        self._price_line_color = self._settings.value(f"{key_prefix}/price_line_color", self._price_line_color)
+        self._confluence_short_color = self._settings.value(f"{key_prefix}/confluence_short_color", self._confluence_short_color)
+        self._confluence_long_color = self._settings.value(f"{key_prefix}/confluence_long_color", self._confluence_long_color)
+
+        for period, cb in self.setup_ema_default_checks.items():
+            default_enabled = (period == 51)
+            cb.setChecked(self._settings.value(f"{key_prefix}/ema_default_{period}", default_enabled, type=bool))
+
+        self._window_bg_image_path = self._settings.value(f"{key_prefix}/background_image_path", "") or ""
+        self._update_bg_image_label()
+        _apply_combo_value(
+            self.bg_target_combo,
+            self._settings.value(f"{key_prefix}/background_target", self.BG_TARGET_NONE),
+            fallback_index=0,
+        )
+
 
         self.automate_toggle.blockSignals(False)
         self.automation_stoploss_input.blockSignals(False)
@@ -1173,7 +1448,15 @@ class CVDSingleChartDialog(QDialog):
         self.setup_atr_marker_filter_combo.blockSignals(False)
         self.range_lookback_input.blockSignals(False)  # 🆕 NEW
         self.breakout_switch_mode_combo.blockSignals(False)
+        self.hide_simulator_btn_check.blockSignals(False)
+        self.chart_line_width_input.blockSignals(False)
+        self.chart_line_opacity_input.blockSignals(False)
+        self.ema_line_opacity_input.blockSignals(False)
+        self.bg_target_combo.blockSignals(False)
+        for cb in self.setup_ema_default_checks.values():
+            cb.blockSignals(False)
 
+        self._apply_visual_settings()
         self._update_atr_reversal_markers()
         self._on_automation_settings_changed()
 
@@ -1199,6 +1482,18 @@ class CVDSingleChartDialog(QDialog):
             f"{key_prefix}/breakout_switch_mode",
             self._selected_breakout_switch_mode(),
         )
+        self._settings.setValue(f"{key_prefix}/hide_simulator_button", self.hide_simulator_btn_check.isChecked())
+        self._settings.setValue(f"{key_prefix}/chart_line_width", float(self.chart_line_width_input.value()))
+        self._settings.setValue(f"{key_prefix}/chart_line_opacity", float(self.chart_line_opacity_input.value()))
+        self._settings.setValue(f"{key_prefix}/ema_line_opacity", float(self.ema_line_opacity_input.value()))
+        self._settings.setValue(f"{key_prefix}/chart_line_color", self._chart_line_color)
+        self._settings.setValue(f"{key_prefix}/price_line_color", self._price_line_color)
+        self._settings.setValue(f"{key_prefix}/confluence_short_color", self._confluence_short_color)
+        self._settings.setValue(f"{key_prefix}/confluence_long_color", self._confluence_long_color)
+        for period, cb in self.setup_ema_default_checks.items():
+            self._settings.setValue(f"{key_prefix}/ema_default_{period}", cb.isChecked())
+        self._settings.setValue(f"{key_prefix}/background_image_path", self._window_bg_image_path)
+        self._settings.setValue(f"{key_prefix}/background_target", self.bg_target_combo.currentData() or self.BG_TARGET_NONE)
         self._settings.sync()
 
     def _on_automation_settings_changed(self, *_):
@@ -1359,17 +1654,27 @@ class CVDSingleChartDialog(QDialog):
 
     def _on_ema_toggled(self, period: int, checked: bool):
         """Toggle EMA visibility"""
-        opacity = 0.85 if checked else 0.0
+        opacity = self._ema_line_opacity if checked else 0.0
 
         if period == 10:
-            self.price_ema10_curve.setOpacity(opacity if checked else 0)
-            self.cvd_ema10_curve.setOpacity(0.7 if checked else 0)
+            self.price_ema10_curve.setOpacity(opacity)
+            self.cvd_ema10_curve.setOpacity(opacity)
         elif period == 21:
-            self.price_ema21_curve.setOpacity(opacity if checked else 0)
-            self.cvd_ema21_curve.setOpacity(0.7 if checked else 0)
+            self.price_ema21_curve.setOpacity(opacity)
+            self.cvd_ema21_curve.setOpacity(opacity)
         elif period == 51:
-            self.price_ema51_curve.setOpacity(opacity if checked else 0)
-            self.cvd_ema51_curve.setOpacity(0.7 if checked else 0)
+            self.price_ema51_curve.setOpacity(opacity)
+            self.cvd_ema51_curve.setOpacity(opacity)
+
+        if hasattr(self, "setup_ema_default_checks") and period in self.setup_ema_default_checks:
+            setup_cb = self.setup_ema_default_checks[period]
+            if setup_cb.isChecked() != checked:
+                setup_cb.blockSignals(True)
+                setup_cb.setChecked(checked)
+                setup_cb.blockSignals(False)
+
+        if hasattr(self, "chart_line_width_input"):
+            self._persist_setup_values()
 
         # Update legends
         self._update_ema_legends()
@@ -2280,15 +2585,16 @@ class CVDSingleChartDialog(QDialog):
 
             for plot in (self.price_plot, self.plot):
                 line = pg.InfiniteLine(pos=x, angle=90, movable=False, pen=pen)
+                line.setOpacity(self._chart_line_opacity)
                 line.setZValue(-10)
                 plot.addItem(line)
                 pairs.append((plot, line))
 
             self._confluence_line_map[key] = pairs
 
-        # Use consistent signal colors across all strategies
-        short_color = "#FF4444"  # Red for SHORT
-        long_color = "#00E676"  # Green for LONG
+        # Use customizable signal colors across all strategies
+        short_color = self._confluence_short_color
+        long_color = self._confluence_long_color
 
         for idx in np.where(short_mask)[0]:
             key = f"S:{idx}"
