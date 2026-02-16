@@ -1748,6 +1748,7 @@ class CVDSingleChartDialog(QDialog):
         self.all_price_data = []
         self.all_price_high_data = []
         self.all_price_low_data = []
+        self.all_volume_data = []  # 🆕 NEW - Store volume data
         self._last_plot_x_indices = []
 
         x_offset = 0
@@ -1765,6 +1766,8 @@ class CVDSingleChartDialog(QDialog):
             price_y_raw = df_price_sess["close"].values
             price_high_raw = df_price_sess["high"].values
             price_low_raw = df_price_sess["low"].values
+            volume_raw = df_price_sess["volume"].values if "volume" in df_price_sess.columns else np.ones_like(
+                price_y_raw)  # 🆕 NEW
 
             # Rebasing logic for CVD
             if i == 0 and len(sessions) == 2 and not self.btn_focus.isChecked():
@@ -1803,6 +1806,7 @@ class CVDSingleChartDialog(QDialog):
             self.all_price_data.extend(price_y.tolist())
             self.all_price_high_data.extend(price_high_raw.tolist())
             self.all_price_low_data.extend(price_low_raw.tolist())
+            self.all_volume_data.extend(volume_raw.tolist())  # 🆕 NEW
 
             # Plot CVD
             if i == 0 and len(sessions) == 2:
@@ -2042,6 +2046,26 @@ class CVDSingleChartDialog(QDialog):
         )
 
         # ----------------------------------------------------------
+        # STRATEGY 4: RANGE BREAKOUT 🆕 NEW
+        # ----------------------------------------------------------
+        price_high = np.array(self.all_price_high_data, dtype=float)
+        price_low = np.array(self.all_price_low_data, dtype=float)
+        volume_data = np.array(self.all_volume_data, dtype=float)
+
+        short_breakout, long_breakout, range_highs, range_lows = \
+            self.strategy_detector.detect_range_breakout_strategy(
+                price_high=price_high,
+                price_low=price_low,
+                price_close=price_data,
+                price_ema10=price_ema10,
+                cvd_data=cvd_data,
+                cvd_ema10=cvd_ema10,
+                volume=volume_data,
+                range_lookback_minutes=self.range_lookback_input.value(),
+                breakout_threshold_multiplier=1.5
+            )
+
+        # ----------------------------------------------------------
         # Combine signals based on selected filter
         # ----------------------------------------------------------
         signal_filter = self._selected_signal_filter()
@@ -2056,14 +2080,19 @@ class CVDSingleChartDialog(QDialog):
             long_mask = long_ema_cross
             signal_label = "ema_cvd_cross"
 
+        elif signal_filter == self.SIGNAL_FILTER_BREAKOUT_ONLY:  # 🆕 NEW
+            short_mask = short_breakout
+            long_mask = long_breakout
+            signal_label = "range_breakout"
+
         elif signal_filter == self.SIGNAL_FILTER_OTHERS:
             short_mask = short_divergence
             long_mask = long_divergence
             signal_label = "atr_cvd_divergence"
 
         else:  # SIGNAL_FILTER_ALL
-            short_mask = short_atr_reversal | short_ema_cross | short_divergence
-            long_mask = long_atr_reversal | long_ema_cross | long_divergence
+            short_mask = short_atr_reversal | short_ema_cross | short_divergence | short_breakout  # 🆕 Added breakout
+            long_mask = long_atr_reversal | long_ema_cross | long_divergence | long_breakout  # 🆕 Added breakout
             signal_label = "all"
 
         # Ensure array alignment
@@ -2092,15 +2121,23 @@ class CVDSingleChartDialog(QDialog):
 
             self._confluence_line_map[key] = pairs
 
+        # 🆕 Determine colors based on signal type
+        if signal_filter == self.SIGNAL_FILTER_BREAKOUT_ONLY:
+            short_color = "#FFD700"  # Yellow for breakout SHORT
+            long_color = "#FFD700"  # Yellow for breakout LONG
+        else:
+            short_color = "#FF4444"  # Red for regular SHORT
+            long_color = "#00E676"  # Green for regular LONG
+
         for idx in np.where(short_mask)[0]:
             key = f"S:{idx}"
             new_keys.add(key)
-            _add_line(key, float(x_arr[idx]), "#FF4444")
+            _add_line(key, float(x_arr[idx]), short_color)
 
         for idx in np.where(long_mask)[0]:
             key = f"L:{idx}"
             new_keys.add(key)
-            _add_line(key, float(x_arr[idx]), "#00E676")
+            _add_line(key, float(x_arr[idx]), long_color)
 
         # Remove obsolete lines
         obsolete = set(self._confluence_line_map.keys()) - new_keys
