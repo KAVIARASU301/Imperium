@@ -1193,6 +1193,12 @@ class CVDSingleChartDialog(QDialog):
         """Slot — always called on the GUI thread via queued signal connection."""
         ts = datetime.now()
 
+        # Freeze live-dot motion outside market hours.
+        # Some feeds keep pushing ticks after 15:30; if we keep updating the
+        # timestamp, the blinking dot drifts right and creates empty chart space.
+        if ts.time() < TRADING_START or ts.time() > TRADING_END:
+            return
+
         # Align live tick CVD level with historical curve to avoid visual jump.
         if self._live_cvd_offset is None:
             if self._current_session_last_cvd_value is not None:
