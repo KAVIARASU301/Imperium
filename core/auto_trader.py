@@ -272,6 +272,7 @@ class CVDSingleChartDialog(QDialog):
         self._confluence_lines: list = []  # InfiniteLine items added to both plots
         self._last_emitted_signal_key: str | None = None
         self._last_emitted_closed_bar_ts: str | None = None
+        self._simulator_results: dict | None = None
 
         self.setWindowTitle(f"Auto Trader — {self._display_symbol_for_title(symbol)}")
         self.setMinimumSize(1100, 680)
@@ -446,6 +447,23 @@ class CVDSingleChartDialog(QDialog):
         self.automate_toggle.setStyleSheet(compact_toggle_style)
         self.automate_toggle.toggled.connect(self._on_automation_settings_changed)
 
+        self.simulator_run_btn = QPushButton("Run Simulator")
+        self.simulator_run_btn.setFixedHeight(28)
+        self.simulator_run_btn.setMinimumWidth(120)
+        self.simulator_run_btn.setStyleSheet("""
+            QPushButton {
+                background:#212635;
+                border:1px solid #3A4458;
+                border-radius:4px;
+                padding:4px 10px;
+                color:#9CCAF4;
+                font-weight:600;
+            }
+            QPushButton:hover { border: 1px solid #5B9BD5; }
+            QPushButton:pressed { background:#1B1F2B; }
+        """)
+        self.simulator_run_btn.clicked.connect(self._on_simulator_run_clicked)
+
         self.automation_stoploss_input = QSpinBox()
         self.automation_stoploss_input.setRange(1, 1000)
         self.automation_stoploss_input.setValue(50)
@@ -463,6 +481,7 @@ class CVDSingleChartDialog(QDialog):
         self.automation_route_combo.currentIndexChanged.connect(self._on_automation_settings_changed)
 
         top_bar.addWidget(self.automate_toggle)
+        top_bar.addWidget(self.simulator_run_btn)
 
         self.setup_btn = QPushButton("Setup")
         self.setup_btn.setFixedHeight(28)
@@ -619,6 +638,10 @@ class CVDSingleChartDialog(QDialog):
         self.atr_marker_filter_combo.currentIndexChanged.connect(self._on_atr_marker_filter_changed)
         ema_bar.addWidget(self.atr_marker_filter_combo)
 
+        self.simulator_summary_label = QLabel("Simulator: click Run Simulator")
+        self.simulator_summary_label.setStyleSheet("color: #8A9BA8; font-size: 11px; font-weight: 600;")
+        ema_bar.addWidget(self.simulator_summary_label)
+
         self._build_setup_dialog(compact_combo_style)
 
         ema_bar.addWidget(self.btn_focus)
@@ -682,6 +705,46 @@ class CVDSingleChartDialog(QDialog):
         )
         self.price_plot.addItem(self.price_atr_above_markers)
         self.price_plot.addItem(self.price_atr_below_markers)
+
+        self.sim_taken_long_markers = pg.ScatterPlotItem(
+            size=12,
+            symbol="star",
+            brush=pg.mkBrush("#00E676"),
+            pen=pg.mkPen("#003820", width=1.0),
+        )
+        self.sim_taken_short_markers = pg.ScatterPlotItem(
+            size=12,
+            symbol="star",
+            brush=pg.mkBrush("#FF5252"),
+            pen=pg.mkPen("#4A0E0E", width=1.0),
+        )
+        self.sim_exit_win_markers = pg.ScatterPlotItem(
+            size=10,
+            symbol="o",
+            brush=pg.mkBrush("#FFD54F"),
+            pen=pg.mkPen("#FFFFFF", width=0.9),
+        )
+        self.sim_exit_loss_markers = pg.ScatterPlotItem(
+            size=10,
+            symbol="o",
+            brush=pg.mkBrush("#EF5350"),
+            pen=pg.mkPen("#FFFFFF", width=0.9),
+        )
+        self.sim_skipped_markers = pg.ScatterPlotItem(
+            size=10,
+            symbol="x",
+            brush=pg.mkBrush("#B0BEC5"),
+            pen=pg.mkPen("#ECEFF1", width=1.1),
+        )
+        for marker in (
+                self.sim_taken_long_markers,
+                self.sim_taken_short_markers,
+                self.sim_exit_win_markers,
+                self.sim_exit_loss_markers,
+                self.sim_skipped_markers,
+        ):
+            marker.setZValue(20)
+            self.price_plot.addItem(marker)
 
         # 🔥 INSTITUTIONAL-GRADE PRICE EMAS
         self.price_ema10_curve = pg.PlotCurveItem(
@@ -979,6 +1042,17 @@ class CVDSingleChartDialog(QDialog):
         breakout_form.addRow("Breakout vs ATR", self.breakout_switch_mode_combo)
         layout.addWidget(breakout_group)
 
+        simulator_group = QGroupBox("Simulator")
+        simulator_layout = QVBoxLayout(simulator_group)
+        simulator_info = QLabel(
+            "Simulator uses the same entry/exit rules as live automation.\n"
+            "Click 'Run Simulator' in the chart toolbar to compute results."
+        )
+        simulator_info.setWordWrap(True)
+        simulator_info.setStyleSheet("color:#B0B0B0; font-size:11px;")
+        simulator_layout.addWidget(simulator_info)
+        layout.addWidget(simulator_group)
+
         close_row = QHBoxLayout()
         close_row.addStretch()
         close_btn = QPushButton("Close")
@@ -1086,6 +1160,7 @@ class CVDSingleChartDialog(QDialog):
             fallback_index=2,
         )
 
+
         self.automate_toggle.blockSignals(False)
         self.automation_stoploss_input.blockSignals(False)
         self.automation_route_combo.blockSignals(False)
@@ -1173,6 +1248,31 @@ class CVDSingleChartDialog(QDialog):
         self._persist_setup_values()
         # Force reload to apply new range lookback
         self._load_and_plot(force=True)
+
+    def _on_simulator_run_clicked(self):
+        x_arr = getattr(self, "_latest_sim_x_arr", None)
+        short_mask = getattr(self, "_latest_sim_short_mask", None)
+        long_mask = getattr(self, "_latest_sim_long_mask", None)
+        if x_arr is None or short_mask is None or long_mask is None:
+            self._set_simulator_summary_text("Simulator: no plotted signals yet", "#FFA726")
+            return
+        self._update_simulator_overlay(x_arr=x_arr, short_mask=short_mask, long_mask=long_mask)
+
+    def _clear_simulation_markers(self):
+        for marker in (
+                self.sim_taken_long_markers,
+                self.sim_taken_short_markers,
+                self.sim_exit_win_markers,
+                self.sim_exit_loss_markers,
+                self.sim_skipped_markers,
+        ):
+            marker.clear()
+
+    def _set_simulator_summary_text(self, text: str, color: str = "#8A9BA8"):
+        self.simulator_summary_label.setText(text)
+        self.simulator_summary_label.setStyleSheet(
+            f"color: {color}; font-size: 11px; font-weight: 600;"
+        )
 
     def _selected_signal_filter(self) -> str:
         return self.signal_filter_combo.currentData() or self.SIGNAL_FILTER_ALL
@@ -1773,6 +1873,7 @@ class CVDSingleChartDialog(QDialog):
         self.price_atr_below_markers.clear()
         self.cvd_atr_above_markers.clear()
         self.cvd_atr_below_markers.clear()
+        self._clear_simulation_markers()
         self._clear_confluence_lines()
 
         # Clear EMA curves
@@ -2205,6 +2306,10 @@ class CVDSingleChartDialog(QDialog):
                 plot.removeItem(line)
             del self._confluence_line_map[key]
 
+        self._latest_sim_x_arr = np.array(x_arr, dtype=float)
+        self._latest_sim_short_mask = np.array(short_mask, dtype=bool)
+        self._latest_sim_long_mask = np.array(long_mask, dtype=bool)
+
         # ----------------------------------------------------------
         # AUTOMATION signal emission (existing code)
         # ----------------------------------------------------------
@@ -2253,6 +2358,214 @@ class CVDSingleChartDialog(QDialog):
         }
 
         QTimer.singleShot(0, lambda p=payload: self.automation_signal.emit(p))
+
+    def _update_simulator_overlay(self, x_arr: np.ndarray, short_mask: np.ndarray, long_mask: np.ndarray):
+        if not len(x_arr) or not self.all_price_data:
+            self._simulator_results = None
+            self._clear_simulation_markers()
+            self._set_simulator_summary_text("Simulator: waiting for data", "#FFA726")
+            return
+
+        results = self._run_trade_simulation(x_arr=x_arr, short_mask=short_mask, long_mask=long_mask)
+        self._simulator_results = results
+
+        self.sim_taken_long_markers.setData(results["taken_long_x"], results["taken_long_y"])
+        self.sim_taken_short_markers.setData(results["taken_short_x"], results["taken_short_y"])
+        self.sim_exit_win_markers.setData(results["exit_win_x"], results["exit_win_y"])
+        self.sim_exit_loss_markers.setData(results["exit_loss_x"], results["exit_loss_y"])
+        self.sim_skipped_markers.setData(results["skipped_x"], results["skipped_y"])
+
+        points = results["total_points"]
+        color = "#66BB6A" if points >= 0 else "#EF5350"
+        summary = (
+            f"Sim: Trades {results['trades']} | Skipped {results['skipped']} | "
+            f"Wins {results['wins']} / Losses {results['losses']} | Pts {points:+.2f}"
+        )
+        self._set_simulator_summary_text(summary, color)
+
+    def _run_trade_simulation(self, x_arr: np.ndarray, short_mask: np.ndarray, long_mask: np.ndarray) -> dict:
+        length = min(
+            len(x_arr), len(short_mask), len(long_mask),
+            len(self.all_price_data), len(self.all_cvd_data),
+            len(self.all_price_high_data), len(self.all_price_low_data),
+            len(self.all_timestamps),
+        )
+        if length <= 0:
+            return {
+                "taken_long_x": [], "taken_long_y": [], "taken_short_x": [], "taken_short_y": [],
+                "exit_win_x": [], "exit_win_y": [], "exit_loss_x": [], "exit_loss_y": [],
+                "skipped_x": [], "skipped_y": [], "total_points": 0.0,
+                "trades": 0, "wins": 0, "losses": 0, "skipped": 0,
+            }
+
+        x_arr = np.array(x_arr[:length], dtype=float)
+        short_mask = np.array(short_mask[:length], dtype=bool)
+        long_mask = np.array(long_mask[:length], dtype=bool)
+        close = np.array(self.all_price_data[:length], dtype=float)
+        high = np.array(self.all_price_high_data[:length], dtype=float)
+        low = np.array(self.all_price_low_data[:length], dtype=float)
+        cvd_close = np.array(self.all_cvd_data[:length], dtype=float)
+
+        ema10 = self._calculate_ema(close, 10)
+        ema51 = self._calculate_ema(close, 51)
+        cvd_ema10 = self._calculate_ema(cvd_close, 10)
+        cvd_ema51 = self._calculate_ema(cvd_close, 51)
+
+        stop_points = float(max(0.1, self.automation_stoploss_input.value()))
+        signal_filter = self._selected_signal_filter()
+        strategy_type = {
+            self.SIGNAL_FILTER_EMA_CROSS_ONLY: "ema_cross",
+            self.SIGNAL_FILTER_OTHERS: "atr_divergence",
+            self.SIGNAL_FILTER_BREAKOUT_ONLY: "range_breakout",
+        }.get(signal_filter, "atr_reversal")
+
+        result = {
+            "taken_long_x": [], "taken_long_y": [], "taken_short_x": [], "taken_short_y": [],
+            "exit_win_x": [], "exit_win_y": [], "exit_loss_x": [], "exit_loss_y": [],
+            "skipped_x": [], "skipped_y": [], "total_points": 0.0,
+            "trades": 0, "wins": 0, "losses": 0, "skipped": 0,
+        }
+
+        active_trade = None
+        stack_window_minutes = 15.0
+        y_offset = np.maximum((high - low) * 0.2, 1.0)
+
+        def _close_trade(idx: int):
+            nonlocal active_trade
+            if not active_trade:
+                return
+            pnl = close[idx] - active_trade["entry_price"] if active_trade["signal_side"] == "long" else active_trade["entry_price"] - close[idx]
+            result["total_points"] += float(pnl)
+            if pnl > 0:
+                result["wins"] += 1
+                result["exit_win_x"].append(float(x_arr[idx]))
+                result["exit_win_y"].append(float(close[idx]))
+            else:
+                result["losses"] += 1
+                result["exit_loss_x"].append(float(x_arr[idx]))
+                result["exit_loss_y"].append(float(close[idx]))
+            active_trade = None
+
+        for idx in range(length):
+            ts = self.all_timestamps[idx]
+            if ts.time() >= time(15, 0):
+                if active_trade:
+                    _close_trade(idx)
+                continue
+
+            if active_trade:
+                price_close = close[idx]
+                signal_side = active_trade["signal_side"]
+                sl_underlying = active_trade["sl_underlying"]
+                hit_stop = price_close <= sl_underlying if signal_side == "long" else price_close >= sl_underlying
+
+                prev_price = active_trade.get("last_price_close")
+                prev_ema10 = active_trade.get("last_ema10")
+                prev_ema51 = active_trade.get("last_ema51")
+                prev_cvd = active_trade.get("last_cvd_close")
+                prev_cvd_ema10 = active_trade.get("last_cvd_ema10")
+                prev_cvd_ema51 = active_trade.get("last_cvd_ema51")
+
+                has_price_ema10 = all(v is not None for v in (prev_price, prev_ema10)) and ema10[idx] > 0
+                has_price_ema51 = all(v is not None for v in (prev_price, prev_ema51)) and ema51[idx] > 0
+                has_cvd_ema10 = all(v is not None for v in (prev_cvd, prev_cvd_ema10)) and cvd_ema10[idx] != 0
+                has_cvd_ema51 = all(v is not None for v in (prev_cvd, prev_cvd_ema51)) and cvd_ema51[idx] != 0
+
+                price_cross_above_ema10 = has_price_ema10 and prev_price <= prev_ema10 and price_close > ema10[idx]
+                price_cross_below_ema10 = has_price_ema10 and prev_price >= prev_ema10 and price_close < ema10[idx]
+                price_cross_above_ema51 = has_price_ema51 and prev_price <= prev_ema51 and price_close > ema51[idx]
+                price_cross_below_ema51 = has_price_ema51 and prev_price >= prev_ema51 and price_close < ema51[idx]
+                cvd_cross_above_ema10 = has_cvd_ema10 and prev_cvd <= prev_cvd_ema10 and cvd_close[idx] > cvd_ema10[idx]
+                cvd_cross_below_ema10 = has_cvd_ema10 and prev_cvd >= prev_cvd_ema10 and cvd_close[idx] < cvd_ema10[idx]
+                cvd_cross_above_ema51 = has_cvd_ema51 and prev_cvd <= prev_cvd_ema51 and cvd_close[idx] > cvd_ema51[idx]
+                cvd_cross_below_ema51 = has_cvd_ema51 and prev_cvd >= prev_cvd_ema51 and cvd_close[idx] < cvd_ema51[idx]
+
+                exit_now = False
+                if hit_stop:
+                    exit_now = True
+                elif strategy_type == "ema_cross":
+                    exit_now = (signal_side == "long" and cvd_cross_below_ema10) or (signal_side == "short" and cvd_cross_above_ema10)
+                elif strategy_type == "atr_divergence":
+                    exit_now = (signal_side == "long" and price_cross_above_ema51) or (signal_side == "short" and price_cross_below_ema51)
+                elif strategy_type == "range_breakout":
+                    exit_now = (signal_side == "long" and (price_cross_below_ema10 or price_cross_below_ema51)) or (signal_side == "short" and (price_cross_above_ema10 or price_cross_above_ema51))
+                else:
+                    exit_now = (signal_side == "long" and (price_cross_above_ema51 or cvd_cross_above_ema51)) or (signal_side == "short" and (price_cross_below_ema51 or cvd_cross_below_ema51))
+
+                if exit_now:
+                    _close_trade(idx)
+
+                if active_trade:
+                    active_trade["last_price_close"] = float(close[idx])
+                    active_trade["last_ema10"] = float(ema10[idx])
+                    active_trade["last_ema51"] = float(ema51[idx])
+                    active_trade["last_cvd_close"] = float(cvd_close[idx])
+                    active_trade["last_cvd_ema10"] = float(cvd_ema10[idx])
+                    active_trade["last_cvd_ema51"] = float(cvd_ema51[idx])
+
+            candidate_short = bool(short_mask[idx])
+            candidate_long = bool(long_mask[idx])
+            if candidate_short and candidate_long:
+                continue
+            if not (candidate_short or candidate_long):
+                continue
+
+            if ts.time() < time(9, 20) or ts.time() >= time(15, 0):
+                continue
+            if self._is_chop_regime(idx):
+                continue
+
+            signal_side = "short" if candidate_short else "long"
+
+            if active_trade:
+                if active_trade["signal_side"] == signal_side:
+                    last_signal_time = active_trade.get("signal_timestamp")
+                    elapsed_min = 0.0
+                    if last_signal_time:
+                        elapsed_min = (ts - last_signal_time).total_seconds() / 60.0
+                    if elapsed_min < stack_window_minutes:
+                        result["skipped"] += 1
+                        result["skipped_x"].append(float(x_arr[idx]))
+                        result["skipped_y"].append(float((high[idx] + y_offset[idx]) if signal_side == "short" else (low[idx] - y_offset[idx])))
+                        continue
+                else:
+                    _close_trade(idx)
+
+            entry_price = float(close[idx])
+            sl_underlying = entry_price - stop_points if signal_side == "long" else entry_price + stop_points
+            active_trade = {
+                "signal_side": signal_side,
+                "signal_timestamp": ts,
+                "entry_price": entry_price,
+                "sl_underlying": sl_underlying,
+                "last_price_close": entry_price,
+                "last_ema10": float(ema10[idx]),
+                "last_ema51": float(ema51[idx]),
+                "last_cvd_close": float(cvd_close[idx]),
+                "last_cvd_ema10": float(cvd_ema10[idx]),
+                "last_cvd_ema51": float(cvd_ema51[idx]),
+            }
+
+            if signal_side == "long":
+                result["taken_long_x"].append(float(x_arr[idx]))
+                result["taken_long_y"].append(entry_price)
+            else:
+                result["taken_short_x"].append(float(x_arr[idx]))
+                result["taken_short_y"].append(entry_price)
+            result["trades"] += 1
+
+            if active_trade:
+                active_trade["last_price_close"] = float(close[idx])
+                active_trade["last_ema10"] = float(ema10[idx])
+                active_trade["last_ema51"] = float(ema51[idx])
+                active_trade["last_cvd_close"] = float(cvd_close[idx])
+                active_trade["last_cvd_ema10"] = float(cvd_ema10[idx])
+                active_trade["last_cvd_ema51"] = float(cvd_ema51[idx])
+
+        if active_trade:
+            _close_trade(length - 1)
+
+        return result
 
     def _build_slope_direction_masks(self, series: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """
@@ -2351,6 +2664,7 @@ class CVDSingleChartDialog(QDialog):
         self.price_atr_below_markers.clear()
         self.cvd_atr_above_markers.clear()
         self.cvd_atr_below_markers.clear()
+        self._clear_simulation_markers()
         self.cvd_ema10_curve.clear()
         self.cvd_ema21_curve.clear()
         self.cvd_ema51_curve.clear()

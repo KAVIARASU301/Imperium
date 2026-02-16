@@ -878,6 +878,8 @@ class ScalperMainWindow(QMainWindow):
             strategy_type = "ema_cross"
         elif signal_type == "atr_divergence":
             strategy_type = "atr_divergence"
+        elif signal_type == "range_breakout":
+            strategy_type = "range_breakout"
         else:
             strategy_type = "atr_reversal"
         if entry_price <= 0:
@@ -1057,6 +1059,11 @@ class ScalperMainWindow(QMainWindow):
                 exit_reason = "AUTO_EMA51_CROSS"
             elif signal_side == "short" and price_cross_below_ema51:
                 exit_reason = "AUTO_EMA51_CROSS"
+        elif strategy_type == "range_breakout":
+            if signal_side == "long" and (price_cross_below_ema10 or price_cross_below_ema51):
+                exit_reason = "AUTO_BREAKOUT_EXIT"
+            elif signal_side == "short" and (price_cross_above_ema10 or price_cross_above_ema51):
+                exit_reason = "AUTO_BREAKOUT_EXIT"
         else:  # atr_reversal
             if signal_side == "long" and (price_cross_above_ema51 or cvd_cross_above_ema51):
                 exit_reason = "AUTO_ATR_REVERSAL_EXIT"
