@@ -2,6 +2,7 @@
 import logging
 import os
 import math
+import json
 from pathlib import Path
 from typing import Dict, List, Optional, Union
 from datetime import datetime, timedelta, time, date
@@ -120,6 +121,12 @@ class ScalperMainWindow(QMainWindow):
         self.trade_ledger = TradeLedger(mode=self.trading_mode)
         self._cvd_automation_positions: Dict[int, dict] = {}
         self._cvd_automation_market_state: Dict[int, dict] = {}
+        self._cvd_automation_state_file = (
+            Path.home()
+            / ".options_badger"
+            / f"cvd_automation_state_{self.trading_mode}.json"
+        )
+        self._load_cvd_automation_state()
 
         # CVD monitor symbols (v1 – fixed indices)
         self.cvd_symbols = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"]
@@ -794,7 +801,8 @@ class ScalperMainWindow(QMainWindow):
         """Handle CVD single chart dialog close."""
         if token in self.cvd_single_chart_dialogs:
             del self.cvd_single_chart_dialogs[token]
-        self._cvd_automation_positions.pop(token, None)
+        if self._cvd_automation_positions.pop(token, None) is not None:
+            self._persist_cvd_automation_state()
         self._cvd_automation_market_state.pop(token, None)
         if self.header_linked_cvd_token == token:
             self.header_linked_cvd_token = None
@@ -895,7 +903,8 @@ class ScalperMainWindow(QMainWindow):
                         incoming_strategy,
                     )
                     self._exit_position_automated(active_position, reason="AUTO_REVERSE")
-                self._cvd_automation_positions.pop(token, None)
+                if self._cvd_automation_positions.pop(token, None) is not None:
+                    self._persist_cvd_automation_state()
 
         contract = self._get_atm_contract_for_signal(signal_side)
         if not contract:
@@ -963,6 +972,7 @@ class ScalperMainWindow(QMainWindow):
             "last_cvd_ema10": state.get("cvd_ema10"),
             "last_cvd_ema51": state.get("cvd_ema51"),
         }
+        self._persist_cvd_automation_state()
 
         if route == "buy_exit_panel" and self.buy_exit_panel and self.strike_ladder:
             desired_option_type = OptionType.CALL if signal_side == "long" else OptionType.PUT
@@ -1022,7 +1032,8 @@ class ScalperMainWindow(QMainWindow):
         tradingsymbol = active_trade.get("tradingsymbol")
         position = self.position_manager.get_position(tradingsymbol)
         if not position:
-            self._cvd_automation_positions.pop(token, None)
+            if self._cvd_automation_positions.pop(token, None) is not None:
+                self._persist_cvd_automation_state()
             return
 
         def _to_finite_float(value, default=0.0):
@@ -1161,7 +1172,8 @@ class ScalperMainWindow(QMainWindow):
 
         if exit_reason:
             self._exit_position_automated(position, reason=exit_reason)
-            self._cvd_automation_positions.pop(token, None)
+            if self._cvd_automation_positions.pop(token, None) is not None:
+                self._persist_cvd_automation_state()
             return
 
         active_trade["last_price_close"] = price_close
@@ -1197,6 +1209,78 @@ class ScalperMainWindow(QMainWindow):
 
         for token in closed_tokens:
             self._cvd_automation_positions.pop(token, None)
+        if closed_tokens:
+            self._persist_cvd_automation_state()
+
+    def _persist_cvd_automation_state(self):
+        """Persist active auto-managed trades so exits survive reconnect/restart."""
+        try:
+            self._cvd_automation_state_file.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "saved_at": datetime.now().isoformat(),
+                "trading_mode": self.trading_mode,
+                "positions": {
+                    str(token): trade
+                    for token, trade in self._cvd_automation_positions.items()
+                    if isinstance(trade, dict) and trade.get("tradingsymbol")
+                },
+            }
+            self._cvd_automation_state_file.write_text(
+                json.dumps(payload, indent=2),
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            logger.error("[AUTO] Failed to persist CVD automation state: %s", exc, exc_info=True)
+
+    def _load_cvd_automation_state(self):
+        """Restore active auto-managed trades from disk on app startup."""
+        if not self._cvd_automation_state_file.exists():
+            return
+
+        try:
+            payload = json.loads(self._cvd_automation_state_file.read_text(encoding="utf-8"))
+            persisted_positions = payload.get("positions", {})
+            restored = 0
+
+            if isinstance(persisted_positions, dict):
+                for token_raw, trade in persisted_positions.items():
+                    if not isinstance(trade, dict):
+                        continue
+                    tradingsymbol = str(trade.get("tradingsymbol") or "").strip()
+                    if not tradingsymbol:
+                        continue
+                    try:
+                        token = int(token_raw)
+                    except (TypeError, ValueError):
+                        continue
+                    self._cvd_automation_positions[token] = trade
+                    restored += 1
+
+            if restored:
+                logger.info("[AUTO] Restored %s persisted CVD automation position(s).", restored)
+        except Exception as exc:
+            logger.error("[AUTO] Failed to load CVD automation state: %s", exc, exc_info=True)
+
+    def _reconcile_cvd_automation_positions(self):
+        """Drop persisted automation ownership for positions that are already closed."""
+        if not self._cvd_automation_positions:
+            return
+
+        removed_tokens = []
+        for token, active_trade in list(self._cvd_automation_positions.items()):
+            tradingsymbol = active_trade.get("tradingsymbol") if isinstance(active_trade, dict) else None
+            if not tradingsymbol or not self.position_manager.get_position(tradingsymbol):
+                removed_tokens.append(token)
+
+        for token in removed_tokens:
+            self._cvd_automation_positions.pop(token, None)
+
+        if removed_tokens:
+            logger.info(
+                "[AUTO] Cleared %s stale persisted CVD automation position(s).",
+                len(removed_tokens),
+            )
+            self._persist_cvd_automation_state()
 
     def _get_atm_contract_for_signal(self, signal_side: str) -> Optional[Contract]:
         if not self.strike_ladder or self.strike_ladder.atm_strike is None:
@@ -1778,6 +1862,7 @@ class ScalperMainWindow(QMainWindow):
 
     def _on_refresh_completed(self, success: bool):
         if success:
+            self._reconcile_cvd_automation_positions()
             self._publish_status("Positions refreshed successfully.", 2500, level="success")
             logger.info("Position refresh completed successfully via PositionManager.")
         else:
