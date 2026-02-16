@@ -226,6 +226,10 @@ class CVDSingleChartDialog(QDialog):
     ATR_MARKER_RED_ONLY = "red_only"
     ATR_MARKER_HIDE_ALL = "hide_all"
 
+    BREAKOUT_SWITCH_KEEP = "keep_breakout"
+    BREAKOUT_SWITCH_PREFER_ATR = "prefer_atr_reversal"
+    BREAKOUT_SWITCH_ADAPTIVE = "adaptive"
+
     ROUTE_BUY_EXIT_PANEL = "buy_exit_panel"
     ROUTE_DIRECT = "direct"
 
@@ -958,6 +962,21 @@ class CVDSingleChartDialog(QDialog):
         )
         self.range_lookback_input.valueChanged.connect(self._on_breakout_settings_changed)
         breakout_form.addRow("Range Lookback", self.range_lookback_input)
+
+        self.breakout_switch_mode_combo = QComboBox()
+        self.breakout_switch_mode_combo.setFixedWidth(220)
+        self.breakout_switch_mode_combo.setStyleSheet(compact_combo_style)
+        self.breakout_switch_mode_combo.addItem("Keep Breakout Trade", self.BREAKOUT_SWITCH_KEEP)
+        self.breakout_switch_mode_combo.addItem("Prefer ATR Reversal", self.BREAKOUT_SWITCH_PREFER_ATR)
+        self.breakout_switch_mode_combo.addItem("Adaptive (Momentum-aware)", self.BREAKOUT_SWITCH_ADAPTIVE)
+        self.breakout_switch_mode_combo.setToolTip(
+            "Controls behavior when ATR reversal appears after a breakout:\n"
+            "• Keep Breakout Trade: ignore opposite ATR reversals.\n"
+            "• Prefer ATR Reversal: allow reversal immediately.\n"
+            "• Adaptive: keep breakout only when continuation momentum remains strong."
+        )
+        self.breakout_switch_mode_combo.currentIndexChanged.connect(self._on_breakout_settings_changed)
+        breakout_form.addRow("Breakout vs ATR", self.breakout_switch_mode_combo)
         layout.addWidget(breakout_group)
 
         close_row = QHBoxLayout()
@@ -993,6 +1012,7 @@ class CVDSingleChartDialog(QDialog):
         self.setup_signal_filter_combo.blockSignals(True)
         self.setup_atr_marker_filter_combo.blockSignals(True)
         self.range_lookback_input.blockSignals(True)  # 🆕 NEW
+        self.breakout_switch_mode_combo.blockSignals(True)
 
         self.automate_toggle.setChecked(
             self._settings.value(f"{key_prefix}/enabled", self.automate_toggle.isChecked(), type=bool)
@@ -1057,6 +1077,14 @@ class CVDSingleChartDialog(QDialog):
                 type=int,
             )
         )
+        _apply_combo_value(
+            self.breakout_switch_mode_combo,
+            self._settings.value(
+                f"{key_prefix}/breakout_switch_mode",
+                self.breakout_switch_mode_combo.currentData() or self.BREAKOUT_SWITCH_ADAPTIVE,
+            ),
+            fallback_index=2,
+        )
 
         self.automate_toggle.blockSignals(False)
         self.automation_stoploss_input.blockSignals(False)
@@ -1069,6 +1097,7 @@ class CVDSingleChartDialog(QDialog):
         self.setup_signal_filter_combo.blockSignals(False)
         self.setup_atr_marker_filter_combo.blockSignals(False)
         self.range_lookback_input.blockSignals(False)  # 🆕 NEW
+        self.breakout_switch_mode_combo.blockSignals(False)
 
         self._update_atr_reversal_markers()
         self._on_automation_settings_changed()
@@ -1091,6 +1120,10 @@ class CVDSingleChartDialog(QDialog):
         )
         # 🆕 Persist range breakout settings
         self._settings.setValue(f"{key_prefix}/range_lookback", int(self.range_lookback_input.value()))
+        self._settings.setValue(
+            f"{key_prefix}/breakout_switch_mode",
+            self._selected_breakout_switch_mode(),
+        )
         self._settings.sync()
 
     def _on_automation_settings_changed(self, *_):
@@ -1143,6 +1176,9 @@ class CVDSingleChartDialog(QDialog):
 
     def _selected_signal_filter(self) -> str:
         return self.signal_filter_combo.currentData() or self.SIGNAL_FILTER_ALL
+
+    def _selected_breakout_switch_mode(self) -> str:
+        return self.breakout_switch_mode_combo.currentData() or self.BREAKOUT_SWITCH_ADAPTIVE
 
     def _on_cvd_tick_update(self, token: int, cvd_value: float, last_price: float):
         if not self.isVisible():
@@ -2008,16 +2044,6 @@ class CVDSingleChartDialog(QDialog):
         price_ema51 = self._calculate_ema(price_data, 51)
 
         # ----------------------------------------------------------
-        # STRATEGY 1: ATR REVERSAL (Confluence of Price + CVD ATR signals)
-        # ----------------------------------------------------------
-        short_atr_reversal, long_atr_reversal = self.strategy_detector.detect_atr_reversal_strategy(
-            price_atr_above=price_above_mask,
-            price_atr_below=price_below_mask,
-            cvd_atr_above=cvd_above_mask,
-            cvd_atr_below=cvd_below_mask
-        )
-
-        # ----------------------------------------------------------
         # STRATEGY 2: EMA & CVD CROSS
         # ----------------------------------------------------------
         short_ema_cross, long_ema_cross = self.strategy_detector.detect_ema_cvd_cross_strategy(
@@ -2052,7 +2078,7 @@ class CVDSingleChartDialog(QDialog):
         price_low = np.array(self.all_price_low_data, dtype=float)
         volume_data = np.array(self.all_volume_data, dtype=float)
 
-        short_breakout, long_breakout, range_highs, range_lows = \
+        long_breakout, short_breakout, range_highs, range_lows = \
             self.strategy_detector.detect_range_breakout_strategy(
                 price_high=price_high,
                 price_low=price_low,
@@ -2064,6 +2090,37 @@ class CVDSingleChartDialog(QDialog):
                 range_lookback_minutes=self.range_lookback_input.value(),
                 breakout_threshold_multiplier=1.5
             )
+
+        # ----------------------------------------------------------
+        # STRATEGY 1: ATR REVERSAL (Confluence of Price + CVD ATR signals)
+        # with breakout-vs-reversal switch logic
+        # ----------------------------------------------------------
+        breakout_long_context, breakout_short_context = self.strategy_detector.build_breakout_context_masks(
+            long_breakout=long_breakout,
+            short_breakout=short_breakout,
+            hold_bars=max(2, int(round(6 / max(self.timeframe_minutes, 1))))
+        )
+        breakout_long_strong, breakout_short_strong = self.strategy_detector.evaluate_breakout_momentum_strength(
+            price_close=price_data,
+            price_ema10=price_ema10,
+            cvd_data=cvd_data,
+            cvd_ema10=cvd_ema10,
+            volume=volume_data,
+            long_context=breakout_long_context,
+            short_context=breakout_short_context,
+            slope_lookback_bars=max(1, int(round(3 / max(self.timeframe_minutes, 1))))
+        )
+        short_atr_reversal, long_atr_reversal = self.strategy_detector.detect_atr_reversal_strategy(
+            price_atr_above=price_above_mask,
+            price_atr_below=price_below_mask,
+            cvd_atr_above=cvd_above_mask,
+            cvd_atr_below=cvd_below_mask,
+            active_breakout_long=breakout_long_context,
+            active_breakout_short=breakout_short_context,
+            breakout_long_momentum_strong=breakout_long_strong,
+            breakout_short_momentum_strong=breakout_short_strong,
+            breakout_switch_mode=self._selected_breakout_switch_mode(),
+        )
 
         # ----------------------------------------------------------
         # Combine signals based on selected filter
@@ -2121,13 +2178,9 @@ class CVDSingleChartDialog(QDialog):
 
             self._confluence_line_map[key] = pairs
 
-        # 🆕 Determine colors based on signal type
-        if signal_filter == self.SIGNAL_FILTER_BREAKOUT_ONLY:
-            short_color = "#FFD700"  # Yellow for breakout SHORT
-            long_color = "#FFD700"  # Yellow for breakout LONG
-        else:
-            short_color = "#FF4444"  # Red for regular SHORT
-            long_color = "#00E676"  # Green for regular LONG
+        # Use consistent signal colors across all strategies
+        short_color = "#FF4444"  # Red for SHORT
+        long_color = "#00E676"  # Green for LONG
 
         for idx in np.where(short_mask)[0]:
             key = f"S:{idx}"

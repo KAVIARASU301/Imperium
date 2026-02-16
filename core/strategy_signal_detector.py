@@ -223,6 +223,9 @@ class StrategySignalDetector:
     """
 
     CONFIRMATION_WAIT_MINUTES = 5
+    BREAKOUT_SWITCH_KEEP = "keep_breakout"
+    BREAKOUT_SWITCH_PREFER_ATR = "prefer_atr_reversal"
+    BREAKOUT_SWITCH_ADAPTIVE = "adaptive"
 
     def __init__(self, timeframe_minutes: int = 1):
         self.timeframe_minutes = timeframe_minutes
@@ -246,6 +249,11 @@ class StrategySignalDetector:
             price_atr_below: np.ndarray,  # Price ATR reversal - below EMA (potential LONG)
             cvd_atr_above: np.ndarray,  # CVD ATR reversal - above EMA51 (potential SHORT)
             cvd_atr_below: np.ndarray,  # CVD ATR reversal - below EMA51 (potential LONG)
+            active_breakout_long: np.ndarray | None = None,
+            active_breakout_short: np.ndarray | None = None,
+            breakout_long_momentum_strong: np.ndarray | None = None,
+            breakout_short_momentum_strong: np.ndarray | None = None,
+            breakout_switch_mode: str = BREAKOUT_SWITCH_ADAPTIVE,
     ) -> tuple[np.ndarray, np.ndarray]:
         """
         ATR REVERSAL STRATEGY:
@@ -265,15 +273,133 @@ class StrategySignalDetector:
         # LONG signals: Both Price and CVD show ATR reversal from below
         long_atr_reversal = price_atr_below & cvd_atr_below
 
-        # Apply suppression from active breakout trades
-        suppress_short, suppress_long = self.should_suppress_atr_reversal()
+        if (
+                active_breakout_long is not None and
+                active_breakout_short is not None and
+                len(active_breakout_long) == len(short_atr_reversal) and
+                len(active_breakout_short) == len(short_atr_reversal)
+        ):
+            long_context = active_breakout_long.astype(bool)
+            short_context = active_breakout_short.astype(bool)
 
-        if suppress_short:
-            short_atr_reversal = np.zeros_like(short_atr_reversal)
-        if suppress_long:
-            long_atr_reversal = np.zeros_like(long_atr_reversal)
+            if breakout_switch_mode == self.BREAKOUT_SWITCH_KEEP:
+                suppress_short_mask = long_context
+                suppress_long_mask = short_context
+            elif breakout_switch_mode == self.BREAKOUT_SWITCH_PREFER_ATR:
+                suppress_short_mask = np.zeros_like(short_atr_reversal)
+                suppress_long_mask = np.zeros_like(long_atr_reversal)
+            else:
+                long_momentum = (
+                    breakout_long_momentum_strong.astype(bool)
+                    if breakout_long_momentum_strong is not None and
+                       len(breakout_long_momentum_strong) == len(short_atr_reversal)
+                    else long_context
+                )
+                short_momentum = (
+                    breakout_short_momentum_strong.astype(bool)
+                    if breakout_short_momentum_strong is not None and
+                       len(breakout_short_momentum_strong) == len(short_atr_reversal)
+                    else short_context
+                )
+                suppress_short_mask = long_context & long_momentum
+                suppress_long_mask = short_context & short_momentum
+
+            short_atr_reversal = short_atr_reversal & (~suppress_short_mask)
+            long_atr_reversal = long_atr_reversal & (~suppress_long_mask)
+        else:
+            # Backward-compatible behavior for any caller that still uses stateful suppression.
+            suppress_short, suppress_long = self.should_suppress_atr_reversal()
+            if suppress_short:
+                short_atr_reversal = np.zeros_like(short_atr_reversal)
+            if suppress_long:
+                long_atr_reversal = np.zeros_like(long_atr_reversal)
 
         return short_atr_reversal, long_atr_reversal
+
+    def build_breakout_context_masks(
+            self,
+            long_breakout: np.ndarray,
+            short_breakout: np.ndarray,
+            hold_bars: int = 6,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Mark bars that still belong to a recently triggered breakout regime."""
+        length = min(len(long_breakout), len(short_breakout))
+        long_context = np.zeros(length, dtype=bool)
+        short_context = np.zeros(length, dtype=bool)
+
+        if length == 0:
+            return long_context, short_context
+
+        hold = max(1, int(hold_bars))
+        long_left = 0
+        short_left = 0
+
+        for idx in range(length):
+            if long_breakout[idx]:
+                long_left = hold
+                short_left = 0
+            elif short_breakout[idx]:
+                short_left = hold
+                long_left = 0
+
+            if long_left > 0:
+                long_context[idx] = True
+                long_left -= 1
+
+            if short_left > 0:
+                short_context[idx] = True
+                short_left -= 1
+
+        return long_context, short_context
+
+    def evaluate_breakout_momentum_strength(
+            self,
+            price_close: np.ndarray,
+            price_ema10: np.ndarray,
+            cvd_data: np.ndarray,
+            cvd_ema10: np.ndarray,
+            volume: np.ndarray,
+            long_context: np.ndarray,
+            short_context: np.ndarray,
+            slope_lookback_bars: int = 3,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Estimate whether breakout continuation momentum is still strong.
+        """
+        length = min(
+            len(price_close), len(price_ema10), len(cvd_data), len(cvd_ema10),
+            len(volume), len(long_context), len(short_context)
+        )
+        long_strong = np.zeros(length, dtype=bool)
+        short_strong = np.zeros(length, dtype=bool)
+
+        if length < 2:
+            return long_strong, short_strong
+
+        eps = 1e-9
+        vol_avg = pd.Series(volume[:length]).rolling(10, min_periods=1).mean().to_numpy()
+        bars_back = max(1, int(slope_lookback_bars))
+
+        for idx in range(length):
+            start_idx = max(0, idx - bars_back)
+            price_delta = price_close[idx] - price_close[start_idx]
+            cvd_delta = cvd_data[idx] - cvd_data[start_idx]
+
+            price_trend_score = abs(price_close[idx] - price_ema10[idx]) / max(abs(price_ema10[idx]), eps)
+            cvd_trend_score = abs(cvd_data[idx] - cvd_ema10[idx]) / max(abs(cvd_ema10[idx]), 1.0)
+            vol_score = volume[idx] / max(vol_avg[idx], eps)
+
+            bullish_alignment = price_delta > 0 and cvd_delta > 0 and price_close[idx] > price_ema10[idx]
+            bearish_alignment = price_delta < 0 and cvd_delta < 0 and price_close[idx] < price_ema10[idx]
+
+            composite = (price_trend_score * 0.45) + (cvd_trend_score * 0.35) + (vol_score * 0.20)
+
+            if long_context[idx] and bullish_alignment and composite >= 1.05:
+                long_strong[idx] = True
+            if short_context[idx] and bearish_alignment and composite >= 1.05:
+                short_strong[idx] = True
+
+        return long_strong, short_strong
 
     def detect_ema_cvd_cross_strategy(
             self,
@@ -444,6 +570,10 @@ class StrategySignalDetector:
         # Convert lookback minutes to bars
         lookback_bars = max(2, int(round(range_lookback_minutes / max(self.timeframe_minutes, 1))))
 
+        # breakout_threshold_multiplier is converted into a minimum breakout
+        # extension beyond the range boundary. 1.0 ~= 3% of the prior range.
+        min_breakout_strength = max(0.0, 0.03 * float(breakout_threshold_multiplier))
+
         # Calculate rolling range and average range
         for i in range(lookback_bars, length):
             start_idx = max(0, i - lookback_bars)
@@ -468,14 +598,14 @@ class StrategySignalDetector:
             if price_close[i] > window_high:
                 # Volume confirmation: above average
                 avg_volume = np.mean(volume[start_idx:i])
-                volume_confirmed = volume[i] > avg_volume * 1.2
+                volume_confirmed = avg_volume <= 0 or volume[i] >= avg_volume * 1.05
 
                 # CVD confirmation: trending up or above EMA10
                 cvd_bullish = (cvd_data[i] > cvd_ema10[i]) or (cvd_data[i] > cvd_data[i - 1])
 
                 # Price momentum: moved at least threshold beyond range
                 breakout_strength = (price_close[i] - window_high) / range_size if range_size > 0 else 0
-                strong_breakout = breakout_strength > 0.1  # Moved 10% of range beyond boundary
+                strong_breakout = breakout_strength >= min_breakout_strength
 
                 if volume_confirmed and cvd_bullish and strong_breakout:
                     long_breakout[i] = True
@@ -484,14 +614,14 @@ class StrategySignalDetector:
             elif price_close[i] < window_low:
                 # Volume confirmation
                 avg_volume = np.mean(volume[start_idx:i])
-                volume_confirmed = volume[i] > avg_volume * 1.2
+                volume_confirmed = avg_volume <= 0 or volume[i] >= avg_volume * 1.05
 
                 # CVD confirmation: trending down or below EMA10
                 cvd_bearish = (cvd_data[i] < cvd_ema10[i]) or (cvd_data[i] < cvd_data[i - 1])
 
                 # Price momentum
                 breakout_strength = (window_low - price_close[i]) / range_size if range_size > 0 else 0
-                strong_breakout = breakout_strength > 0.1
+                strong_breakout = breakout_strength >= min_breakout_strength
 
                 if volume_confirmed and cvd_bearish and strong_breakout:
                     short_breakout[i] = True
