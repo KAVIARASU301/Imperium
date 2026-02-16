@@ -8,19 +8,18 @@ user_data/
 __pycache__/
 *.py[cod]
 *.pyc
+logs/
+*.log
 
-# Virtual environment
 .venv/
+# Virtual environment
+
 env/
 /data/
 data/
 data
 logs
-logs/
+
 dist/
 dist
-!/dist/
-!/logs/
-!/OptionsBadger.spec
-!/Untitled Document
-!/build/
+

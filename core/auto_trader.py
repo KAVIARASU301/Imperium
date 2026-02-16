@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
     QPushButton, QWidget, QCheckBox, QSpinBox, QDoubleSpinBox, QComboBox,
     QFormLayout, QGroupBox
 )
-from PySide6.QtCore import Qt, QTimer, Signal, QEvent, QObject, QThread
+from PySide6.QtCore import Qt, QTimer, Signal, QEvent, QObject, QThread, QSettings
 from pyqtgraph import AxisItem, TextItem
 
 from kiteconnect import KiteConnect
@@ -243,6 +243,7 @@ class CVDSingleChartDialog(QDialog):
         self.instrument_token = instrument_token
         self.symbol = symbol
         self.cvd_engine = cvd_engine
+        self._settings = QSettings("OptionsBadger", "AutoTrader")
         self.timeframe_minutes = 1  # default = 1 minute
         self.strategy_detector = StrategySignalDetector(timeframe_minutes=self.timeframe_minutes)
 
@@ -281,6 +282,7 @@ class CVDSingleChartDialog(QDialog):
         self.setAttribute(Qt.WA_NoSystemBackground, False)
 
         self._setup_ui()
+        self._load_persisted_setup_values()
         self._connect_signals()
 
         # Init in LIVE mode
@@ -935,7 +937,116 @@ class CVDSingleChartDialog(QDialog):
         self.setup_dialog.raise_()
         self.setup_dialog.activateWindow()
 
+    def _settings_key_prefix(self) -> str:
+        return f"chart_setup/{self.instrument_token}"
+
+    def _load_persisted_setup_values(self):
+        key_prefix = self._settings_key_prefix()
+
+        def _apply_combo_value(combo: QComboBox, data_value, fallback_index: int = 0):
+            idx = combo.findData(data_value)
+            combo.setCurrentIndex(idx if idx >= 0 else fallback_index)
+
+        self.automate_toggle.blockSignals(True)
+        self.automation_stoploss_input.blockSignals(True)
+        self.automation_route_combo.blockSignals(True)
+        self.atr_base_ema_input.blockSignals(True)
+        self.atr_distance_input.blockSignals(True)
+        self.cvd_ema_gap_input.blockSignals(True)
+        self.signal_filter_combo.blockSignals(True)
+        self.atr_marker_filter_combo.blockSignals(True)
+        self.setup_signal_filter_combo.blockSignals(True)
+        self.setup_atr_marker_filter_combo.blockSignals(True)
+
+        self.automate_toggle.setChecked(
+            self._settings.value(f"{key_prefix}/enabled", self.automate_toggle.isChecked(), type=bool)
+        )
+        self.automation_stoploss_input.setValue(
+            self._settings.value(
+                f"{key_prefix}/stoploss_points",
+                self.automation_stoploss_input.value(),
+                type=int,
+            )
+        )
+        _apply_combo_value(
+            self.automation_route_combo,
+            self._settings.value(
+                f"{key_prefix}/route",
+                self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL,
+            ),
+            fallback_index=0,
+        )
+
+        self.atr_base_ema_input.setValue(
+            self._settings.value(
+                f"{key_prefix}/atr_base_ema",
+                self.atr_base_ema_input.value(),
+                type=int,
+            )
+        )
+        self.atr_distance_input.setValue(
+            self._settings.value(
+                f"{key_prefix}/atr_distance",
+                self.atr_distance_input.value(),
+                type=float,
+            )
+        )
+        self.cvd_ema_gap_input.setValue(
+            self._settings.value(
+                f"{key_prefix}/cvd_ema_gap",
+                self.cvd_ema_gap_input.value(),
+                type=int,
+            )
+        )
+
+        signal_filter_value = self._settings.value(
+            f"{key_prefix}/signal_filter",
+            self.signal_filter_combo.currentData() or self.SIGNAL_FILTER_ALL,
+        )
+        _apply_combo_value(self.signal_filter_combo, signal_filter_value, fallback_index=0)
+        _apply_combo_value(self.setup_signal_filter_combo, signal_filter_value, fallback_index=0)
+
+        marker_filter_value = self._settings.value(
+            f"{key_prefix}/atr_marker_filter",
+            self.atr_marker_filter_combo.currentData() or self.ATR_MARKER_CONFLUENCE_ONLY,
+        )
+        _apply_combo_value(self.atr_marker_filter_combo, marker_filter_value, fallback_index=1)
+        _apply_combo_value(self.setup_atr_marker_filter_combo, marker_filter_value, fallback_index=1)
+
+        self.automate_toggle.blockSignals(False)
+        self.automation_stoploss_input.blockSignals(False)
+        self.automation_route_combo.blockSignals(False)
+        self.atr_base_ema_input.blockSignals(False)
+        self.atr_distance_input.blockSignals(False)
+        self.cvd_ema_gap_input.blockSignals(False)
+        self.signal_filter_combo.blockSignals(False)
+        self.atr_marker_filter_combo.blockSignals(False)
+        self.setup_signal_filter_combo.blockSignals(False)
+        self.setup_atr_marker_filter_combo.blockSignals(False)
+
+        self._update_atr_reversal_markers()
+        self._on_automation_settings_changed()
+
+    def _persist_setup_values(self):
+        key_prefix = self._settings_key_prefix()
+        self._settings.setValue(f"{key_prefix}/enabled", self.automate_toggle.isChecked())
+        self._settings.setValue(f"{key_prefix}/stoploss_points", int(self.automation_stoploss_input.value()))
+        self._settings.setValue(
+            f"{key_prefix}/route",
+            self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL,
+        )
+        self._settings.setValue(f"{key_prefix}/atr_base_ema", int(self.atr_base_ema_input.value()))
+        self._settings.setValue(f"{key_prefix}/atr_distance", float(self.atr_distance_input.value()))
+        self._settings.setValue(f"{key_prefix}/cvd_ema_gap", int(self.cvd_ema_gap_input.value()))
+        self._settings.setValue(f"{key_prefix}/signal_filter", self._selected_signal_filter())
+        self._settings.setValue(
+            f"{key_prefix}/atr_marker_filter",
+            self.atr_marker_filter_combo.currentData() or self.ATR_MARKER_CONFLUENCE_ONLY,
+        )
+        self._settings.sync()
+
     def _on_automation_settings_changed(self, *_):
+        self._persist_setup_values()
         self.automation_state_signal.emit({
             "instrument_token": self.instrument_token,
             "symbol": self.symbol,
@@ -967,12 +1078,14 @@ class CVDSingleChartDialog(QDialog):
             self.setup_atr_marker_filter_combo.setCurrentIndex(self.atr_marker_filter_combo.currentIndex())
             self.setup_atr_marker_filter_combo.blockSignals(False)
         self._update_atr_reversal_markers()
+        self._persist_setup_values()
 
     def _on_setup_atr_marker_filter_changed(self, *_):
         self.atr_marker_filter_combo.blockSignals(True)
         self.atr_marker_filter_combo.setCurrentIndex(self.setup_atr_marker_filter_combo.currentIndex())
         self.atr_marker_filter_combo.blockSignals(False)
         self._update_atr_reversal_markers()
+        self._persist_setup_values()
 
     def _selected_signal_filter(self) -> str:
         return self.signal_filter_combo.currentData() or self.SIGNAL_FILTER_ALL
@@ -1195,6 +1308,7 @@ class CVDSingleChartDialog(QDialog):
     def _on_atr_settings_changed(self, *_):
         """Recompute ATR markers from plotted data without refetching history."""
         self._update_atr_reversal_markers()
+        self._persist_setup_values()
 
     def _update_atr_reversal_markers(self):
         """Update ATR reversal triangles using currently plotted price and CVD series."""
@@ -2228,6 +2342,7 @@ class CVDSingleChartDialog(QDialog):
         QTimer.singleShot(0, self._fix_axis_after_show)
 
     def closeEvent(self, event):
+        self._persist_setup_values()
         try:
             if hasattr(self, "_fetch_thread") and self._fetch_thread.isRunning():
                 self._fetch_thread.quit()
