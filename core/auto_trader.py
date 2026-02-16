@@ -2910,16 +2910,19 @@ class CVDSingleChartDialog(QDialog):
             nonlocal active_trade
             if not active_trade:
                 return
-            pnl = close[idx] - active_trade["entry_price"] if active_trade["signal_side"] == "long" else active_trade["entry_price"] - close[idx]
+            exit_price = float(close[idx])
+            if not np.isfinite(exit_price):
+                exit_price = float(active_trade["entry_price"])
+            pnl = exit_price - active_trade["entry_price"] if active_trade["signal_side"] == "long" else active_trade["entry_price"] - exit_price
             result["total_points"] += float(pnl)
             if pnl > 0:
                 result["wins"] += 1
                 result["exit_win_x"].append(float(x_arr[idx]))
-                result["exit_win_y"].append(float(close[idx]))
+                result["exit_win_y"].append(exit_price)
             else:
                 result["losses"] += 1
                 result["exit_loss_x"].append(float(x_arr[idx]))
-                result["exit_loss_y"].append(float(close[idx]))
+                result["exit_loss_y"].append(exit_price)
             active_trade = None
 
         for idx in range(length):
@@ -2931,6 +2934,8 @@ class CVDSingleChartDialog(QDialog):
 
             if active_trade:
                 price_close = close[idx]
+                if not np.isfinite(price_close):
+                    continue
                 signal_side = active_trade["signal_side"]
                 sl_underlying = active_trade["sl_underlying"]
 
@@ -2940,11 +2945,15 @@ class CVDSingleChartDialog(QDialog):
                     else active_trade["entry_price"] - price_close
                 )
 
+                if not np.isfinite(favorable_move):
+                    favorable_move = 0.0
+
                 trail_offset = 0.0
                 if active_trade.get("strategy_type") == "atr_reversal":
-                    trail_steps = int(max(0.0, favorable_move) // atr_trailing_step_points)
-                    if trail_steps > 0:
-                        trail_offset = trail_steps * atr_trailing_step_points
+                    if atr_trailing_step_points > 0:
+                        trail_steps = int(max(0.0, favorable_move) // atr_trailing_step_points)
+                        if trail_steps > 0:
+                            trail_offset = trail_steps * atr_trailing_step_points
                 elif active_trade.get("strategy_type") in {"ema_cross", "range_breakout"}:
                     initial_trigger_points = 200.0
                     incremental_trigger_points = 100.0
@@ -3056,6 +3065,8 @@ class CVDSingleChartDialog(QDialog):
                     _close_trade(idx)
 
             entry_price = float(close[idx])
+            if not np.isfinite(entry_price):
+                continue
             sl_underlying = entry_price - stop_points if signal_side == "long" else entry_price + stop_points
             active_trade = {
                 "signal_side": signal_side,

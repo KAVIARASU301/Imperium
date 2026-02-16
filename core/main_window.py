@@ -1,6 +1,7 @@
 # core/main_window.py
 import logging
 import os
+import math
 from pathlib import Path
 from typing import Dict, List, Optional, Union
 from datetime import datetime, timedelta, time, date
@@ -521,7 +522,7 @@ class ScalperMainWindow(QMainWindow):
         self.buy_exit_panel = BuyExitPanel(self.trader)
         self.buy_exit_panel.setMinimumSize(200, 300)
         self.account_summary = AccountSummaryWidget()
-        self.account_summary.setMinimumHeight(200)
+        self.account_summary.setMinimumHeight(220)
         self.account_summary.setContentsMargins(3, 0, 3, 0)  # 🔥 IMPORTANT
         self.strike_ladder = StrikeLadderWidget(self.real_kite_client)
         self.strike_ladder.setMinimumWidth(500)
@@ -1024,21 +1025,30 @@ class ScalperMainWindow(QMainWindow):
             self._cvd_automation_positions.pop(token, None)
             return
 
-        price_close = float(payload.get("price_close") or 0.0)
-        ema10 = float(payload.get("ema10") or 0.0)
-        cvd_ema10 = float(payload.get("cvd_ema10") or 0.0)
-        ema51 = float(payload.get("ema51") or 0.0)
-        cvd_close = float(payload.get("cvd_close") or 0.0)
-        cvd_ema51 = float(payload.get("cvd_ema51") or 0.0)
+        def _to_finite_float(value, default=0.0):
+            try:
+                parsed = float(value)
+            except (TypeError, ValueError):
+                return None if default is None else float(default)
+            return parsed if math.isfinite(parsed) else (None if default is None else float(default))
+
+        price_close = _to_finite_float(payload.get("price_close"), 0.0)
+        ema10 = _to_finite_float(payload.get("ema10"), 0.0)
+        cvd_ema10 = _to_finite_float(payload.get("cvd_ema10"), 0.0)
+        ema51 = _to_finite_float(payload.get("ema51"), 0.0)
+        cvd_close = _to_finite_float(payload.get("cvd_close"), 0.0)
+        cvd_ema51 = _to_finite_float(payload.get("cvd_ema51"), 0.0)
         if price_close <= 0:
             return
 
         signal_side = active_trade.get("signal_side")
         strategy_type = active_trade.get("strategy_type") or "atr_reversal"
-        stoploss_points = float(active_trade.get("stoploss_points") or 0.0)
-        atr_trailing_step_points = float(active_trade.get("atr_trailing_step_points") or 10.0)
-        entry_underlying = float(active_trade.get("entry_underlying") or 0.0)
+        stoploss_points = _to_finite_float(active_trade.get("stoploss_points"), 0.0)
+        atr_trailing_step_points = _to_finite_float(active_trade.get("atr_trailing_step_points"), 10.0)
+        entry_underlying = _to_finite_float(active_trade.get("entry_underlying"), 0.0)
         sl_underlying = active_trade.get("sl_underlying")
+        if sl_underlying is not None:
+            sl_underlying = _to_finite_float(sl_underlying, None)
         hit_stop = False
 
         # Strategy-specific trailing logic based on favorable underlying movement.
@@ -1048,6 +1058,9 @@ class ScalperMainWindow(QMainWindow):
                 if signal_side == "long"
                 else entry_underlying - price_close
             )
+
+            if not math.isfinite(favorable_move):
+                favorable_move = 0.0
 
             trail_offset = 0.0
             if strategy_type == "atr_reversal" and atr_trailing_step_points > 0:
