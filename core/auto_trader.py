@@ -1028,7 +1028,7 @@ class CVDSingleChartDialog(QDialog):
 
         self.range_lookback_input = QSpinBox()
         self.range_lookback_input.setRange(10, 120)
-        self.range_lookback_input.setValue()
+        self.range_lookback_input.setValue(15)
         self.range_lookback_input.setSuffix(" min")
         self.range_lookback_input.setStyleSheet("""
             QSpinBox {
