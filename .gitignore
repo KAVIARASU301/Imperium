@@ -24,8 +24,6 @@ dist/
 dist
 
 logs
-!/np
-!/pd
-!/pg
-!/=
-!/logging
+/logging
+logging
+logging/
