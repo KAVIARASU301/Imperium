@@ -584,6 +584,19 @@ class CVDSingleChartDialog(QDialog):
             "Minimum distance between CVD and its EMA to confirm signal validity.\nFilters out price-hugging conditions where CVD trends weakly.")
         self.cvd_ema_gap_input.valueChanged.connect(self._on_atr_settings_changed)
 
+        self.cvd_atr_distance_input = QDoubleSpinBox()
+        self.cvd_atr_distance_input.setRange(0.1, 30.0)
+        self.cvd_atr_distance_input.setDecimals(2)
+        self.cvd_atr_distance_input.setSingleStep(0.1)
+        self.cvd_atr_distance_input.setValue(11.0)
+        self.cvd_atr_distance_input.setFixedWidth(96)
+        self.cvd_atr_distance_input.setStyleSheet(compact_spinbox_style)
+        self.cvd_atr_distance_input.setToolTip(
+            "ATR-multiple distance threshold used for CVD ATR reversal markers.\n"
+            "Higher values reduce signal frequency; lower values make CVD reversal detection more sensitive."
+        )
+        self.cvd_atr_distance_input.valueChanged.connect(self._on_atr_settings_changed)
+
         # EMA Label
         ema_label = QLabel("EMAs:")
         ema_label.setStyleSheet("color: #B0B0B0; font-weight: 600; font-size: 12px;")
@@ -999,6 +1012,7 @@ class CVDSingleChartDialog(QDialog):
         signal_form.setLabelAlignment(Qt.AlignLeft)
         signal_form.addRow("ATR Base EMA", self.atr_base_ema_input)
         signal_form.addRow("ATR Distance", self.atr_distance_input)
+        signal_form.addRow("CVD ATR Distance", self.cvd_atr_distance_input)
         signal_form.addRow("CVD EMA Gap", self.cvd_ema_gap_input)
 
         self.setup_signal_filter_combo = QComboBox()
@@ -1400,6 +1414,7 @@ class CVDSingleChartDialog(QDialog):
         self.automation_route_combo.blockSignals(True)
         self.atr_base_ema_input.blockSignals(True)
         self.atr_distance_input.blockSignals(True)
+        self.cvd_atr_distance_input.blockSignals(True)
         self.cvd_ema_gap_input.blockSignals(True)
         self.signal_filter_combo.blockSignals(True)
         self.atr_marker_filter_combo.blockSignals(True)
@@ -1434,6 +1449,9 @@ class CVDSingleChartDialog(QDialog):
         )
         self.atr_distance_input.setValue(
             _read_setting("atr_distance", self.atr_distance_input.value(), float)
+        )
+        self.cvd_atr_distance_input.setValue(
+            _read_setting("cvd_atr_distance", self.cvd_atr_distance_input.value(), float)
         )
         self.cvd_ema_gap_input.setValue(
             _read_setting("cvd_ema_gap", self.cvd_ema_gap_input.value(), int)
@@ -1505,6 +1523,7 @@ class CVDSingleChartDialog(QDialog):
         self.automation_route_combo.blockSignals(False)
         self.atr_base_ema_input.blockSignals(False)
         self.atr_distance_input.blockSignals(False)
+        self.cvd_atr_distance_input.blockSignals(False)
         self.cvd_ema_gap_input.blockSignals(False)
         self.signal_filter_combo.blockSignals(False)
         self.atr_marker_filter_combo.blockSignals(False)
@@ -1540,6 +1559,7 @@ class CVDSingleChartDialog(QDialog):
             "route": self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL,
             "atr_base_ema": int(self.atr_base_ema_input.value()),
             "atr_distance": float(self.atr_distance_input.value()),
+            "cvd_atr_distance": float(self.cvd_atr_distance_input.value()),
             "cvd_ema_gap": int(self.cvd_ema_gap_input.value()),
             "signal_filter": self._selected_signal_filter(),
             "atr_marker_filter": self.atr_marker_filter_combo.currentData() or self.ATR_MARKER_CONFLUENCE_ONLY,
@@ -1938,10 +1958,10 @@ class CVDSingleChartDialog(QDialog):
                 low_data_array[below_mask] - atr_offset[below_mask],
             )
 
-        # ── CVD markers — EMA 51 / distance 9 + raw gap gate (independent of price UI) ──
+        # ── CVD markers — EMA 51 + configurable ATR distance + raw gap gate ──
         if has_cvd:
             CVD_ATR_EMA = 51
-            CVD_ATR_DISTANCE = 11
+            cvd_atr_distance_threshold = float(self.cvd_atr_distance_input.value())
 
             cvd_data_array = np.array(self.all_cvd_data, dtype=float)
 
@@ -1962,8 +1982,8 @@ class CVDSingleChartDialog(QDialog):
             raw_gap_c = np.abs(cvd_data_array - base_ema_c)
             gap_mask_c = raw_gap_c > cvd_ema_gap_threshold  # BOTH conditions must hold
 
-            above_mask_c = (distance_c >= CVD_ATR_DISTANCE) & (cvd_data_array > base_ema_c) & gap_mask_c
-            below_mask_c = (distance_c >= CVD_ATR_DISTANCE) & (cvd_data_array < base_ema_c) & gap_mask_c
+            above_mask_c = (distance_c >= cvd_atr_distance_threshold) & (cvd_data_array > base_ema_c) & gap_mask_c
+            below_mask_c = (distance_c >= cvd_atr_distance_threshold) & (cvd_data_array < base_ema_c) & gap_mask_c
             atr_offset_c = np.nan_to_num(atr_cvd, nan=0.0) * 0.15
 
             # Simple EMA-side masks (no ATR distance required) — used for weak confluence
