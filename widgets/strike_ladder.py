@@ -59,6 +59,10 @@ class StrikeLadderWidget(QWidget):
         self.atm_strike = 0.0
         self.contracts: Dict[float, Dict[str, Contract]] = {}
         self.instrument_data, self.available_strikes = {}, []
+        self._instrument_index: Dict[tuple, dict] = {}
+        self._token_contract_map: Dict[int, Contract] = {}
+        self._strike_row_map: Dict[float, int] = {}
+        self._row_strike_map: Dict[int, float] = {}
         self.auto_adjust_enabled = True
         self._max_oi = 1.0
 
@@ -459,6 +463,8 @@ class StrikeLadderWidget(QWidget):
 
     def _rebuild_table(self):
         self.table.setRowCount(0)
+        self._strike_row_map.clear()
+        self._row_strike_map.clear()
         all_oi = [c.oi for sc in self.contracts.values() for c in sc.values() if c and c.oi > 0]
         self._max_oi = max(all_oi) if all_oi else 1.0
 
@@ -474,6 +480,8 @@ class StrikeLadderWidget(QWidget):
         row = self.table.rowCount()
         self.table.insertRow(row)
         self.table.setRowHeight(row, 26)
+        self._strike_row_map[strike] = row
+        self._row_strike_map[row] = strike
 
         ce = self.contracts.get(strike, {}).get('CE')
         pe = self.contracts.get(strike, {}).get('PE')
@@ -598,33 +606,38 @@ class StrikeLadderWidget(QWidget):
         l.addWidget(bar)
         return w
 
-    def _update_table(self):
-        for row in range(self.table.rowCount()):
+    def _update_table(self, rows: Optional[set[int]] = None, refresh_oi: bool = True):
+        target_rows = rows if rows is not None else set(range(self.table.rowCount()))
+
+        for row in target_rows:
             strike = self._get_strike_from_row(row)
-            if not strike:
+            if strike is None:
                 continue
+
             ce = self.contracts.get(strike, {}).get('CE')
             pe = self.contracts.get(strike, {}).get('PE')
 
-            if ce:
-                if ce.ltp:
-                    self.table.item(row, self.CE_LTP).setText(f"{ce.ltp:.2f}")
-                if ce.bid and ce.bid > 0:
-                    self.table.item(row, self.CE_BID).setText(f"{ce.bid:.2f}")
-                if ce.ask and ce.ask > 0:
-                    self.table.item(row, self.CE_ASK).setText(f"{ce.ask:.2f}")
+            self._set_price_item_text(row, self.CE_LTP, ce.ltp if ce else 0)
+            self._set_price_item_text(row, self.CE_BID, ce.bid if ce else 0)
+            self._set_price_item_text(row, self.CE_ASK, ce.ask if ce else 0)
 
-            if pe:
-                if pe.ltp:
-                    self.table.item(row, self.PE_LTP).setText(f"{pe.ltp:.2f}")
-                if pe.bid and pe.bid > 0:
-                    self.table.item(row, self.PE_BID).setText(f"{pe.bid:.2f}")
-                if pe.ask and pe.ask > 0:
-                    self.table.item(row, self.PE_ASK).setText(f"{pe.ask:.2f}")
+            self._set_price_item_text(row, self.PE_LTP, pe.ltp if pe else 0)
+            self._set_price_item_text(row, self.PE_BID, pe.bid if pe else 0)
+            self._set_price_item_text(row, self.PE_ASK, pe.ask if pe else 0)
 
-            self._update_oi_widget(row, self.CE_OI, ce)
-            self._update_oi_widget(row, self.PE_OI, pe)
+            if refresh_oi:
+                self._update_oi_widget(row, self.CE_OI, ce)
+                self._update_oi_widget(row, self.PE_OI, pe)
+
         self._update_stats()
+
+    def _set_price_item_text(self, row: int, col: int, val: float):
+        item = self.table.item(row, col)
+        if not item:
+            return
+        new_text = f"{val:.2f}" if val and val > 0 else "—"
+        if item.text() != new_text:
+            item.setText(new_text)
 
     def _update_oi_widget(self, row: int, col: int, c: Optional[Contract]):
         w = self.table.cellWidget(row, col)
@@ -674,6 +687,9 @@ class StrikeLadderWidget(QWidget):
                 return
 
     def _get_strike_from_row(self, row: int) -> Optional[float]:
+        strike = self._row_strike_map.get(row)
+        if strike is not None:
+            return strike
         i = self.table.item(row, self.STRIKE)
         if i:
             try:
@@ -693,6 +709,25 @@ class StrikeLadderWidget(QWidget):
     # Public API
     def set_instrument_data(self, data: dict):
         self.instrument_data = data
+        self._build_instrument_index()
+
+    def _build_instrument_index(self):
+        index = {}
+        for symbol, symbol_data in self.instrument_data.items():
+            for inst in symbol_data.get('instruments', []):
+                try:
+                    strike = float(inst.get('strike', 0.0))
+                except (TypeError, ValueError):
+                    continue
+
+                key = (
+                    symbol,
+                    inst.get('expiry'),
+                    strike,
+                    inst.get('instrument_type')
+                )
+                index[key] = inst
+        self._instrument_index = index
 
     def calculate_strike_interval(self, symbol: str) -> float:
         if symbol not in self.instrument_data:
@@ -719,6 +754,7 @@ class StrikeLadderWidget(QWidget):
         self.user_strike_interval = strike_interval
         self.atm_strike = self._calculate_atm_strike(current_price)
         self.contracts.clear()
+        self._token_contract_map.clear()
         self._fetch_and_build(symbol, expiry, self._gen_strikes())
 
     def _gen_strikes(self) -> List[float]:
@@ -734,59 +770,88 @@ class StrikeLadderWidget(QWidget):
 
     def _fetch_and_build(self, symbol: str, expiry: date, strikes: List[float]):
         to_fetch = []
+        tradingsymbol_contract_map: Dict[str, Contract] = {}
+
         for strike in strikes:
             for ot in ['CE', 'PE']:
-                for inst in self.instrument_data.get(symbol, {}).get('instruments', []):
-                    if inst.get('strike') == strike and inst.get('instrument_type') == ot and inst.get(
-                            'expiry') == expiry:
-                        c = Contract(symbol=symbol, tradingsymbol=inst['tradingsymbol'],
-                                     instrument_token=inst['instrument_token'],
-                                     lot_size=inst.get('lot_size', 1), strike=strike,
-                                     option_type=ot, expiry=expiry)
-                        if strike not in self.contracts:
-                            self.contracts[strike] = {}
-                        self.contracts[strike][ot] = c
-                        to_fetch.append(f"NFO:{inst['tradingsymbol']}")
-                        break
+                inst = self._instrument_index.get((symbol, expiry, strike, ot))
+                if not inst:
+                    continue
+
+                c = Contract(symbol=symbol, tradingsymbol=inst['tradingsymbol'],
+                             instrument_token=inst['instrument_token'],
+                             lot_size=inst.get('lot_size', 1), strike=strike,
+                             option_type=ot, expiry=expiry)
+                if strike not in self.contracts:
+                    self.contracts[strike] = {}
+                self.contracts[strike][ot] = c
+                self._token_contract_map[c.instrument_token] = c
+                tradingsymbol_contract_map[c.tradingsymbol] = c
+                to_fetch.append(f"NFO:{inst['tradingsymbol']}")
+
         if not to_fetch:
             return
         try:
             quotes = self.kite.quote(to_fetch)
             for k, q in quotes.items():
                 ts = k.split(':')[-1]
-                for sc in self.contracts.values():
-                    for c in sc.values():
-                        if c.tradingsymbol == ts:
-                            c.ltp, c.oi = q.get('last_price', 0.0), q.get('oi', 0)
-                            depth = q.get('depth', {})
-                            if depth and depth.get('buy'):
-                                c.bid = depth['buy'][0]['price']
-                            if depth and depth.get('sell'):
-                                c.ask = depth['sell'][0]['price']
+                c = tradingsymbol_contract_map.get(ts)
+                if not c:
+                    continue
+
+                c.ltp, c.oi = q.get('last_price', 0.0), q.get('oi', 0)
+                depth = q.get('depth', {})
+                if depth and depth.get('buy'):
+                    c.bid = depth['buy'][0]['price']
+                if depth and depth.get('sell'):
+                    c.ask = depth['sell'][0]['price']
             self._rebuild_table()
         except Exception as e:
             logger.error(f"Fetch failed: {e}")
 
     def update_prices(self, data: Union[dict, list]):
         ticks = data if isinstance(data, list) else [data]
-        updated = False
-        tick_map = {t['instrument_token']: t for t in ticks}
-        for sc in self.contracts.values():
-            for c in sc.values():
-                if c and c.instrument_token in tick_map:
-                    t = tick_map[c.instrument_token]
-                    c.ltp = t.get('last_price', c.ltp)
-                    depth = t.get('depth', {})
-                    if depth and depth.get('buy'):
-                        c.bid = depth['buy'][0]['price']
-                    if depth and depth.get('sell'):
-                        c.ask = depth['sell'][0]['price']
-                    c.oi = t.get('oi', c.oi)
-                    updated = True
-        if updated:
-            all_oi = [c.oi for sc in self.contracts.values() for c in sc.values() if c and c.oi > 0]
-            self._max_oi = max(all_oi) if all_oi else 1.0
-            self._update_table()
+        dirty_rows: set[int] = set()
+        oi_changed = False
+
+        for tick in ticks:
+            token = tick.get('instrument_token')
+            if token is None:
+                continue
+
+            contract = self._token_contract_map.get(token)
+            if not contract:
+                continue
+
+            if 'last_price' in tick and tick.get('last_price') != contract.ltp:
+                contract.ltp = tick.get('last_price', contract.ltp)
+
+            depth = tick.get('depth', {})
+            if depth and depth.get('buy'):
+                contract.bid = depth['buy'][0]['price']
+            if depth and depth.get('sell'):
+                contract.ask = depth['sell'][0]['price']
+
+            new_oi = tick.get('oi', contract.oi)
+            if new_oi != contract.oi:
+                contract.oi = new_oi
+                oi_changed = True
+
+            row = self._strike_row_map.get(contract.strike)
+            if row is not None:
+                dirty_rows.add(row)
+
+        if dirty_rows:
+            if oi_changed:
+                all_oi = [c.oi for sc in self.contracts.values() for c in sc.values() if c and c.oi > 0]
+                prev_max_oi = self._max_oi
+                self._max_oi = max(all_oi) if all_oi else 1.0
+                max_oi_changed = self._max_oi != prev_max_oi
+                refresh_rows = set(range(self.table.rowCount())) if max_oi_changed else dirty_rows
+                self._update_table(rows=refresh_rows, refresh_oi=True)
+                return
+
+            self._update_table(rows=dirty_rows, refresh_oi=False)
 
     def _check_price_movement(self):
         if not self.auto_adjust_enabled or not self.current_price or not self.symbol:
@@ -927,11 +992,8 @@ class StrikeLadderWidget(QWidget):
         return self.base_strike_interval
 
     def get_ltp_for_token(self, token: int) -> Optional[float]:
-        for sc in self.contracts.values():
-            for c in sc.values():
-                if c.instrument_token == token:
-                    return c.ltp
-        return None
+        contract = self._token_contract_map.get(token)
+        return contract.ltp if contract else None
 
     def get_ladder_data(self) -> List[Dict]:
         data = []

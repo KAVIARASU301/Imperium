@@ -6,6 +6,7 @@ from PySide6.QtCore import QObject, Signal, QTimer, Qt
 from kiteconnect import KiteTicker
 from datetime import datetime, timedelta, time
 import socket
+import time as pytime
 import requests
 
 logger = logging.getLogger(__name__)
@@ -46,6 +47,8 @@ class MarketDataWorker(QObject):
         self.is_intentional_stop = False  # Track if user manually stopped
         self._heartbeat_stale_reported = False
         self.network_check_failed_count = 0  # Track consecutive network failures
+        self._http_probe_cooldown_sec = 60
+        self._last_http_probe_monotonic = 0.0
 
         # Ensure websocket callback handling runs on the worker's thread.
         self._ticks_received.connect(self._handle_ticks, Qt.QueuedConnection)
@@ -53,33 +56,53 @@ class MarketDataWorker(QObject):
         self._ws_closed.connect(self._handle_close, Qt.QueuedConnection)
         self._ws_error.connect(self._handle_error, Qt.QueuedConnection)
 
-    def _check_network_connectivity(self) -> tuple[bool, str]:
+    def _check_network_connectivity(self, force_http_probe: bool = False) -> tuple[bool, str]:
         """
-        Check if network and DNS are working.
+        Fast connectivity check for reconnect/start path.
+        Uses DNS + TCP socket probe as primary signal.
+        HTTP probe is debounced and non-blocking.
         Returns: (is_connected, error_message)
         """
-        # Quick DNS check
+        host = 'api.kite.trade'
+
+        # Quick DNS check (cheap)
         try:
-            socket.gethostbyname('api.kite.trade')
-            logger.debug("DNS resolution successful for api.kite.trade")
+            resolved_ip = socket.gethostbyname(host)
+            logger.debug(f"DNS resolution successful for {host}: {resolved_ip}")
         except socket.gaierror as e:
             return False, f"DNS resolution failed: {e}"
         except Exception as e:
             return False, f"DNS check error: {e}"
 
-        # Quick HTTP connectivity check
+        # Fast TCP reachability check (avoid repeated full HTTP requests)
         try:
-            response = requests.get('https://api.kite.trade', timeout=5)
-            logger.debug(f"Network check successful: HTTP {response.status_code}")
-            return True, "Network OK"
-        except requests.exceptions.ConnectionError as e:
-            return False, f"Connection failed: Network unreachable"
-        except requests.exceptions.Timeout:
-            return False, "Connection timeout: Network slow/unstable"
-        except requests.exceptions.RequestException as e:
-            return False, f"Network error: {e}"
+            with socket.create_connection((host, 443), timeout=2):
+                pass
+            logger.debug(f"TCP reachability successful for {host}:443")
+        except socket.timeout:
+            return False, "Socket connect timeout: Network slow/unstable"
+        except OSError as e:
+            return False, f"Socket connectivity failed: {e}"
         except Exception as e:
-            return False, f"Unexpected error: {e}"
+            return False, f"Socket check error: {e}"
+
+        # Optional deep probe with cooldown to avoid repeated external calls.
+        now = pytime.monotonic()
+        http_probe_due = (now - self._last_http_probe_monotonic) >= self._http_probe_cooldown_sec
+        should_probe_http = force_http_probe or http_probe_due
+
+        if not should_probe_http:
+            return True, "Network OK (DNS + socket)"
+
+        self._last_http_probe_monotonic = now
+        try:
+            response = requests.get(f'https://{host}', timeout=3)
+            logger.debug(f"HTTP probe successful: {response.status_code}")
+            return True, "Network OK"
+        except requests.exceptions.RequestException as e:
+            # Non-fatal: DNS + socket checks already passed.
+            logger.warning(f"HTTP probe failed but fast checks passed: {e}")
+            return True, "Network OK (HTTP probe skipped/failing)"
 
     def _is_market_hours(self) -> bool:
         """
@@ -133,7 +156,7 @@ class MarketDataWorker(QObject):
         self.is_intentional_stop = False  # Reset flag
 
         # 🔥 NETWORK CHECK: Verify connectivity before attempting connection
-        is_connected, error_msg = self._check_network_connectivity()
+        is_connected, error_msg = self._check_network_connectivity(force_http_probe=True)
         if not is_connected:
             logger.error(f"Network connectivity check failed: {error_msg}")
             self.connection_status_changed.emit(f"Network Error: {error_msg}")

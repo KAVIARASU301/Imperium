@@ -178,6 +178,8 @@ class OptionChainDialog(QDialog):
         self.kite = real_kite_client
         self.instrument_data = instrument_data
         self.contracts_data: Dict[float, Dict[str, dict]] = {}
+        self._contracts_cache_key: Optional[tuple[str, date]] = None
+        self._cached_quote_symbols: list[str] = []
         self.underlying_instrument = ""
         self.underlying_ltp = 0.0
         self.lot_size = 1
@@ -324,6 +326,8 @@ class OptionChainDialog(QDialog):
         if not symbol:
             return
 
+        self._contracts_cache_key = None
+        self._cached_quote_symbols.clear()
         self.expiry_combo.clear()
 
         # Get symbol data from the nested structure
@@ -351,6 +355,38 @@ class OptionChainDialog(QDialog):
     def _on_per_lot_changed(self, checked: bool):
         self._fetch_market_data()
 
+    def _refresh_contract_cache(self, symbol: str, expiry_date: date, expiry_str: str):
+        """Rebuild contracts only when symbol/expiry selection changes."""
+        cache_key = (symbol, expiry_date)
+        if cache_key == self._contracts_cache_key:
+            return
+
+        symbol_data = self.instrument_data.get(symbol, {})
+        instruments = symbol_data.get('instruments', [])
+
+        self.contracts_data.clear()
+        self._cached_quote_symbols.clear()
+
+        for inst in instruments:
+            if inst.get('expiry') != expiry_date:
+                continue
+
+            strike = inst.get('strike')
+            opt_type = inst.get('instrument_type')
+            tradingsymbol = inst.get('tradingsymbol')
+            if not strike or not opt_type:
+                continue
+
+            if strike not in self.contracts_data:
+                self.contracts_data[strike] = {}
+            self.contracts_data[strike][opt_type] = inst
+
+            if tradingsymbol:
+                self._cached_quote_symbols.append(f"NFO:{tradingsymbol}")
+
+        self._contracts_cache_key = cache_key
+        logger.info(f"Loaded {len(self.contracts_data)} strikes for {symbol} {expiry_str}")
+
     def _fetch_market_data(self):
         if not self.expiry_combo.currentText():
             return
@@ -364,26 +400,12 @@ class OptionChainDialog(QDialog):
 
             expiry_date = datetime.strptime(expiry_str, '%d-%b-%Y').date()
 
-            # Get instruments for this symbol
             symbol_data = self.instrument_data.get(symbol, {})
-            instruments = symbol_data.get('instruments', [])
-
-            if not instruments:
+            if not symbol_data.get('instruments'):
                 logger.warning(f"No instruments available for {symbol}")
                 return
 
-            # Build contracts data for the selected expiry
-            self.contracts_data.clear()
-            for inst in instruments:
-                if inst.get('expiry') == expiry_date:
-                    strike = inst.get('strike')
-                    opt_type = inst.get('instrument_type')
-                    if strike and opt_type:
-                        if strike not in self.contracts_data:
-                            self.contracts_data[strike] = {}
-                        self.contracts_data[strike][opt_type] = inst
-
-            logger.info(f"Loaded {len(self.contracts_data)} strikes for {symbol} {expiry_str}")
+            self._refresh_contract_cache(symbol, expiry_date, expiry_str)
 
             # Fetch underlying spot price
             if self.underlying_instrument:
@@ -396,16 +418,10 @@ class OptionChainDialog(QDialog):
                     logger.warning(f"Could not fetch underlying LTP: {e}")
 
             # Fetch market data for all option contracts
-            all_symbols = []
-            for strike_data in self.contracts_data.values():
-                for contract in strike_data.values():
-                    if 'tradingsymbol' in contract:
-                        all_symbols.append(f"NFO:{contract['tradingsymbol']}")
-
             market_data = {}
-            if all_symbols:
+            if self._cached_quote_symbols:
                 try:
-                    market_data = self.kite.quote(all_symbols)
+                    market_data = self.kite.quote(self._cached_quote_symbols)
                 except Exception as e:
                     logger.error(f"Error fetching market data: {e}")
 
