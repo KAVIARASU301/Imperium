@@ -113,6 +113,8 @@ class DateNavigator(QWidget):
 class MarketChartWidget(QWidget):
     """Optimized chart with line mode only"""
 
+    MAX_CHART_POINTS = 1500
+
     def __init__(self, parent=None, timeframe_combo=None):
         super().__init__(parent)
         self.timeframe_combo = timeframe_combo
@@ -127,6 +129,12 @@ class MarketChartWidget(QWidget):
         # Optimized update system
         self._data_is_dirty = False
         self._pending_ticks = []  # Batch tick updates
+
+        # Reusable chart resources (avoid allocations in redraw loop)
+        self._pen_prev = pg.mkPen('#666666', width=1.2)
+        self._pen_today = pg.mkPen('#00BCD4', width=1.5)
+        self._sep_pen = pg.mkPen('#555555', width=1, style=Qt.DashLine)
+        self._dot_brush = pg.mkBrush('#00E676')
 
         # Throttle to 250ms for smoother updates
         self.update_timer = QTimer(self)
@@ -175,6 +183,17 @@ class MarketChartWidget(QWidget):
         if window is None or not window.isActiveWindow():
             return
         if self._data_is_dirty:
+            for tick in self._pending_ticks:
+                ltp = tick.get("last_price")
+                if ltp is None or self.chart_data.empty:
+                    continue
+                self.chart_data.iat[-1, self.chart_data.columns.get_loc("close")] = ltp
+                current_high = self.chart_data.iat[-1, self.chart_data.columns.get_loc("high")]
+                current_low = self.chart_data.iat[-1, self.chart_data.columns.get_loc("low")]
+                self.chart_data.iat[-1, self.chart_data.columns.get_loc("high")] = max(current_high, ltp)
+                self.chart_data.iat[-1, self.chart_data.columns.get_loc("low")] = min(current_low, ltp)
+
+            self._prune_chart_data()
             self._plot_chart_data(full_redraw=False)
             self._data_is_dirty = False
             self._pending_ticks.clear()
@@ -194,11 +213,20 @@ class MarketChartWidget(QWidget):
         self.symbol = symbol
         # Avoid copy - just reference it (assuming no external mutation)
         self.chart_data = data
+        self._prune_chart_data()
         self.day_separator_pos = day_separator_pos
         self.cpr_levels = cpr_levels
         self.symbol_label.setText(self.symbol)
         self._plot_chart_data(full_redraw=True)
         self.set_visible_range("Auto")
+
+    def _prune_chart_data(self):
+        """Keep only recent bars for long-running monitor sessions."""
+        if self.chart_data.empty:
+            return
+        if len(self.chart_data) <= self.MAX_CHART_POINTS:
+            return
+        self.chart_data = self.chart_data.tail(self.MAX_CHART_POINTS).copy()
 
     def add_tick(self, tick: dict):
         """Queue tick for batched processing"""
@@ -245,7 +273,7 @@ class MarketChartWidget(QWidget):
             if self._line_plot_prev is None or full_redraw:
                 self._line_plot_prev = plot_item.plot(
                     x[:sep], closes[:sep],
-                    pen=pg.mkPen('#666666', width=1.2)
+                    pen=self._pen_prev
                 )
             else:
                 self._line_plot_prev.setData(x[:sep], closes[:sep])
@@ -253,7 +281,7 @@ class MarketChartWidget(QWidget):
             if self._line_plot_today is None or full_redraw:
                 self._line_plot_today = plot_item.plot(
                     x[sep:], closes[sep:],
-                    pen=pg.mkPen('#00BCD4', width=1.5)
+                    pen=self._pen_today
                 )
             else:
                 self._line_plot_today.setData(x[sep:], closes[sep:])
@@ -261,7 +289,7 @@ class MarketChartWidget(QWidget):
             if self._line_plot_today is None or full_redraw:
                 self._line_plot_today = plot_item.plot(
                     x, closes,
-                    pen=pg.mkPen('#00BCD4', width=1.5)
+                    pen=self._pen_today
                 )
             else:
                 self._line_plot_today.setData(x, closes)
@@ -273,7 +301,7 @@ class MarketChartWidget(QWidget):
                 sep_line = pg.InfiniteLine(
                     pos=self.day_separator_pos - 0.5,
                     angle=90,
-                    pen=pg.mkPen('#555555', width=1, style=Qt.DashLine)
+                    pen=self._sep_pen
                 )
                 plot_item.addItem(sep_line)
 
@@ -288,7 +316,7 @@ class MarketChartWidget(QWidget):
                     pen=None,
                     symbol='o',
                     symbolSize=6,
-                    symbolBrush=pg.mkBrush('#00E676'),
+                    symbolBrush=self._dot_brush,
                     symbolPen=None
                 )
             else:

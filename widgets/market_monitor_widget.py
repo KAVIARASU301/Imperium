@@ -70,6 +70,8 @@ class CandlestickItem(pg.GraphicsObject):
 
 
 class MarketChartWidget(QWidget):
+    MAX_CHART_POINTS = 1500
+
     def __init__(self, parent=None, timeframe_combo=None):
         super().__init__(parent)
         self.timeframe_combo = timeframe_combo
@@ -142,11 +144,20 @@ class MarketChartWidget(QWidget):
             return
         self.symbol = symbol
         self.chart_data = data.copy()
+        self._prune_chart_data()
         self.day_separator_pos = day_separator_pos
         self.cpr_levels = cpr_levels
         self.symbol_label.setText(self.symbol)
         self._plot_chart_data(full_redraw=True)
         self.set_visible_range("Auto")
+
+    def _prune_chart_data(self):
+        """Keep only the most recent bars to avoid unbounded growth in long sessions."""
+        if self.chart_data.empty:
+            return
+        if len(self.chart_data) <= self.MAX_CHART_POINTS:
+            return
+        self.chart_data = self.chart_data.tail(self.MAX_CHART_POINTS).copy()
 
     def _draw_cpr(self):
         if not self.cpr_levels:
@@ -215,6 +226,8 @@ class MarketChartWidget(QWidget):
                                    index=[rounded])
             self.chart_data = pd.concat([self.chart_data, new_row])
             self.chart_data.sort_index(inplace=True)
+
+        self._prune_chart_data()
 
         # --- FIX: Instead of plotting directly, set the dirty flag ---
         self._data_is_dirty = True

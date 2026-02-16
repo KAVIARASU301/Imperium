@@ -73,6 +73,16 @@ class CVDChartWidget(QWidget):
         self.axis = pg.AxisItem(orientation="bottom")
         self._auto_refresh = auto_refresh
 
+        # Cached plot resources (avoid recreating in hot redraw loops)
+        self._pen_prev_session = pg.mkPen("#7A7A7A", width=1.2)
+        self._pen_current_session = pg.mkPen("#26A69A", width=1.6)
+        self._pen_live_segment = pg.mkPen("#26A69A", width=0.8)
+        self._dot_brushes = {
+            self.COLOR_UP: pg.mkBrush(self.COLOR_UP),
+            self.COLOR_DOWN: pg.mkBrush(self.COLOR_DOWN),
+            self.COLOR_FLAT: pg.mkBrush(self.COLOR_FLAT),
+        }
+
         self._setup_ui()
         self._setup_crosshair()
         if self._auto_refresh and self.instrument_token and isinstance(self.instrument_token, int):
@@ -490,9 +500,9 @@ class CVDChartWidget(QWidget):
 
             # Styling: previous day dimmed, current day bright
             pen = (
-                pg.mkPen("#7A7A7A", width=1.2)
+                self._pen_prev_session
                 if i == 0 and len(sessions) == 2
-                else pg.mkPen("#26A69A", width=1.6)
+                else self._pen_current_session
             )
 
             # Keep live minute simple: one thin segment from previous close
@@ -503,8 +513,9 @@ class CVDChartWidget(QWidget):
 
             if is_live_current_session:
                 self.plot.addItem(pg.PlotCurveItem(x[:-1], y[:-1], pen=pen))
-                live_pen = pg.mkPen("#26A69A", width=0.8)
-                self.plot.addItem(pg.PlotCurveItem([x[-2], x[-1]], [y[-2], y[-1]], pen=live_pen))
+                self.plot.addItem(
+                    pg.PlotCurveItem([x[-2], x[-1]], [y[-2], y[-1]], pen=self._pen_live_segment)
+                )
             else:
                 self.plot.addItem(pg.PlotCurveItem(x, y, pen=pen))
 
@@ -528,7 +539,7 @@ class CVDChartWidget(QWidget):
             else:
                 color = self.COLOR_FLAT
 
-            self.end_dot.setBrush(pg.mkBrush(color))
+            self.end_dot.setBrush(self._dot_brushes.get(color, self._dot_brushes[self.COLOR_FLAT]))
             self.end_dot.setData([last_x], [last_y])
 
             # --- Pulse trigger ---

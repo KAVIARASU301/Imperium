@@ -71,6 +71,8 @@ class OpenPositionsTable(QWidget):
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setAlternatingRowColors(True)
+        self.table.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self.table.setWordWrap(False)
         # Keep disabled because divider rows are structural, not sortable records.
         self.table.setSortingEnabled(False)
 

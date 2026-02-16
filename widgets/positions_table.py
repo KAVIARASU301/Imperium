@@ -1198,6 +1198,8 @@ class PositionsTable(QWidget):
         self.table.setTabKeyNavigation(False)
         self.table.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
         self.table.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
+        # Disable wrapping to keep row layout cheaper for larger datasets.
+        self.table.setWordWrap(False)
 
         # IMPORTANT: enable row selection (used for hover)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)

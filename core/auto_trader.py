@@ -292,6 +292,8 @@ class CVDSingleChartDialog(QDialog):
         self._ema_line_opacity = 0.85
         self._window_bg_image_path = ""
         self._window_bg_target = self.BG_TARGET_NONE
+        self._live_tick_cvd_pen = pg.mkPen("#26A69A", width=1.4, cosmetic=True)
+        self._live_tick_price_pen = pg.mkPen("#FFE57F", width=1.4, cosmetic=True)
 
         self.setWindowTitle(f"Auto Trader — {self._display_symbol_for_title(symbol)}")
         self.setObjectName("autoTraderWindow")
@@ -3312,8 +3314,7 @@ class CVDSingleChartDialog(QDialog):
         # Plot CVD ticks - only connect finite values with consistent pen
         if np.any(valid_cvd_mask):
             # Ensure consistent rendering by setting pen explicitly
-            pen = pg.mkPen("#26A69A", width=1.4, cosmetic=True)
-            self.today_tick_curve.setPen(pen)
+            self.today_tick_curve.setPen(self._live_tick_cvd_pen)
             self.today_tick_curve.setData(
                 x_arr[valid_cvd_mask],
                 y_arr[valid_cvd_mask],
@@ -3326,8 +3327,7 @@ class CVDSingleChartDialog(QDialog):
         # Plot price ticks - only connect finite values with consistent pen
         if np.any(valid_price_mask):
             # Ensure consistent rendering by setting pen explicitly
-            pen = pg.mkPen("#FFE57F", width=1.4, cosmetic=True)
-            self.price_today_tick_curve.setPen(pen)
+            self.price_today_tick_curve.setPen(self._live_tick_price_pen)
             self.price_today_tick_curve.setData(
                 x_arr[valid_price_mask],
                 price_arr[valid_price_mask],
