@@ -1,8 +1,10 @@
+import json
 import logging
 import re
 from collections import deque
 from contextlib import suppress
 from datetime import datetime, timedelta
+from pathlib import Path
 import numpy as np
 
 import pandas as pd
@@ -254,6 +256,7 @@ class CVDSingleChartDialog(QDialog):
         self.symbol = symbol
         self.cvd_engine = cvd_engine
         self._settings = QSettings("OptionsBadger", "AutoTrader")
+        self._setup_values_ready = False
         self.timeframe_minutes = 1  # default = 1 minute
         self.strategy_detector = StrategySignalDetector(timeframe_minutes=self.timeframe_minutes)
 
@@ -1330,8 +1333,63 @@ class CVDSingleChartDialog(QDialog):
     def _settings_key_prefix(self) -> str:
         return f"chart_setup/{self.instrument_token}"
 
+    @staticmethod
+    def _global_settings_key_prefix() -> str:
+        return "chart_setup/global"
+
+    @staticmethod
+    def _setup_json_file_path() -> Path:
+        config_dir = Path.home() / ".options_badger"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        return config_dir / "auto_trader_setup.json"
+
+    def _read_setup_json(self) -> dict:
+        json_path = self._setup_json_file_path()
+        if not json_path.exists():
+            return {}
+        try:
+            with open(json_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else {}
+        except Exception as exc:
+            logger.warning("Failed reading Auto Trader setup JSON: %s", exc)
+            return {}
+
+    def _write_setup_json(self, values: dict):
+        json_path = self._setup_json_file_path()
+        try:
+            with open(json_path, "w", encoding="utf-8") as f:
+                json.dump(values, f, indent=2)
+        except Exception as exc:
+            logger.warning("Failed writing Auto Trader setup JSON: %s", exc)
+
     def _load_persisted_setup_values(self):
         key_prefix = self._settings_key_prefix()
+        global_key_prefix = self._global_settings_key_prefix()
+        json_settings = self._read_setup_json()
+
+        def _read_setting(name: str, default, value_type=None):
+            if name in json_settings:
+                value = json_settings[name]
+                if value_type is None:
+                    return value
+                try:
+                    if value_type is bool:
+                        if isinstance(value, bool):
+                            return value
+                        if isinstance(value, str):
+                            return value.strip().lower() in {"1", "true", "yes", "on"}
+                        return bool(value)
+                    return value_type(value)
+                except (TypeError, ValueError):
+                    return default
+
+            token_key = f"{key_prefix}/{name}"
+            global_key = f"{global_key_prefix}/{name}"
+            key_to_read = global_key if self._settings.contains(global_key) else token_key
+            if value_type is None:
+                return self._settings.value(key_to_read, default)
+            return self._settings.value(key_to_read, default, type=value_type)
 
         def _apply_combo_value(combo: QComboBox, data_value, fallback_index: int = 0):
             idx = combo.findData(data_value)
@@ -1360,55 +1418,36 @@ class CVDSingleChartDialog(QDialog):
             cb.blockSignals(True)
 
         self.automate_toggle.setChecked(
-            self._settings.value(f"{key_prefix}/enabled", self.automate_toggle.isChecked(), type=bool)
+            _read_setting("enabled", self.automate_toggle.isChecked(), bool)
         )
         self.automation_stoploss_input.setValue(
-            self._settings.value(
-                f"{key_prefix}/stoploss_points",
-                self.automation_stoploss_input.value(),
-                type=int,
-            )
+            _read_setting("stoploss_points", self.automation_stoploss_input.value(), int)
         )
         _apply_combo_value(
             self.automation_route_combo,
-            self._settings.value(
-                f"{key_prefix}/route",
-                self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL,
-            ),
+            _read_setting("route", self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL),
             fallback_index=0,
         )
 
         self.atr_base_ema_input.setValue(
-            self._settings.value(
-                f"{key_prefix}/atr_base_ema",
-                self.atr_base_ema_input.value(),
-                type=int,
-            )
+            _read_setting("atr_base_ema", self.atr_base_ema_input.value(), int)
         )
         self.atr_distance_input.setValue(
-            self._settings.value(
-                f"{key_prefix}/atr_distance",
-                self.atr_distance_input.value(),
-                type=float,
-            )
+            _read_setting("atr_distance", self.atr_distance_input.value(), float)
         )
         self.cvd_ema_gap_input.setValue(
-            self._settings.value(
-                f"{key_prefix}/cvd_ema_gap",
-                self.cvd_ema_gap_input.value(),
-                type=int,
-            )
+            _read_setting("cvd_ema_gap", self.cvd_ema_gap_input.value(), int)
         )
 
-        signal_filter_value = self._settings.value(
-            f"{key_prefix}/signal_filter",
+        signal_filter_value = _read_setting(
+            "signal_filter",
             self.signal_filter_combo.currentData() or self.SIGNAL_FILTER_ALL,
         )
         _apply_combo_value(self.signal_filter_combo, signal_filter_value, fallback_index=0)
         _apply_combo_value(self.setup_signal_filter_combo, signal_filter_value, fallback_index=0)
 
-        marker_filter_value = self._settings.value(
-            f"{key_prefix}/atr_marker_filter",
+        marker_filter_value = _read_setting(
+            "atr_marker_filter",
             self.atr_marker_filter_combo.currentData() or self.ATR_MARKER_CONFLUENCE_ONLY,
         )
         _apply_combo_value(self.atr_marker_filter_combo, marker_filter_value, fallback_index=1)
@@ -1416,54 +1455,47 @@ class CVDSingleChartDialog(QDialog):
 
         # 🆕 Load range breakout settings
         self.range_lookback_input.setValue(
-            self._settings.value(
-                f"{key_prefix}/range_lookback",
-                self.range_lookback_input.value(),
-                type=int,
-            )
+            _read_setting("range_lookback", self.range_lookback_input.value(), int)
         )
         _apply_combo_value(
             self.breakout_switch_mode_combo,
-            self._settings.value(
-                f"{key_prefix}/breakout_switch_mode",
-                self.breakout_switch_mode_combo.currentData() or self.BREAKOUT_SWITCH_ADAPTIVE,
-            ),
+            _read_setting("breakout_switch_mode", self.breakout_switch_mode_combo.currentData() or self.BREAKOUT_SWITCH_ADAPTIVE),
             fallback_index=2,
         )
 
         self.hide_simulator_btn_check.setChecked(
-            self._settings.value(f"{key_prefix}/hide_simulator_button", False, type=bool)
+            _read_setting("hide_simulator_button", False, bool)
         )
         self.chart_line_width_input.setValue(
-            self._settings.value(f"{key_prefix}/chart_line_width", self.chart_line_width_input.value(), type=float)
+            _read_setting("chart_line_width", self.chart_line_width_input.value(), float)
         )
         self.chart_line_opacity_input.setValue(
-            self._settings.value(f"{key_prefix}/chart_line_opacity", self.chart_line_opacity_input.value(), type=float)
+            _read_setting("chart_line_opacity", self.chart_line_opacity_input.value(), float)
         )
         self.confluence_line_width_input.setValue(
-            self._settings.value(f"{key_prefix}/confluence_line_width", self.confluence_line_width_input.value(), type=float)
+            _read_setting("confluence_line_width", self.confluence_line_width_input.value(), float)
         )
         self.confluence_line_opacity_input.setValue(
-            self._settings.value(f"{key_prefix}/confluence_line_opacity", self.confluence_line_opacity_input.value(), type=float)
+            _read_setting("confluence_line_opacity", self.confluence_line_opacity_input.value(), float)
         )
         self.ema_line_opacity_input.setValue(
-            self._settings.value(f"{key_prefix}/ema_line_opacity", self.ema_line_opacity_input.value(), type=float)
+            _read_setting("ema_line_opacity", self.ema_line_opacity_input.value(), float)
         )
 
-        self._chart_line_color = self._settings.value(f"{key_prefix}/chart_line_color", self._chart_line_color)
-        self._price_line_color = self._settings.value(f"{key_prefix}/price_line_color", self._price_line_color)
-        self._confluence_short_color = self._settings.value(f"{key_prefix}/confluence_short_color", self._confluence_short_color)
-        self._confluence_long_color = self._settings.value(f"{key_prefix}/confluence_long_color", self._confluence_long_color)
+        self._chart_line_color = _read_setting("chart_line_color", self._chart_line_color)
+        self._price_line_color = _read_setting("price_line_color", self._price_line_color)
+        self._confluence_short_color = _read_setting("confluence_short_color", self._confluence_short_color)
+        self._confluence_long_color = _read_setting("confluence_long_color", self._confluence_long_color)
 
         for period, cb in self.setup_ema_default_checks.items():
             default_enabled = (period == 51)
-            cb.setChecked(self._settings.value(f"{key_prefix}/ema_default_{period}", default_enabled, type=bool))
+            cb.setChecked(_read_setting(f"ema_default_{period}", default_enabled, bool))
 
-        self._window_bg_image_path = self._settings.value(f"{key_prefix}/background_image_path", "") or ""
+        self._window_bg_image_path = _read_setting("background_image_path", "") or ""
         self._update_bg_image_label()
         _apply_combo_value(
             self.bg_target_combo,
-            self._settings.value(f"{key_prefix}/background_target", self.BG_TARGET_NONE),
+            _read_setting("background_target", self.BG_TARGET_NONE),
             fallback_index=0,
         )
 
@@ -1492,45 +1524,51 @@ class CVDSingleChartDialog(QDialog):
 
         self._apply_visual_settings()
         self._update_atr_reversal_markers()
+        self._setup_values_ready = True
         self._on_automation_settings_changed()
 
     def _persist_setup_values(self):
+        if not getattr(self, "_setup_values_ready", False):
+            return
+
         key_prefix = self._settings_key_prefix()
-        self._settings.setValue(f"{key_prefix}/enabled", self.automate_toggle.isChecked())
-        self._settings.setValue(f"{key_prefix}/stoploss_points", int(self.automation_stoploss_input.value()))
-        self._settings.setValue(
-            f"{key_prefix}/route",
-            self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL,
-        )
-        self._settings.setValue(f"{key_prefix}/atr_base_ema", int(self.atr_base_ema_input.value()))
-        self._settings.setValue(f"{key_prefix}/atr_distance", float(self.atr_distance_input.value()))
-        self._settings.setValue(f"{key_prefix}/cvd_ema_gap", int(self.cvd_ema_gap_input.value()))
-        self._settings.setValue(f"{key_prefix}/signal_filter", self._selected_signal_filter())
-        self._settings.setValue(
-            f"{key_prefix}/atr_marker_filter",
-            self.atr_marker_filter_combo.currentData() or self.ATR_MARKER_CONFLUENCE_ONLY,
-        )
-        # 🆕 Persist range breakout settings
-        self._settings.setValue(f"{key_prefix}/range_lookback", int(self.range_lookback_input.value()))
-        self._settings.setValue(
-            f"{key_prefix}/breakout_switch_mode",
-            self._selected_breakout_switch_mode(),
-        )
-        self._settings.setValue(f"{key_prefix}/hide_simulator_button", self.hide_simulator_btn_check.isChecked())
-        self._settings.setValue(f"{key_prefix}/chart_line_width", float(self.chart_line_width_input.value()))
-        self._settings.setValue(f"{key_prefix}/chart_line_opacity", float(self.chart_line_opacity_input.value()))
-        self._settings.setValue(f"{key_prefix}/confluence_line_width", float(self.confluence_line_width_input.value()))
-        self._settings.setValue(f"{key_prefix}/confluence_line_opacity", float(self.confluence_line_opacity_input.value()))
-        self._settings.setValue(f"{key_prefix}/ema_line_opacity", float(self.ema_line_opacity_input.value()))
-        self._settings.setValue(f"{key_prefix}/chart_line_color", self._chart_line_color)
-        self._settings.setValue(f"{key_prefix}/price_line_color", self._price_line_color)
-        self._settings.setValue(f"{key_prefix}/confluence_short_color", self._confluence_short_color)
-        self._settings.setValue(f"{key_prefix}/confluence_long_color", self._confluence_long_color)
+        global_key_prefix = self._global_settings_key_prefix()
+
+        values_to_persist = {
+            "enabled": self.automate_toggle.isChecked(),
+            "stoploss_points": int(self.automation_stoploss_input.value()),
+            "route": self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL,
+            "atr_base_ema": int(self.atr_base_ema_input.value()),
+            "atr_distance": float(self.atr_distance_input.value()),
+            "cvd_ema_gap": int(self.cvd_ema_gap_input.value()),
+            "signal_filter": self._selected_signal_filter(),
+            "atr_marker_filter": self.atr_marker_filter_combo.currentData() or self.ATR_MARKER_CONFLUENCE_ONLY,
+            # 🆕 Persist range breakout settings
+            "range_lookback": int(self.range_lookback_input.value()),
+            "breakout_switch_mode": self._selected_breakout_switch_mode(),
+            "hide_simulator_button": self.hide_simulator_btn_check.isChecked(),
+            "chart_line_width": float(self.chart_line_width_input.value()),
+            "chart_line_opacity": float(self.chart_line_opacity_input.value()),
+            "confluence_line_width": float(self.confluence_line_width_input.value()),
+            "confluence_line_opacity": float(self.confluence_line_opacity_input.value()),
+            "ema_line_opacity": float(self.ema_line_opacity_input.value()),
+            "chart_line_color": self._chart_line_color,
+            "price_line_color": self._price_line_color,
+            "confluence_short_color": self._confluence_short_color,
+            "confluence_long_color": self._confluence_long_color,
+            "background_image_path": self._window_bg_image_path,
+            "background_target": self.bg_target_combo.currentData() or self.BG_TARGET_NONE,
+        }
+
         for period, cb in self.setup_ema_default_checks.items():
-            self._settings.setValue(f"{key_prefix}/ema_default_{period}", cb.isChecked())
-        self._settings.setValue(f"{key_prefix}/background_image_path", self._window_bg_image_path)
-        self._settings.setValue(f"{key_prefix}/background_target", self.bg_target_combo.currentData() or self.BG_TARGET_NONE)
+            values_to_persist[f"ema_default_{period}"] = cb.isChecked()
+
+        for name, value in values_to_persist.items():
+            self._settings.setValue(f"{key_prefix}/{name}", value)
+            self._settings.setValue(f"{global_key_prefix}/{name}", value)
+
         self._settings.sync()
+        self._write_setup_json(values_to_persist)
 
     def _on_automation_settings_changed(self, *_):
         self._persist_setup_values()
