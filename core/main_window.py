@@ -862,7 +862,7 @@ class ScalperMainWindow(QMainWindow):
             else:
                 active_strategy = active_trade.get("strategy_type") or "atr_reversal"
                 incoming_signal_type = payload.get("signal_type") or state.get("signal_filter") or "atr_reversal"
-                if incoming_signal_type == "ema_cvd_cross":
+                if incoming_signal_type in {"ema_cvd_cross", "ema_cross"}:
                     incoming_strategy = "ema_cross"
                 elif incoming_signal_type == "atr_divergence":
                     incoming_strategy = "atr_divergence"
@@ -953,10 +953,30 @@ class ScalperMainWindow(QMainWindow):
             "group_name": f"CVD_AUTO_{token}",
         }
 
+        tracked_tradingsymbol = contract.tradingsymbol
+        order_details = None
+
+        if route == "buy_exit_panel" and self.buy_exit_panel and self.strike_ladder:
+            desired_option_type = OptionType.CALL if signal_side == "long" else OptionType.PUT
+            if self.buy_exit_panel.option_type != desired_option_type:
+                self.buy_exit_panel.option_type = desired_option_type
+                self.buy_exit_panel._update_ui_for_option_type()
+
+            # For automation via buy_exit_panel: use panel's CURRENT settings
+            # DO NOT override above/below - respect what user has configured
+            # Panel will select strikes based on its own logic (radio buttons, above/below settings)
+
+            # Build order details directly from the panel with its current settings
+            order_details = self.buy_exit_panel.build_order_details()
+            if order_details and order_details.get('strikes'):
+                first_contract = order_details.get('strikes', [{}])[0].get('contract')
+                if first_contract and getattr(first_contract, "tradingsymbol", None):
+                    tracked_tradingsymbol = first_contract.tradingsymbol
+
         # Register the position BEFORE calling execute so that if the signal fires
         # again within the async 500ms confirmation window we don't double-enter.
         self._cvd_automation_positions[token] = {
-            "tradingsymbol": contract.tradingsymbol,
+            "tradingsymbol": tracked_tradingsymbol,
             "signal_side": signal_side,
             "route": route,
             "signal_timestamp": payload.get("timestamp"),  # Track when signal was generated
@@ -975,17 +995,6 @@ class ScalperMainWindow(QMainWindow):
         self._persist_cvd_automation_state()
 
         if route == "buy_exit_panel" and self.buy_exit_panel and self.strike_ladder:
-            desired_option_type = OptionType.CALL if signal_side == "long" else OptionType.PUT
-            if self.buy_exit_panel.option_type != desired_option_type:
-                self.buy_exit_panel.option_type = desired_option_type
-                self.buy_exit_panel._update_ui_for_option_type()
-
-            # For automation via buy_exit_panel: use panel's CURRENT settings
-            # DO NOT override above/below - respect what user has configured
-            # Panel will select strikes based on its own logic (radio buttons, above/below settings)
-
-            # Build order details directly from the panel with its current settings
-            order_details = self.buy_exit_panel.build_order_details()
             if order_details and order_details.get('strikes'):
                 # Execute orders directly without showing confirmation dialog
                 symbol = order_details.get('symbol')
@@ -1003,6 +1012,12 @@ class ScalperMainWindow(QMainWindow):
         else:
             # Direct route: execute single strike order directly
             self._execute_single_strike_order(order_params)
+
+        entry_signal_ts = payload.get("timestamp")
+        QTimer.singleShot(
+            2000,
+            lambda t=token, s=tracked_tradingsymbol, ts=entry_signal_ts: self._reconcile_failed_auto_entry(t, s, ts),
+        )
 
         logger.info(
             "[AUTO] Entered %s via %s | strategy=%s route=%s qty=%s underlying_sl=%s",
@@ -1260,6 +1275,27 @@ class ScalperMainWindow(QMainWindow):
                 logger.info("[AUTO] Restored %s persisted CVD automation position(s).", restored)
         except Exception as exc:
             logger.error("[AUTO] Failed to load CVD automation state: %s", exc, exc_info=True)
+
+    def _reconcile_failed_auto_entry(self, token: int, tradingsymbol: str, signal_timestamp: str | None):
+        """Drop pre-registered automation entries when broker/order placement never opened a position."""
+        active_trade = self._cvd_automation_positions.get(token)
+        if not active_trade:
+            return
+
+        if signal_timestamp and active_trade.get("signal_timestamp") != signal_timestamp:
+            return
+
+        tracked_symbol = tradingsymbol or active_trade.get("tradingsymbol")
+        if tracked_symbol and self.position_manager.get_position(tracked_symbol):
+            return
+
+        self._cvd_automation_positions.pop(token, None)
+        self._persist_cvd_automation_state()
+        logger.warning(
+            "[AUTO] Cleared stale pre-registered automation entry token=%s symbol=%s (no filled position found).",
+            token,
+            tracked_symbol,
+        )
 
     def _reconcile_cvd_automation_positions(self):
         """Drop persisted automation ownership for positions that are already closed."""
