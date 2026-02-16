@@ -1253,10 +1253,16 @@ class CVDSingleChartDialog(QDialog):
         x_arr = getattr(self, "_latest_sim_x_arr", None)
         short_mask = getattr(self, "_latest_sim_short_mask", None)
         long_mask = getattr(self, "_latest_sim_long_mask", None)
+        strategy_masks = getattr(self, "_latest_sim_strategy_masks", None)
         if x_arr is None or short_mask is None or long_mask is None:
             self._set_simulator_summary_text("Simulator: no plotted signals yet", "#FFA726")
             return
-        self._update_simulator_overlay(x_arr=x_arr, short_mask=short_mask, long_mask=long_mask)
+        self._update_simulator_overlay(
+            x_arr=x_arr,
+            short_mask=short_mask,
+            long_mask=long_mask,
+            strategy_masks=strategy_masks,
+        )
 
     def _clear_simulation_markers(self):
         for marker in (
@@ -2237,27 +2243,22 @@ class CVDSingleChartDialog(QDialog):
         if signal_filter == self.SIGNAL_FILTER_ATR_ONLY:
             short_mask = short_atr_reversal
             long_mask = long_atr_reversal
-            signal_label = "atr_reversal"
 
         elif signal_filter == self.SIGNAL_FILTER_EMA_CROSS_ONLY:
             short_mask = short_ema_cross
             long_mask = long_ema_cross
-            signal_label = "ema_cvd_cross"
 
         elif signal_filter == self.SIGNAL_FILTER_BREAKOUT_ONLY:  # 🆕 NEW
             short_mask = short_breakout
             long_mask = long_breakout
-            signal_label = "range_breakout"
 
         elif signal_filter == self.SIGNAL_FILTER_OTHERS:
             short_mask = short_divergence
             long_mask = long_divergence
-            signal_label = "atr_cvd_divergence"
 
         else:  # SIGNAL_FILTER_ALL
             short_mask = short_atr_reversal | short_ema_cross | short_divergence | short_breakout  # 🆕 Added breakout
             long_mask = long_atr_reversal | long_ema_cross | long_divergence | long_breakout  # 🆕 Added breakout
-            signal_label = "all"
 
         # Ensure array alignment
         length = min(len(x_arr), len(short_mask), len(long_mask))
@@ -2306,9 +2307,25 @@ class CVDSingleChartDialog(QDialog):
                 plot.removeItem(line)
             del self._confluence_line_map[key]
 
+        strategy_masks = {
+            "short": {
+                "atr_reversal": np.array(short_atr_reversal, dtype=bool),
+                "ema_cross": np.array(short_ema_cross, dtype=bool),
+                "atr_divergence": np.array(short_divergence, dtype=bool),
+                "range_breakout": np.array(short_breakout, dtype=bool),
+            },
+            "long": {
+                "atr_reversal": np.array(long_atr_reversal, dtype=bool),
+                "ema_cross": np.array(long_ema_cross, dtype=bool),
+                "atr_divergence": np.array(long_divergence, dtype=bool),
+                "range_breakout": np.array(long_breakout, dtype=bool),
+            },
+        }
+
         self._latest_sim_x_arr = np.array(x_arr, dtype=float)
         self._latest_sim_short_mask = np.array(short_mask, dtype=bool)
         self._latest_sim_long_mask = np.array(long_mask, dtype=bool)
+        self._latest_sim_strategy_masks = strategy_masks
 
         # ----------------------------------------------------------
         # AUTOMATION signal emission (existing code)
@@ -2329,13 +2346,13 @@ class CVDSingleChartDialog(QDialog):
         if self._is_chop_regime(closed_idx):
             return
 
-        side = None
-        if short_mask[closed_idx]:
-            side = "short"
-        elif long_mask[closed_idx]:
-            side = "long"
-
-        if side is None:
+        side, strategy_type = self._resolve_signal_side_and_strategy(
+            idx=closed_idx,
+            short_mask=short_mask,
+            long_mask=long_mask,
+            strategy_masks=strategy_masks,
+        )
+        if side is None or strategy_type is None:
             return
 
         closed_bar_ts = self.all_timestamps[closed_idx].isoformat()
@@ -2349,7 +2366,7 @@ class CVDSingleChartDialog(QDialog):
             "instrument_token": self.instrument_token,
             "symbol": self.symbol,
             "signal_side": side,
-            "signal_type": signal_label,
+            "signal_type": strategy_type,
             "signal_x": float(x_arr[closed_idx]),
             "price_close": float(self.all_price_data[closed_idx]),
             "stoploss_points": float(self.automation_stoploss_input.value()),
@@ -2359,14 +2376,72 @@ class CVDSingleChartDialog(QDialog):
 
         QTimer.singleShot(0, lambda p=payload: self.automation_signal.emit(p))
 
-    def _update_simulator_overlay(self, x_arr: np.ndarray, short_mask: np.ndarray, long_mask: np.ndarray):
+    def _strategy_priority(self, strategy_type: str) -> int:
+        priorities = {
+            "atr_reversal": 1,
+            "atr_divergence": 2,
+            "ema_cross": 3,
+            "range_breakout": 4,
+        }
+        return priorities.get(strategy_type or "", 0)
+
+    def _resolve_side_strategy_from_masks(self, idx: int, side: str, strategy_masks: dict | None) -> str | None:
+        if not strategy_masks:
+            return None
+
+        side_masks = strategy_masks.get(side, {})
+        # Higher-priority strategies first.
+        for strategy_type in ("range_breakout", "ema_cross", "atr_divergence", "atr_reversal"):
+            mask = side_masks.get(strategy_type)
+            if mask is not None and idx < len(mask) and bool(mask[idx]):
+                return strategy_type
+        return None
+
+    def _resolve_signal_side_and_strategy(
+            self,
+            idx: int,
+            short_mask: np.ndarray,
+            long_mask: np.ndarray,
+            strategy_masks: dict | None,
+    ) -> tuple[str | None, str | None]:
+        candidate_short = idx < len(short_mask) and bool(short_mask[idx])
+        candidate_long = idx < len(long_mask) and bool(long_mask[idx])
+
+        if candidate_short and candidate_long:
+            short_strategy = self._resolve_side_strategy_from_masks(idx, "short", strategy_masks)
+            long_strategy = self._resolve_side_strategy_from_masks(idx, "long", strategy_masks)
+            short_priority = self._strategy_priority(short_strategy)
+            long_priority = self._strategy_priority(long_strategy)
+
+            if short_priority == long_priority:
+                return None, None
+            return ("short", short_strategy) if short_priority > long_priority else ("long", long_strategy)
+
+        if candidate_short:
+            return "short", self._resolve_side_strategy_from_masks(idx, "short", strategy_masks)
+        if candidate_long:
+            return "long", self._resolve_side_strategy_from_masks(idx, "long", strategy_masks)
+        return None, None
+
+    def _update_simulator_overlay(
+            self,
+            x_arr: np.ndarray,
+            short_mask: np.ndarray,
+            long_mask: np.ndarray,
+            strategy_masks: dict | None = None,
+    ):
         if not len(x_arr) or not self.all_price_data:
             self._simulator_results = None
             self._clear_simulation_markers()
             self._set_simulator_summary_text("Simulator: waiting for data", "#FFA726")
             return
 
-        results = self._run_trade_simulation(x_arr=x_arr, short_mask=short_mask, long_mask=long_mask)
+        results = self._run_trade_simulation(
+            x_arr=x_arr,
+            short_mask=short_mask,
+            long_mask=long_mask,
+            strategy_masks=strategy_masks,
+        )
         self._simulator_results = results
 
         self.sim_taken_long_markers.setData(results["taken_long_x"], results["taken_long_y"])
@@ -2383,7 +2458,13 @@ class CVDSingleChartDialog(QDialog):
         )
         self._set_simulator_summary_text(summary, color)
 
-    def _run_trade_simulation(self, x_arr: np.ndarray, short_mask: np.ndarray, long_mask: np.ndarray) -> dict:
+    def _run_trade_simulation(
+            self,
+            x_arr: np.ndarray,
+            short_mask: np.ndarray,
+            long_mask: np.ndarray,
+            strategy_masks: dict | None = None,
+    ) -> dict:
         length = min(
             len(x_arr), len(short_mask), len(long_mask),
             len(self.all_price_data), len(self.all_cvd_data),
@@ -2412,12 +2493,6 @@ class CVDSingleChartDialog(QDialog):
         cvd_ema51 = self._calculate_ema(cvd_close, 51)
 
         stop_points = float(max(0.1, self.automation_stoploss_input.value()))
-        signal_filter = self._selected_signal_filter()
-        strategy_type = {
-            self.SIGNAL_FILTER_EMA_CROSS_ONLY: "ema_cross",
-            self.SIGNAL_FILTER_OTHERS: "atr_divergence",
-            self.SIGNAL_FILTER_BREAKOUT_ONLY: "range_breakout",
-        }.get(signal_filter, "atr_reversal")
 
         result = {
             "taken_long_x": [], "taken_long_y": [], "taken_short_x": [], "taken_short_y": [],
@@ -2480,14 +2555,15 @@ class CVDSingleChartDialog(QDialog):
                 cvd_cross_above_ema51 = has_cvd_ema51 and prev_cvd <= prev_cvd_ema51 and cvd_close[idx] > cvd_ema51[idx]
                 cvd_cross_below_ema51 = has_cvd_ema51 and prev_cvd >= prev_cvd_ema51 and cvd_close[idx] < cvd_ema51[idx]
 
+                active_strategy_type = active_trade.get("strategy_type") or "atr_reversal"
                 exit_now = False
                 if hit_stop:
                     exit_now = True
-                elif strategy_type == "ema_cross":
+                elif active_strategy_type == "ema_cross":
                     exit_now = (signal_side == "long" and cvd_cross_below_ema10) or (signal_side == "short" and cvd_cross_above_ema10)
-                elif strategy_type == "atr_divergence":
+                elif active_strategy_type == "atr_divergence":
                     exit_now = (signal_side == "long" and price_cross_above_ema51) or (signal_side == "short" and price_cross_below_ema51)
-                elif strategy_type == "range_breakout":
+                elif active_strategy_type == "range_breakout":
                     exit_now = (signal_side == "long" and (price_cross_below_ema10 or price_cross_below_ema51)) or (signal_side == "short" and (price_cross_above_ema10 or price_cross_above_ema51))
                 else:
                     exit_now = (signal_side == "long" and (price_cross_above_ema51 or cvd_cross_above_ema51)) or (signal_side == "short" and (price_cross_below_ema51 or cvd_cross_below_ema51))
@@ -2503,11 +2579,13 @@ class CVDSingleChartDialog(QDialog):
                     active_trade["last_cvd_ema10"] = float(cvd_ema10[idx])
                     active_trade["last_cvd_ema51"] = float(cvd_ema51[idx])
 
-            candidate_short = bool(short_mask[idx])
-            candidate_long = bool(long_mask[idx])
-            if candidate_short and candidate_long:
-                continue
-            if not (candidate_short or candidate_long):
+            signal_side, signal_strategy = self._resolve_signal_side_and_strategy(
+                idx=idx,
+                short_mask=short_mask,
+                long_mask=long_mask,
+                strategy_masks=strategy_masks,
+            )
+            if signal_side is None:
                 continue
 
             if ts.time() < time(9, 20) or ts.time() >= time(15, 0):
@@ -2515,7 +2593,8 @@ class CVDSingleChartDialog(QDialog):
             if self._is_chop_regime(idx):
                 continue
 
-            signal_side = "short" if candidate_short else "long"
+            if signal_strategy is None:
+                signal_strategy = "atr_reversal"
 
             if active_trade:
                 if active_trade["signal_side"] == signal_side:
@@ -2529,6 +2608,16 @@ class CVDSingleChartDialog(QDialog):
                         result["skipped_y"].append(float((high[idx] + y_offset[idx]) if signal_side == "short" else (low[idx] - y_offset[idx])))
                         continue
                 else:
+                    active_strategy = active_trade.get("strategy_type")
+                    active_priority = self._strategy_priority(active_strategy)
+                    new_priority = self._strategy_priority(signal_strategy)
+                    # Keep higher-priority trend trades alive when lower-priority
+                    # opposite signals appear.
+                    if new_priority <= active_priority:
+                        result["skipped"] += 1
+                        result["skipped_x"].append(float(x_arr[idx]))
+                        result["skipped_y"].append(float((high[idx] + y_offset[idx]) if signal_side == "short" else (low[idx] - y_offset[idx])))
+                        continue
                     _close_trade(idx)
 
             entry_price = float(close[idx])
@@ -2536,6 +2625,7 @@ class CVDSingleChartDialog(QDialog):
             active_trade = {
                 "signal_side": signal_side,
                 "signal_timestamp": ts,
+                "strategy_type": signal_strategy,
                 "entry_price": entry_price,
                 "sl_underlying": sl_underlying,
                 "last_price_close": entry_price,

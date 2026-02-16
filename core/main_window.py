@@ -849,16 +849,49 @@ class ScalperMainWindow(QMainWindow):
                         "[AUTO] Allowing stacking: same side after %.1f mins (15+ allowed)",
                         time_diff_minutes
                     )
-            # Opposite direction trade - always reverse
+            # Opposite direction trade - reverse only on stronger strategy signal
             else:
+                active_strategy = active_trade.get("strategy_type") or "atr_reversal"
+                incoming_signal_type = payload.get("signal_type") or state.get("signal_filter") or "atr_reversal"
+                if incoming_signal_type == "ema_cvd_cross":
+                    incoming_strategy = "ema_cross"
+                elif incoming_signal_type == "atr_divergence":
+                    incoming_strategy = "atr_divergence"
+                elif incoming_signal_type == "range_breakout":
+                    incoming_strategy = "range_breakout"
+                else:
+                    incoming_strategy = "atr_reversal"
+
+                strategy_priority = {
+                    "atr_reversal": 1,
+                    "atr_divergence": 2,
+                    "ema_cross": 3,
+                    "range_breakout": 4,
+                }
+                active_priority = strategy_priority.get(active_strategy, 0)
+                incoming_priority = strategy_priority.get(incoming_strategy, 0)
+
+                if incoming_priority <= active_priority:
+                    logger.info(
+                        "[AUTO] Ignoring opposite lower-priority signal for token=%s (%s/%s kept over %s/%s).",
+                        token,
+                        active_side,
+                        active_strategy,
+                        signal_side,
+                        incoming_strategy,
+                    )
+                    return
+
                 active_symbol = active_trade.get("tradingsymbol")
                 active_position = self.position_manager.get_position(active_symbol) if active_symbol else None
                 if active_position:
                     logger.info(
-                        "[AUTO] Opposite signal detected for token=%s (%s -> %s). Reversing position.",
+                        "[AUTO] Opposite higher-priority signal for token=%s (%s/%s -> %s/%s). Reversing position.",
                         token,
                         active_side,
+                        active_strategy,
                         signal_side,
+                        incoming_strategy,
                     )
                     self._exit_position_automated(active_position, reason="AUTO_REVERSE")
                 self._cvd_automation_positions.pop(token, None)
