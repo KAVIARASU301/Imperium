@@ -4,7 +4,9 @@ import logging
 from typing import Set, Optional
 from PySide6.QtCore import QObject, Signal, QTimer, Qt
 from kiteconnect import KiteTicker
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
+import socket
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -43,12 +45,83 @@ class MarketDataWorker(QObject):
         self.last_tick_time: Optional[datetime] = None
         self.is_intentional_stop = False  # Track if user manually stopped
         self._heartbeat_stale_reported = False
+        self.network_check_failed_count = 0  # Track consecutive network failures
 
         # Ensure websocket callback handling runs on the worker's thread.
         self._ticks_received.connect(self._handle_ticks, Qt.QueuedConnection)
         self._ws_connected.connect(self._handle_connect, Qt.QueuedConnection)
         self._ws_closed.connect(self._handle_close, Qt.QueuedConnection)
         self._ws_error.connect(self._handle_error, Qt.QueuedConnection)
+
+    def _check_network_connectivity(self) -> tuple[bool, str]:
+        """
+        Check if network and DNS are working.
+        Returns: (is_connected, error_message)
+        """
+        # Quick DNS check
+        try:
+            socket.gethostbyname('api.kite.trade')
+            logger.debug("DNS resolution successful for api.kite.trade")
+        except socket.gaierror as e:
+            return False, f"DNS resolution failed: {e}"
+        except Exception as e:
+            return False, f"DNS check error: {e}"
+
+        # Quick HTTP connectivity check
+        try:
+            response = requests.get('https://api.kite.trade', timeout=5)
+            logger.debug(f"Network check successful: HTTP {response.status_code}")
+            return True, "Network OK"
+        except requests.exceptions.ConnectionError as e:
+            return False, f"Connection failed: Network unreachable"
+        except requests.exceptions.Timeout:
+            return False, "Connection timeout: Network slow/unstable"
+        except requests.exceptions.RequestException as e:
+            return False, f"Network error: {e}"
+        except Exception as e:
+            return False, f"Unexpected error: {e}"
+
+    def _is_market_hours(self) -> bool:
+        """
+        Check if current time is within Indian market hours (9:15 AM - 3:30 PM IST).
+        Also checks if it's a weekday (Mon-Fri).
+        Returns: True if within market hours, False otherwise
+        """
+        now = datetime.now()
+
+        # Check if it's a weekend
+        if now.weekday() >= 5:  # Saturday = 5, Sunday = 6
+            return False
+
+        # Market hours: 9:15 AM to 3:30 PM
+        market_open = time(9, 15)
+        market_close = time(15, 30)
+        current_time = now.time()
+
+        return market_open <= current_time <= market_close
+
+    def _get_market_status(self) -> str:
+        """
+        Get human-readable market status.
+        Returns: Status string like "Market Open", "Market Closed", "Weekend"
+        """
+        now = datetime.now()
+
+        # Check weekend
+        if now.weekday() >= 5:
+            return "Weekend"
+
+        # Check market hours
+        market_open = time(9, 15)
+        market_close = time(15, 30)
+        current_time = now.time()
+
+        if current_time < market_open:
+            return "Pre-Market"
+        elif current_time > market_close:
+            return "Post-Market"
+        else:
+            return "Market Open"
 
     def start(self):
         """Initializes and connects the KiteTicker WebSocket client."""
@@ -58,6 +131,26 @@ class MarketDataWorker(QObject):
 
         logger.info("MarketDataWorker starting...")
         self.is_intentional_stop = False  # Reset flag
+
+        # 🔥 NETWORK CHECK: Verify connectivity before attempting connection
+        is_connected, error_msg = self._check_network_connectivity()
+        if not is_connected:
+            logger.error(f"Network connectivity check failed: {error_msg}")
+            self.connection_status_changed.emit(f"Network Error: {error_msg}")
+            self.network_check_failed_count += 1
+
+            # Don't attempt connection if network is down
+            if self.network_check_failed_count < 3:
+                logger.info(f"Will retry network check in 10s (attempt {self.network_check_failed_count}/3)")
+                QTimer.singleShot(10000, self.start)
+            else:
+                logger.error("Network persistently unavailable. Please check your internet connection.")
+                self.connection_status_changed.emit("Network Unavailable - Check Connection")
+                self.network_check_failed_count = 0  # Reset for next manual retry
+            return
+
+        # Reset network failure counter on successful check
+        self.network_check_failed_count = 0
         self.connection_status_changed.emit("Connecting")
 
         if not self.kws:
@@ -80,16 +173,34 @@ class MarketDataWorker(QObject):
         except Exception as e:
             logger.error(f"Failed to start KiteTicker: {e}")
             self.is_running = False
-            self.connection_status_changed.emit("Connection Failed")
-            # Trigger reconnect
+
+            # 🔥 Better error messaging
+            if "Name or service not known" in str(e) or "Failed to resolve" in str(e):
+                self.connection_status_changed.emit("DNS Error - Check Network")
+            elif "Connection refused" in str(e):
+                self.connection_status_changed.emit("Connection Refused - Kite API Down?")
+            else:
+                self.connection_status_changed.emit("Connection Failed")
+
+            # Trigger reconnect with network check
             if not self.is_intentional_stop:
-                QTimer.singleShot(5000, self.reconnect)
+                QTimer.singleShot(5000, self.start)
 
     def _check_heartbeat(self):
-        if self.is_running and self.last_tick_time:
-            if datetime.now() - self.last_tick_time > timedelta(seconds=30):
+        """Check if ticks are being received (only during market hours)"""
+        if not self.is_running:
+            return
+
+        # 🔥 Skip heartbeat checks outside market hours
+        if not self._is_market_hours():
+            # Silently continue - no need to warn outside trading hours
+            return
+
+        if self.last_tick_time:
+            time_since_last_tick = datetime.now() - self.last_tick_time
+            if time_since_last_tick > timedelta(seconds=30):
                 if not self._heartbeat_stale_reported:
-                    logger.warning("Heartbeat: No ticks received in the last 30 seconds.")
+                    logger.warning("Heartbeat: No ticks received in the last 30 seconds (during market hours).")
                     self.connection_status_changed.emit("Connected (No Recent Ticks)")
                     self._heartbeat_stale_reported = True
 
@@ -115,7 +226,14 @@ class MarketDataWorker(QObject):
     def _handle_connect(self, response):
         """Callback on successful connection."""
         logger.info("WebSocket connected. Subscribing to existing tokens.")
-        self.connection_status_changed.emit("Connected")
+
+        # 🔥 Smart status based on market hours
+        market_status = self._get_market_status()
+        if market_status == "Market Open":
+            self.connection_status_changed.emit("Connected")
+        else:
+            self.connection_status_changed.emit(f"Connected ({market_status})")
+
         self.reconnect_attempts = 0  # Reset counter on success
         self.last_tick_time = datetime.now()
         self._heartbeat_stale_reported = False
@@ -176,6 +294,20 @@ class MarketDataWorker(QObject):
         if self.reconnect_attempts >= self.max_reconnect_attempts:
             logger.error(f"Max reconnection attempts reached. Stopping reconnection.")
             self.reconnect_timer.stop()
+            self.connection_status_changed.emit("Max Retries - Check Network & Restart")
+            return
+
+        # 🔥 NETWORK CHECK: Verify connectivity before reconnecting
+        is_connected, error_msg = self._check_network_connectivity()
+        if not is_connected:
+            logger.warning(f"Network check failed during reconnect: {error_msg}")
+            self.connection_status_changed.emit(
+                f"Waiting for Network... ({self.reconnect_attempts}/{self.max_reconnect_attempts})")
+
+            # Don't increment reconnect_attempts for network issues
+            # Just wait longer before retrying
+            if not self.reconnect_timer.isActive():
+                self.reconnect_timer.start(15000)  # Wait 15s for network to recover
             return
 
         self.reconnect_attempts += 1
@@ -200,10 +332,22 @@ class MarketDataWorker(QObject):
         except Exception as e:
             self.is_running = False
             logger.error(f"Reconnect failed: {e}")
+
+            # 🔥 Better error classification
             if "ReactorNotRestartable" in str(e):
                 self.connection_status_changed.emit("Connection Failed - Restart App")
-            elif not self.is_intentional_stop and not self.reconnect_timer.isActive():
-                self.reconnect_timer.start(10000)
+            elif "Name or service not known" in str(e) or "Failed to resolve" in str(e):
+                self.connection_status_changed.emit("DNS Error - Check Network Connection")
+                # Don't count DNS failures against max_reconnect_attempts
+                self.reconnect_attempts -= 1
+            elif "Connection refused" in str(e):
+                self.connection_status_changed.emit("Connection Refused - API Down?")
+
+            if not self.is_intentional_stop and not self.reconnect_timer.isActive():
+                # Exponential backoff for retries
+                delay = min(5000 * (2 ** min(self.reconnect_attempts, 4)), 60000)
+                logger.info(f"Will retry in {delay / 1000}s")
+                self.reconnect_timer.start(delay)
 
     def set_instruments(self, instrument_tokens: Set[int], append: bool = False):
         """
@@ -282,9 +426,10 @@ class MarketDataWorker(QObject):
         logger.info("Manual reconnection triggered by user")
         self.is_intentional_stop = False
         self.reconnect_attempts = 0  # Reset counter for manual reconnect
+        self.network_check_failed_count = 0  # Reset network failure counter
         self.reconnect_timer.stop()
 
         self.is_running = False
 
-        # Reconnect without recreating/restarting reactor.
-        self.reconnect()
+        # Use start() instead of reconnect() to trigger network check
+        self.start()

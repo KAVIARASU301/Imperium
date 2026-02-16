@@ -1,0 +1,188 @@
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    RANGE BREAKOUT STRATEGY FLOW                      │
+└─────────────────────────────────────────────────────────────────────┘
+
+                            ┌──────────────┐
+                            │  New Bar     │
+                            │  Arrives     │
+                            └──────┬───────┘
+                                   │
+                    ┌──────────────▼──────────────┐
+                    │  Calculate 30min Range      │
+                    │  • High: max(30min)         │
+                    │  • Low: min(30min)          │
+                    │  • Range: high - low        │
+                    └──────────────┬──────────────┘
+                                   │
+                    ┌──────────────▼──────────────┐
+                    │  Is Consolidating?          │
+                    │  range < avg_range * 3.0    │
+                    └──────────────┬──────────────┘
+                                   │
+                        ┌──────────┴──────────┐
+                        │                     │
+                   ┌────▼────┐           ┌────▼────┐
+                   │   NO    │           │   YES   │
+                   │  Skip   │           │ Continue│
+                   └─────────┘           └────┬────┘
+                                              │
+                        ┌─────────────────────┴─────────────────────┐
+                        │                                            │
+                 ┌──────▼──────────┐                      ┌─────────▼─────────┐
+                 │ Price > Range   │                      │ Price < Range     │
+                 │     High?       │                      │      Low?         │
+                 └──────┬──────────┘                      └─────────┬─────────┘
+                        │                                            │
+                   ┌────▼─────┐                               ┌─────▼────┐
+                   │   YES    │                               │   YES    │
+                   └────┬─────┘                               └─────┬────┘
+                        │                                            │
+           ┌────────────▼────────────┐                  ┌────────────▼────────────┐
+           │ LONG Confirmation:       │                 │ SHORT Confirmation:      │
+           │ ✓ Volume > 1.2x avg     │                 │ ✓ Volume > 1.2x avg     │
+           │ ✓ CVD bullish           │                 │ ✓ CVD bearish           │
+           │ ✓ Breakout > 10% range  │                 │ ✓ Breakout > 10% range  │
+           └────────────┬────────────┘                  └────────────┬────────────┘
+                        │                                            │
+                   ┌────▼─────┐                               ┌─────▼────┐
+                   │   ALL    │                               │   ALL    │
+                   │ PASSED?  │                               │ PASSED?  │
+                   └────┬─────┘                               └─────┬────┘
+                        │                                            │
+                   ┌────▼─────────────────────────────┐    ┌─────────▼──────────────────────────┐
+                   │  🟢 LONG BREAKOUT SIGNAL         │    │  🔴 SHORT BREAKOUT SIGNAL          │
+                   │                                  │    │                                    │
+                   │  Entry: Current close            │    │  Entry: Current close              │
+                   │  Stop: Range low                 │    │  Stop: Range high                  │
+                   │  Exit: Price < EMA10             │    │  Exit: Price > EMA10               │
+                   │                                  │    │                                    │
+                   │  🚫 ATR SHORT signals BLOCKED    │    │  🚫 ATR LONG signals BLOCKED       │
+                   │  🚫 EMA cross SHORT BLOCKED      │    │  🚫 EMA cross LONG BLOCKED         │
+                   └────┬─────────────────────────────┘    └─────────┬──────────────────────────┘
+                        │                                            │
+                        │                                            │
+                 ┌──────▼──────────┐                      ┌─────────▼──────────┐
+                 │ active_breakout │                      │ active_breakout    │
+                 │ _long = True    │                      │ _short = True      │
+                 └──────┬──────────┘                      └─────────┬──────────┘
+                        │                                            │
+                        │                                            │
+          ┌─────────────▼──────────────┐                ┌───────────▼─────────────┐
+          │  Every New Bar:            │                │  Every New Bar:         │
+          │  Check exit condition      │                │  Check exit condition   │
+          │                            │                │                         │
+          │  IF price < EMA10:         │                │  IF price > EMA10:      │
+          │    • Close position        │                │    • Close position     │
+          │    • active_long = False   │                │    • active_short = False│
+          │    • Release ATR block     │                │    • Release ATR block  │
+          └────────────────────────────┘                └─────────────────────────┘
+
+
+┌─────────────────────────────────────────────────────────────────────┐
+│                    ATR SUPPRESSION LOGIC                             │
+└─────────────────────────────────────────────────────────────────────┘
+
+    ┌───────────────────────────────────────────────────────┐
+    │  detect_atr_reversal_strategy() is called            │
+    └────────────────────┬──────────────────────────────────┘
+                         │
+          ┌──────────────▼──────────────┐
+          │ should_suppress_atr_reversal()│
+          │                               │
+          │ Check active states:          │
+          │  • active_breakout_long       │
+          │  • active_breakout_short      │
+          │  • active_ema_cross_long      │
+          │  • active_ema_cross_short     │
+          └────────────┬──────────────────┘
+                       │
+        ┌──────────────┴──────────────┐
+        │                             │
+   ┌────▼─────┐               ┌──────▼─────┐
+   │ Active   │               │  Active    │
+   │ LONG     │               │  SHORT     │
+   │ trade?   │               │  trade?    │
+   └────┬─────┘               └──────┬─────┘
+        │                            │
+        │                            │
+   ┌────▼──────────────┐   ┌────────▼────────────┐
+   │ 🚫 Block SHORT    │   │ 🚫 Block LONG       │
+   │    ATR signals    │   │    ATR signals      │
+   │                   │   │                     │
+   │ Return empty      │   │ Return empty        │
+   │ short_atr_reversal│   │ long_atr_reversal   │
+   └───────────────────┘   └─────────────────────┘
+
+
+┌─────────────────────────────────────────────────────────────────────┐
+│                    EXAMPLE SCENARIO (12:00 PM)                       │
+└─────────────────────────────────────────────────────────────────────┘
+
+Timeline:
+─────────────────────────────────────────────────────────────────────
+
+11:00-11:45    │  📊 Consolidation detected
+               │  Range: 60,350 - 60,450 (100 points)
+               │  ATR compressing
+               │
+11:45          │  
+               │
+12:00          │  🚀 BREAKOUT!
+               │  • Close: 60,520 (70 pts above range)
+               │  • Volume: 2.3x average
+               │  • CVD: Trending up strongly
+               │  
+               │  ✅ LONG BREAKOUT signal fires
+               │  └─> active_breakout_long = True
+               │  └─> Stop: 60,350
+               │  └─> Exit trigger: EMA10
+               │
+12:05          │  📈 Price continues up: 60,580
+               │  • ATR expanding rapidly
+               │  • System sees "far from EMA"
+               │  
+               │  ❌ OLD: ATR SHORT signal would fire
+               │  ✅ NEW: ATR SHORT suppressed!
+               │      └─> active_breakout_long blocks it
+               │
+12:15          │  📈 Price: 60,640
+               │  Still above EMA10
+               │  Trade continues...
+               │
+13:30          │  📉 Price: 60,585
+               │  Closes BELOW EMA10
+               │  
+               │  🚪 EXIT triggered
+               │  └─> active_breakout_long = False
+               │  └─> ATR signals unblocked
+               │
+               │  Profit: +65 points per lot 🎯
+
+─────────────────────────────────────────────────────────────────────
+
+
+┌─────────────────────────────────────────────────────────────────────┐
+│                    STRATEGY PRIORITY SYSTEM                          │
+└─────────────────────────────────────────────────────────────────────┘
+
+Priority 1: 🥇 RANGE BREAKOUT
+  └─> Clear trend initiation
+  └─> Blocks opposing ATR
+  └─> Exit: EMA10 cross
+
+Priority 2: 🥈 EMA + CVD CROSS
+  └─> Trend continuation
+  └─> Blocks opposing ATR
+  └─> Exit: Price or CVD crosses EMA10
+
+Priority 3: 🥉 ATR REVERSAL
+  └─> Only fires when no active Priority 1/2 trades
+  └─> Requires Price + CVD confluence
+  └─> Best in ranging markets
+
+Priority 4: ATR + CVD DIVERGENCE
+  └─> Continuation play
+  └─> Excluded from EMA cross signals
+  └─> CVD must maintain trend
+```

@@ -217,6 +217,7 @@ class CVDSingleChartDialog(QDialog):
     SIGNAL_FILTER_ALL = "all"
     SIGNAL_FILTER_ATR_ONLY = "atr_only"
     SIGNAL_FILTER_EMA_CROSS_ONLY = "ema_cross_only"
+    SIGNAL_FILTER_BREAKOUT_ONLY = "breakout_only"  # 🆕 NEW
     SIGNAL_FILTER_OTHERS = "others"
 
     ATR_MARKER_SHOW_ALL = "show_all"
@@ -593,6 +594,7 @@ class CVDSingleChartDialog(QDialog):
         self.signal_filter_combo.addItem("All Signals", self.SIGNAL_FILTER_ALL)
         self.signal_filter_combo.addItem("ATR Reversal Only", self.SIGNAL_FILTER_ATR_ONLY)
         self.signal_filter_combo.addItem("EMA Cross Only", self.SIGNAL_FILTER_EMA_CROSS_ONLY)
+        self.signal_filter_combo.addItem("Range Breakout Only", self.SIGNAL_FILTER_BREAKOUT_ONLY)  # 🆕 NEW
         self.signal_filter_combo.addItem("ATR Divergence", self.SIGNAL_FILTER_OTHERS)
         self.signal_filter_combo.currentIndexChanged.connect(self._on_signal_filter_changed)
         ema_bar.addWidget(self.signal_filter_combo)
@@ -907,6 +909,7 @@ class CVDSingleChartDialog(QDialog):
         self.setup_signal_filter_combo.addItem("All Signals", self.SIGNAL_FILTER_ALL)
         self.setup_signal_filter_combo.addItem("ATR Reversal Only", self.SIGNAL_FILTER_ATR_ONLY)
         self.setup_signal_filter_combo.addItem("EMA Cross Only", self.SIGNAL_FILTER_EMA_CROSS_ONLY)
+        self.setup_signal_filter_combo.addItem("Range Breakout Only", self.SIGNAL_FILTER_BREAKOUT_ONLY)  # 🆕 NEW
         self.setup_signal_filter_combo.addItem("ATR Divergence", self.SIGNAL_FILTER_OTHERS)
         self.setup_signal_filter_combo.setCurrentIndex(self.signal_filter_combo.currentIndex())
         self.setup_signal_filter_combo.currentIndexChanged.connect(self._on_setup_signal_filter_changed)
@@ -924,6 +927,38 @@ class CVDSingleChartDialog(QDialog):
         self.setup_atr_marker_filter_combo.currentIndexChanged.connect(self._on_setup_atr_marker_filter_changed)
         signal_form.addRow("ATR Markers", self.setup_atr_marker_filter_combo)
         layout.addWidget(signal_group)
+
+        # 🆕 Range Breakout Settings
+        breakout_group = QGroupBox("Range Breakout")
+        breakout_form = QFormLayout(breakout_group)
+        breakout_form.setLabelAlignment(Qt.AlignLeft)
+
+        self.range_lookback_input = QSpinBox()
+        self.range_lookback_input.setRange(10, 120)
+        self.range_lookback_input.setValue(30)
+        self.range_lookback_input.setSuffix(" min")
+        self.range_lookback_input.setStyleSheet("""
+            QSpinBox {
+                background: #1B1F2B;
+                color: #E0E0E0;
+                font-weight: 600;
+                font-size: 11px;
+                border: 1px solid #3A4458;
+                border-radius: 4px;
+                padding: 2px 4px;
+                min-height: 22px;
+            }
+            QSpinBox:hover {
+                border: 1px solid #5B9BD5;
+            }
+        """)
+        self.range_lookback_input.setToolTip(
+            "Period to analyze for consolidation range detection.\n"
+            "Breakout signals trigger when price breaks above/below this range."
+        )
+        self.range_lookback_input.valueChanged.connect(self._on_breakout_settings_changed)
+        breakout_form.addRow("Range Lookback", self.range_lookback_input)
+        layout.addWidget(breakout_group)
 
         close_row = QHBoxLayout()
         close_row.addStretch()
@@ -957,6 +992,7 @@ class CVDSingleChartDialog(QDialog):
         self.atr_marker_filter_combo.blockSignals(True)
         self.setup_signal_filter_combo.blockSignals(True)
         self.setup_atr_marker_filter_combo.blockSignals(True)
+        self.range_lookback_input.blockSignals(True)  # 🆕 NEW
 
         self.automate_toggle.setChecked(
             self._settings.value(f"{key_prefix}/enabled", self.automate_toggle.isChecked(), type=bool)
@@ -1013,6 +1049,15 @@ class CVDSingleChartDialog(QDialog):
         _apply_combo_value(self.atr_marker_filter_combo, marker_filter_value, fallback_index=1)
         _apply_combo_value(self.setup_atr_marker_filter_combo, marker_filter_value, fallback_index=1)
 
+        # 🆕 Load range breakout settings
+        self.range_lookback_input.setValue(
+            self._settings.value(
+                f"{key_prefix}/range_lookback",
+                self.range_lookback_input.value(),
+                type=int,
+            )
+        )
+
         self.automate_toggle.blockSignals(False)
         self.automation_stoploss_input.blockSignals(False)
         self.automation_route_combo.blockSignals(False)
@@ -1023,6 +1068,7 @@ class CVDSingleChartDialog(QDialog):
         self.atr_marker_filter_combo.blockSignals(False)
         self.setup_signal_filter_combo.blockSignals(False)
         self.setup_atr_marker_filter_combo.blockSignals(False)
+        self.range_lookback_input.blockSignals(False)  # 🆕 NEW
 
         self._update_atr_reversal_markers()
         self._on_automation_settings_changed()
@@ -1043,6 +1089,8 @@ class CVDSingleChartDialog(QDialog):
             f"{key_prefix}/atr_marker_filter",
             self.atr_marker_filter_combo.currentData() or self.ATR_MARKER_CONFLUENCE_ONLY,
         )
+        # 🆕 Persist range breakout settings
+        self._settings.setValue(f"{key_prefix}/range_lookback", int(self.range_lookback_input.value()))
         self._settings.sync()
 
     def _on_automation_settings_changed(self, *_):
@@ -1086,6 +1134,12 @@ class CVDSingleChartDialog(QDialog):
         self.atr_marker_filter_combo.blockSignals(False)
         self._update_atr_reversal_markers()
         self._persist_setup_values()
+
+    def _on_breakout_settings_changed(self, *_):
+        """Handle range breakout settings changes"""
+        self._persist_setup_values()
+        # Force reload to apply new range lookback
+        self._load_and_plot(force=True)
 
     def _selected_signal_filter(self) -> str:
         return self.signal_filter_combo.currentData() or self.SIGNAL_FILTER_ALL

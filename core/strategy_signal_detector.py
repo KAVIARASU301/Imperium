@@ -228,6 +228,18 @@ class StrategySignalDetector:
         self.timeframe_minutes = timeframe_minutes
         self.atr_reversal_timestamps = {}  # Store ATR reversal times for confirmation tracking
 
+        # Range breakout tracking
+        self.active_breakout_long = False  # Track if we're in a long breakout trade
+        self.active_breakout_short = False  # Track if we're in a short breakout trade
+        self.breakout_entry_idx = -1  # Track when breakout started
+        self.range_high = 0.0  # Store range boundaries for stop loss
+        self.range_low = 0.0
+
+        # EMA+CVD cross tracking (for ATR suppression)
+        self.active_ema_cross_long = False
+        self.active_ema_cross_short = False
+        self.ema_cross_entry_idx = -1
+
     def detect_atr_reversal_strategy(
             self,
             price_atr_above: np.ndarray,  # Price ATR reversal - above EMA (potential SHORT)
@@ -243,6 +255,8 @@ class StrategySignalDetector:
         - LONG: Price ATR reversal below + CVD ATR reversal below (both oversold)
 
         No waiting required - the confluence itself is the signal.
+
+        🆕 SUPPRESSION: Opposing ATR signals blocked during active breakout trades.
         """
 
         # SHORT signals: Both Price and CVD show ATR reversal from above
@@ -250,6 +264,14 @@ class StrategySignalDetector:
 
         # LONG signals: Both Price and CVD show ATR reversal from below
         long_atr_reversal = price_atr_below & cvd_atr_below
+
+        # Apply suppression from active breakout trades
+        suppress_short, suppress_long = self.should_suppress_atr_reversal()
+
+        if suppress_short:
+            short_atr_reversal = np.zeros_like(short_atr_reversal)
+        if suppress_long:
+            long_atr_reversal = np.zeros_like(long_atr_reversal)
 
         return short_atr_reversal, long_atr_reversal
 
@@ -383,3 +405,240 @@ class StrategySignalDetector:
             down_mask |= delta < 0
 
         return up_mask, down_mask
+
+    def detect_range_breakout_strategy(
+            self,
+            price_high: np.ndarray,
+            price_low: np.ndarray,
+            price_close: np.ndarray,
+            price_ema10: np.ndarray,
+            cvd_data: np.ndarray,
+            cvd_ema10: np.ndarray,
+            volume: np.ndarray,
+            range_lookback_minutes: int = 30,
+            breakout_threshold_multiplier: float = 1.5
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """
+        RANGE BREAKOUT STRATEGY:
+
+        Detects consolidation and breakout patterns:
+        1. Calculate rolling range over lookback period
+        2. Detect when price breaks beyond range boundaries
+        3. Confirm with CVD alignment and volume
+        4. Track active breakout for exit management
+
+        Returns:
+            (long_signals, short_signals, range_highs, range_lows)
+            - Signals are True where breakout occurs
+            - Range boundaries for stop loss placement
+        """
+        length = len(price_close)
+        long_breakout = np.zeros(length, dtype=bool)
+        short_breakout = np.zeros(length, dtype=bool)
+        range_highs = np.zeros(length, dtype=float)
+        range_lows = np.zeros(length, dtype=float)
+
+        if length < 2:
+            return long_breakout, short_breakout, range_highs, range_lows
+
+        # Convert lookback minutes to bars
+        lookback_bars = max(2, int(round(range_lookback_minutes / max(self.timeframe_minutes, 1))))
+
+        # Calculate rolling range and average range
+        for i in range(lookback_bars, length):
+            start_idx = max(0, i - lookback_bars)
+            window_high = np.max(price_high[start_idx:i])
+            window_low = np.min(price_low[start_idx:i])
+            range_size = window_high - window_low
+
+            # Store range boundaries
+            range_highs[i] = window_high
+            range_lows[i] = window_low
+
+            # Calculate average range for volatility context
+            avg_range = np.mean(price_high[start_idx:i] - price_low[start_idx:i])
+
+            # Detect consolidation: range should be relatively tight
+            is_consolidating = range_size < (avg_range * 3.0)
+
+            if not is_consolidating:
+                continue
+
+            # LONG BREAKOUT: Close above range high
+            if price_close[i] > window_high:
+                # Volume confirmation: above average
+                avg_volume = np.mean(volume[start_idx:i])
+                volume_confirmed = volume[i] > avg_volume * 1.2
+
+                # CVD confirmation: trending up or above EMA10
+                cvd_bullish = (cvd_data[i] > cvd_ema10[i]) or (cvd_data[i] > cvd_data[i - 1])
+
+                # Price momentum: moved at least threshold beyond range
+                breakout_strength = (price_close[i] - window_high) / range_size if range_size > 0 else 0
+                strong_breakout = breakout_strength > 0.1  # Moved 10% of range beyond boundary
+
+                if volume_confirmed and cvd_bullish and strong_breakout:
+                    long_breakout[i] = True
+
+            # SHORT BREAKOUT: Close below range low
+            elif price_close[i] < window_low:
+                # Volume confirmation
+                avg_volume = np.mean(volume[start_idx:i])
+                volume_confirmed = volume[i] > avg_volume * 1.2
+
+                # CVD confirmation: trending down or below EMA10
+                cvd_bearish = (cvd_data[i] < cvd_ema10[i]) or (cvd_data[i] < cvd_data[i - 1])
+
+                # Price momentum
+                breakout_strength = (window_low - price_close[i]) / range_size if range_size > 0 else 0
+                strong_breakout = breakout_strength > 0.1
+
+                if volume_confirmed and cvd_bearish and strong_breakout:
+                    short_breakout[i] = True
+
+        return long_breakout, short_breakout, range_highs, range_lows
+
+    def check_breakout_exit(
+            self,
+            current_idx: int,
+            price_close: np.ndarray,
+            price_ema10: np.ndarray
+    ) -> tuple[bool, bool]:
+        """
+        Check if active breakout trade should exit.
+
+        Exit conditions:
+        - LONG: Price closes below EMA10
+        - SHORT: Price closes above EMA10
+
+        Returns: (exit_long, exit_short)
+        """
+        exit_long = False
+        exit_short = False
+
+        if current_idx < 0 or current_idx >= len(price_close):
+            return exit_long, exit_short
+
+        # Check LONG exit
+        if self.active_breakout_long:
+            if price_close[current_idx] < price_ema10[current_idx]:
+                exit_long = True
+                self.active_breakout_long = False
+                self.breakout_entry_idx = -1
+
+        # Check SHORT exit
+        if self.active_breakout_short:
+            if price_close[current_idx] > price_ema10[current_idx]:
+                exit_short = True
+                self.active_breakout_short = False
+                self.breakout_entry_idx = -1
+
+        return exit_long, exit_short
+
+    def update_breakout_state(
+            self,
+            current_idx: int,
+            long_signal: bool,
+            short_signal: bool,
+            range_high: float,
+            range_low: float
+    ):
+        """
+        Update internal state when breakout signals occur.
+        Called from main detection loop to track active breakouts.
+        """
+        if long_signal:
+            self.active_breakout_long = True
+            self.active_breakout_short = False
+            self.breakout_entry_idx = current_idx
+            self.range_high = range_high
+            self.range_low = range_low
+
+        elif short_signal:
+            self.active_breakout_short = True
+            self.active_breakout_long = False
+            self.breakout_entry_idx = current_idx
+            self.range_high = range_high
+            self.range_low = range_low
+
+    def should_suppress_atr_reversal(self) -> tuple[bool, bool]:
+        """
+        Determine if ATR reversal signals should be suppressed.
+
+        During active trending trades (breakout or EMA cross):
+        - Suppress OPPOSING ATR signals
+        - Allow SAME-DIRECTION signals (trend continuation)
+
+        Returns: (suppress_short_atr, suppress_long_atr)
+        """
+        # Suppress SHORT ATR during:
+        # - Active LONG breakout
+        # - Active LONG EMA cross
+        suppress_short = self.active_breakout_long or self.active_ema_cross_long
+
+        # Suppress LONG ATR during:
+        # - Active SHORT breakout
+        # - Active SHORT EMA cross
+        suppress_long = self.active_breakout_short or self.active_ema_cross_short
+
+        return suppress_short, suppress_long
+
+    def update_ema_cross_state(
+            self,
+            current_idx: int,
+            long_signal: bool,
+            short_signal: bool
+    ):
+        """
+        Update internal state when EMA cross signals occur.
+        """
+        if long_signal:
+            self.active_ema_cross_long = True
+            self.active_ema_cross_short = False
+            self.ema_cross_entry_idx = current_idx
+
+        elif short_signal:
+            self.active_ema_cross_short = True
+            self.active_ema_cross_long = False
+            self.ema_cross_entry_idx = current_idx
+
+    def check_ema_cross_exit(
+            self,
+            current_idx: int,
+            price_close: np.ndarray,
+            price_ema10: np.ndarray,
+            cvd_data: np.ndarray,
+            cvd_ema10: np.ndarray
+    ) -> tuple[bool, bool]:
+        """
+        Check if active EMA cross trade should exit.
+
+        Exit conditions:
+        - LONG: Price closes below EMA10 OR CVD crosses below EMA10
+        - SHORT: Price closes above EMA10 OR CVD crosses above EMA10
+
+        Returns: (exit_long, exit_short)
+        """
+        exit_long = False
+        exit_short = False
+
+        if current_idx < 0 or current_idx >= len(price_close):
+            return exit_long, exit_short
+
+        # Check LONG exit
+        if self.active_ema_cross_long:
+            if (price_close[current_idx] < price_ema10[current_idx] or
+                    cvd_data[current_idx] < cvd_ema10[current_idx]):
+                exit_long = True
+                self.active_ema_cross_long = False
+                self.ema_cross_entry_idx = -1
+
+        # Check SHORT exit
+        if self.active_ema_cross_short:
+            if (price_close[current_idx] > price_ema10[current_idx] or
+                    cvd_data[current_idx] > cvd_ema10[current_idx]):
+                exit_short = True
+                self.active_ema_cross_short = False
+                self.ema_cross_entry_idx = -1
+
+        return exit_long, exit_short
