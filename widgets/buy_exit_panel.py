@@ -444,6 +444,32 @@ class BuyExitPanel(QWidget):
             "total_premium_estimate": total_premium,
         }
 
+    def build_order_details_for_contract(self, contract: Contract) -> Optional[dict]:
+        """Build a Buy/Exit panel order payload for exactly one selected strike contract."""
+        if not contract:
+            logger.error("Cannot build single-contract order without contract data.")
+            return None
+
+        contract_ltp = float(contract.ltp or 0.0)
+        strike = float(contract.strike or 0.0)
+        strike_payload = {
+            "strike": strike,
+            "ltp": contract_ltp,
+            "contract": contract,
+        }
+        total_premium = contract_ltp * self.lot_size * self.lot_quantity
+
+        return {
+            "symbol": self.current_symbol,
+            "option_type": self.option_type,
+            "expiry": self.expiry,
+            "contracts_above": 0,
+            "contracts_below": 0,
+            "lot_size": self.lot_size,
+            "strikes": [strike_payload],
+            "total_premium_estimate": total_premium,
+        }
+
     def _on_buy_clicked(self):
         order_details = self.build_order_details()
         if not order_details:

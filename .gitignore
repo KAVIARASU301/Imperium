@@ -17,3 +17,10 @@ data/
 data
 logs
 logs/
+dist/
+dist
+!/dist/
+!/logs/
+!/OptionsBadger.spec
+!/Untitled Document
+!/build/

@@ -95,6 +95,7 @@ class ScalperMainWindow(QMainWindow):
 
         self.active_quick_order_dialog: Optional[QuickOrderDialog] = None
         self.active_order_confirmation_dialog: Optional[OrderConfirmationDialog] = None
+        self._auto_confirm_next_panel_order = False
         self.positions_dialog = None
         self.performance_dialog = None
         self.order_history_dialog = None
@@ -319,6 +320,10 @@ class ScalperMainWindow(QMainWindow):
 
     def _place_order(self, order_details_from_panel: dict):
         """Handles the buy signal from the panel by showing a confirmation dialog."""
+        auto_confirm = bool(self._auto_confirm_next_panel_order)
+        # Consume one-shot auto-confirm intent so manual clicks are never affected.
+        self._auto_confirm_next_panel_order = False
+
         if not order_details_from_panel.get('strikes'):
             QMessageBox.warning(self, "Error", "No valid strikes found for the order.")
             logger.warning("place_order called with no strikes in details.")
@@ -349,6 +354,11 @@ class ScalperMainWindow(QMainWindow):
 
         dialog.refresh_requested.connect(self._on_order_confirmation_refresh_request)
         dialog.finished.connect(lambda: setattr(self, 'active_order_confirmation_dialog', None))
+
+        if auto_confirm:
+            logger.info("[AUTO] Auto-confirming Buy/Exit panel order for %s", symbol)
+            self._execute_orders(order_details_for_dialog)
+            return
 
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self._execute_orders(order_details_for_dialog)
@@ -920,6 +930,7 @@ class ScalperMainWindow(QMainWindow):
             if self.buy_exit_panel.option_type != desired_option_type:
                 self.buy_exit_panel.option_type = desired_option_type
                 self.buy_exit_panel._update_ui_for_option_type()
+            self._auto_confirm_next_panel_order = True
             self._buy_exact_relative_strike(0)
         else:
             self._execute_single_strike_order(order_params)
