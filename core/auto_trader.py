@@ -444,6 +444,7 @@ class CVDSingleChartDialog(QDialog):
         # Focus Button (placed on second row, right side)
         self.btn_focus = QPushButton("Single Day View")
         self.btn_focus.setCheckable(True)
+        self.btn_focus.setChecked(True)
         self.btn_focus.setFixedHeight(28)
         self.btn_focus.setMinimumWidth(120)
         self.btn_focus.setStyleSheet("""
