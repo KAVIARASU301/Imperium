@@ -121,6 +121,7 @@ class ScalperMainWindow(QMainWindow):
         self.trade_ledger = TradeLedger(mode=self.trading_mode)
         self._cvd_automation_positions: Dict[int, dict] = {}
         self._cvd_automation_market_state: Dict[int, dict] = {}
+        self._cvd_pending_retry_timers: Dict[int, QTimer] = {}
         self._cvd_automation_state_file = (
             Path.home()
             / ".options_badger"
@@ -801,6 +802,7 @@ class ScalperMainWindow(QMainWindow):
         """Handle CVD single chart dialog close."""
         if token in self.cvd_single_chart_dialogs:
             del self.cvd_single_chart_dialogs[token]
+        self._stop_cvd_pending_retry(token)
         if self._cvd_automation_positions.pop(token, None) is not None:
             self._persist_cvd_automation_state()
         self._cvd_automation_market_state.pop(token, None)
@@ -951,6 +953,7 @@ class ScalperMainWindow(QMainWindow):
             "stop_loss_price": None,
             "target_price": None,
             "group_name": f"CVD_AUTO_{token}",
+            "auto_token": token,
         }
 
         tracked_tradingsymbol = contract.tradingsymbol
@@ -991,6 +994,10 @@ class ScalperMainWindow(QMainWindow):
             "last_cvd_close": state.get("cvd_close"),
             "last_cvd_ema10": state.get("cvd_ema10"),
             "last_cvd_ema51": state.get("cvd_ema51"),
+            "quantity": quantity,
+            "product": self.settings.get('default_product', self.trader.PRODUCT_MIS),
+            "transaction_type": self.trader.TRANSACTION_TYPE_BUY,
+            "group_name": f"CVD_AUTO_{token}",
         }
         self._persist_cvd_automation_state()
 
@@ -1047,9 +1054,16 @@ class ScalperMainWindow(QMainWindow):
         tradingsymbol = active_trade.get("tradingsymbol")
         position = self.position_manager.get_position(tradingsymbol)
         if not position:
+            if self._has_pending_order_for_symbol(tradingsymbol):
+                self._start_cvd_pending_retry(token)
+                return
+
+            self._stop_cvd_pending_retry(token)
             if self._cvd_automation_positions.pop(token, None) is not None:
                 self._persist_cvd_automation_state()
             return
+
+        self._stop_cvd_pending_retry(token)
 
         def _to_finite_float(value, default=0.0):
             try:
@@ -1223,6 +1237,7 @@ class ScalperMainWindow(QMainWindow):
             closed_tokens.append(token)
 
         for token in closed_tokens:
+            self._stop_cvd_pending_retry(token)
             self._cvd_automation_positions.pop(token, None)
         if closed_tokens:
             self._persist_cvd_automation_state()
@@ -1289,7 +1304,12 @@ class ScalperMainWindow(QMainWindow):
         if tracked_symbol and self.position_manager.get_position(tracked_symbol):
             return
 
+        if tracked_symbol and self._has_pending_order_for_symbol(tracked_symbol):
+            self._start_cvd_pending_retry(token)
+            return
+
         self._cvd_automation_positions.pop(token, None)
+        self._stop_cvd_pending_retry(token)
         self._persist_cvd_automation_state()
         logger.warning(
             "[AUTO] Cleared stale pre-registered automation entry token=%s symbol=%s (no filled position found).",
@@ -1305,10 +1325,21 @@ class ScalperMainWindow(QMainWindow):
         removed_tokens = []
         for token, active_trade in list(self._cvd_automation_positions.items()):
             tradingsymbol = active_trade.get("tradingsymbol") if isinstance(active_trade, dict) else None
-            if not tradingsymbol or not self.position_manager.get_position(tradingsymbol):
+            if not tradingsymbol:
                 removed_tokens.append(token)
+                continue
+
+            if self.position_manager.get_position(tradingsymbol):
+                continue
+
+            if self._has_pending_order_for_symbol(tradingsymbol):
+                self._start_cvd_pending_retry(token)
+                continue
+
+            removed_tokens.append(token)
 
         for token in removed_tokens:
+            self._stop_cvd_pending_retry(token)
             self._cvd_automation_positions.pop(token, None)
 
         if removed_tokens:
@@ -2220,6 +2251,8 @@ class ScalperMainWindow(QMainWindow):
             self.update_timer.stop()
         if hasattr(self, 'pending_order_refresh_timer'):
             self.pending_order_refresh_timer.stop()
+        for token in list(getattr(self, '_cvd_pending_retry_timers', {}).keys()):
+            self._stop_cvd_pending_retry(token)
 
         # Background workers
         if hasattr(self, 'market_data_worker') and self.market_data_worker.is_running:
@@ -2795,6 +2828,7 @@ class ScalperMainWindow(QMainWindow):
         target_amount = float(order_params.get('target_amount') or 0)
         trailing_stop_loss_amount = float(order_params.get('trailing_stop_loss_amount') or 0)
         group_name = order_params.get('group_name')
+        auto_token = order_params.get('auto_token')
 
         if not contract_to_trade or not quantity:
             logger.error("Invalid parameters for single strike order.")
@@ -2902,9 +2936,10 @@ class ScalperMainWindow(QMainWindow):
                                               sl=stop_loss_price, tp=target_price,
                                               tsl=trailing_stop_loss,
                                               sl_amt=stop_loss_amount, tp_amt=target_amount,
-                                              tsl_amt=trailing_stop_loss_amount, gn=group_name:
+                                              tsl_amt=trailing_stop_loss_amount, gn=group_name,
+                                              at=auto_token:
                 self._confirm_and_finalize_order(oid, c, qty, p, tt, prod, sl, tp, tsl,
-                                                 sl_amt, tp_amt, tsl_amt, gn))
+                                                 sl_amt, tp_amt, tsl_amt, gn, at))
                 return
 
         except Exception as e:
@@ -2918,7 +2953,7 @@ class ScalperMainWindow(QMainWindow):
             self, order_id, contract_to_trade, quantity, price,
             transaction_type, product, stop_loss_price, target_price,
             trailing_stop_loss, stop_loss_amount, target_amount,
-            trailing_stop_loss_amount, group_name
+            trailing_stop_loss_amount, group_name, auto_token=None
     ):
         """
         Async callback (called via QTimer.singleShot) that replaces the old
@@ -2932,6 +2967,8 @@ class ScalperMainWindow(QMainWindow):
         if confirmed_order_api_data:
             order_status = confirmed_order_api_data.get('status')
             if order_status in ['OPEN', 'TRIGGER PENDING', 'AMO REQ RECEIVED']:
+                if auto_token is not None:
+                    self._start_cvd_pending_retry(auto_token)
                 self._play_sound(success=True)
                 return
 
@@ -2978,6 +3015,8 @@ class ScalperMainWindow(QMainWindow):
                     action_msg = "sold"
 
                 self._play_sound(success=True)
+                if auto_token is not None:
+                    self._stop_cvd_pending_retry(auto_token)
                 self._publish_status(
                     f"Order {order_id} {action_msg} {filled_quantity} {contract_to_trade.tradingsymbol} @ {avg_price_from_order:.2f}.",
                     5000,
@@ -2986,12 +3025,124 @@ class ScalperMainWindow(QMainWindow):
                     [{'order_id': order_id, 'symbol': contract_to_trade.tradingsymbol}], [])
         else:
             self._play_sound(success=False)
+            if auto_token is not None:
+                self._start_cvd_pending_retry(auto_token)
             logger.warning(
                 f"Single strike order {order_id} for {contract_to_trade.tradingsymbol} "
                 "failed or not confirmed.")
             self._show_order_results(
                 [], [{'symbol': contract_to_trade.tradingsymbol,
                       'error': "Order rejected or status not confirmed"}])
+
+
+    def _has_pending_order_for_symbol(self, tradingsymbol: str | None) -> bool:
+        if not tradingsymbol:
+            return False
+
+        pending_orders = self.position_manager.get_pending_orders() or []
+        return any(
+            order.get("tradingsymbol") == tradingsymbol
+            and order.get("status") in {'OPEN', 'TRIGGER PENDING', 'AMO REQ RECEIVED'}
+            for order in pending_orders
+        )
+
+    def _start_cvd_pending_retry(self, token: int):
+        if isinstance(self.trader, PaperTradingManager):
+            return
+
+        if token not in self._cvd_automation_positions:
+            self._stop_cvd_pending_retry(token)
+            return
+
+        timer = self._cvd_pending_retry_timers.get(token)
+        if timer and timer.isActive():
+            return
+
+        if timer is None:
+            timer = QTimer(self)
+            timer.setInterval(10_000)
+            timer.timeout.connect(lambda t=token: self._retry_cvd_pending_order(t))
+            self._cvd_pending_retry_timers[token] = timer
+
+        logger.info("[AUTO] Started 10s pending-order retry for token=%s", token)
+        timer.start()
+
+    def _stop_cvd_pending_retry(self, token: int):
+        timer = self._cvd_pending_retry_timers.pop(token, None)
+        if timer:
+            timer.stop()
+            timer.deleteLater()
+            logger.info("[AUTO] Stopped pending-order retry for token=%s", token)
+
+    def _retry_cvd_pending_order(self, token: int):
+        active_trade = self._cvd_automation_positions.get(token)
+        if not active_trade:
+            self._stop_cvd_pending_retry(token)
+            return
+
+        tradingsymbol = active_trade.get("tradingsymbol")
+        if not tradingsymbol:
+            self._stop_cvd_pending_retry(token)
+            return
+
+        if self.position_manager.get_position(tradingsymbol):
+            self._stop_cvd_pending_retry(token)
+            return
+
+        self._refresh_positions()
+
+        pending_candidates = [
+            order for order in (self.position_manager.get_pending_orders() or [])
+            if order.get("tradingsymbol") == tradingsymbol
+            and order.get("status") in {'OPEN', 'TRIGGER PENDING', 'AMO REQ RECEIVED'}
+        ]
+        if not pending_candidates:
+            logger.info("[AUTO] No pending order left for %s during retry tick", tradingsymbol)
+            return
+
+        pending_order = pending_candidates[-1]
+        pending_order_id = pending_order.get("order_id")
+
+        try:
+            if pending_order_id:
+                self.trader.cancel_order(self.trader.VARIETY_REGULAR, pending_order_id)
+                logger.info("[AUTO] Cancelled pending order %s for retry", pending_order_id)
+        except Exception as exc:
+            logger.warning("[AUTO] Could not cancel pending order %s: %s", pending_order_id, exc)
+            return
+
+        latest_contract = self._get_latest_contract_from_ladder(tradingsymbol)
+        if not latest_contract:
+            logger.warning("[AUTO] Latest contract unavailable for retry: %s", tradingsymbol)
+            return
+
+        retry_price = self._calculate_smart_limit_price(latest_contract)
+        retry_qty = int(
+            pending_order.get("pending_quantity")
+            or pending_order.get("quantity")
+            or active_trade.get("quantity")
+            or 0
+        )
+        if retry_qty <= 0:
+            logger.warning("[AUTO] Invalid retry quantity for %s", tradingsymbol)
+            return
+
+        retry_params = {
+            "contract": latest_contract,
+            "quantity": retry_qty,
+            "order_type": self.trader.ORDER_TYPE_LIMIT,
+            "price": retry_price,
+            "product": pending_order.get("product") or active_trade.get("product") or self.trader.PRODUCT_MIS,
+            "transaction_type": pending_order.get("transaction_type") or active_trade.get("transaction_type") or self.trader.TRANSACTION_TYPE_BUY,
+            "group_name": active_trade.get("group_name") or f"CVD_AUTO_{token}",
+            "auto_token": token,
+        }
+        logger.info(
+            "[AUTO] Replacing pending order for %s every 10s with refreshed LTP %.2f",
+            tradingsymbol,
+            retry_price,
+        )
+        self._execute_single_strike_order(retry_params)
 
     def _execute_strategy_orders(self, order_params_list: List[dict], strategy_name: Optional[str] = None):
         if not order_params_list:
