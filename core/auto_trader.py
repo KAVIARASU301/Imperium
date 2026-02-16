@@ -284,6 +284,8 @@ class CVDSingleChartDialog(QDialog):
         self._confluence_long_color = "#00E676"
         self._chart_line_width = 2.5
         self._chart_line_opacity = 1.0
+        self._confluence_line_width = 2.0
+        self._confluence_line_opacity = 1.0
         self._ema_line_opacity = 0.85
         self._window_bg_image_path = ""
         self._window_bg_target = self.BG_TARGET_NONE
@@ -1095,7 +1097,7 @@ class CVDSingleChartDialog(QDialog):
         self.chart_line_width_input.setFixedWidth(120)
         self.chart_line_width_input.setStyleSheet(compact_spinbox_style)
         self.chart_line_width_input.valueChanged.connect(self._on_setup_visual_settings_changed)
-        appearance_form.addRow("Line Width", self.chart_line_width_input)
+        appearance_form.addRow("Chart Line Width", self.chart_line_width_input)
 
         self.chart_line_opacity_input = QDoubleSpinBox()
         self.chart_line_opacity_input.setRange(0.1, 1.0)
@@ -1105,7 +1107,27 @@ class CVDSingleChartDialog(QDialog):
         self.chart_line_opacity_input.setFixedWidth(120)
         self.chart_line_opacity_input.setStyleSheet(compact_spinbox_style)
         self.chart_line_opacity_input.valueChanged.connect(self._on_setup_visual_settings_changed)
-        appearance_form.addRow("Line Opacity", self.chart_line_opacity_input)
+        appearance_form.addRow("Chart Line Opacity", self.chart_line_opacity_input)
+
+        self.confluence_line_width_input = QDoubleSpinBox()
+        self.confluence_line_width_input.setRange(0.5, 8.0)
+        self.confluence_line_width_input.setDecimals(1)
+        self.confluence_line_width_input.setSingleStep(0.1)
+        self.confluence_line_width_input.setValue(self._confluence_line_width)
+        self.confluence_line_width_input.setFixedWidth(120)
+        self.confluence_line_width_input.setStyleSheet(compact_spinbox_style)
+        self.confluence_line_width_input.valueChanged.connect(self._on_setup_visual_settings_changed)
+        appearance_form.addRow("Confluence Width", self.confluence_line_width_input)
+
+        self.confluence_line_opacity_input = QDoubleSpinBox()
+        self.confluence_line_opacity_input.setRange(0.1, 1.0)
+        self.confluence_line_opacity_input.setDecimals(2)
+        self.confluence_line_opacity_input.setSingleStep(0.05)
+        self.confluence_line_opacity_input.setValue(self._confluence_line_opacity)
+        self.confluence_line_opacity_input.setFixedWidth(120)
+        self.confluence_line_opacity_input.setStyleSheet(compact_spinbox_style)
+        self.confluence_line_opacity_input.valueChanged.connect(self._on_setup_visual_settings_changed)
+        appearance_form.addRow("Confluence Opacity", self.confluence_line_opacity_input)
 
         self.ema_line_opacity_input = QDoubleSpinBox()
         self.ema_line_opacity_input.setRange(0.1, 1.0)
@@ -1268,6 +1290,8 @@ class CVDSingleChartDialog(QDialog):
     def _apply_visual_settings(self):
         self._chart_line_width = float(self.chart_line_width_input.value())
         self._chart_line_opacity = float(self.chart_line_opacity_input.value())
+        self._confluence_line_width = float(self.confluence_line_width_input.value())
+        self._confluence_line_opacity = float(self.confluence_line_opacity_input.value())
         self._ema_line_opacity = float(self.ema_line_opacity_input.value())
 
         self.price_prev_curve.setPen(pg.mkPen(self._price_line_color, width=max(1.0, self._chart_line_width - 0.4), style=Qt.DashLine))
@@ -1300,8 +1324,8 @@ class CVDSingleChartDialog(QDialog):
             is_short = key.startswith("S:")
             color = self._confluence_short_color if is_short else self._confluence_long_color
             for _, line in pairs:
-                line.setPen(pg.mkPen(color, width=2.0))
-                line.setOpacity(self._chart_line_opacity)
+                line.setPen(pg.mkPen(color, width=self._confluence_line_width))
+                line.setOpacity(self._confluence_line_opacity)
 
     def _settings_key_prefix(self) -> str:
         return f"chart_setup/{self.instrument_token}"
@@ -1328,6 +1352,8 @@ class CVDSingleChartDialog(QDialog):
         self.hide_simulator_btn_check.blockSignals(True)
         self.chart_line_width_input.blockSignals(True)
         self.chart_line_opacity_input.blockSignals(True)
+        self.confluence_line_width_input.blockSignals(True)
+        self.confluence_line_opacity_input.blockSignals(True)
         self.ema_line_opacity_input.blockSignals(True)
         self.bg_target_combo.blockSignals(True)
         for cb in self.setup_ema_default_checks.values():
@@ -1414,6 +1440,12 @@ class CVDSingleChartDialog(QDialog):
         self.chart_line_opacity_input.setValue(
             self._settings.value(f"{key_prefix}/chart_line_opacity", self.chart_line_opacity_input.value(), type=float)
         )
+        self.confluence_line_width_input.setValue(
+            self._settings.value(f"{key_prefix}/confluence_line_width", self.confluence_line_width_input.value(), type=float)
+        )
+        self.confluence_line_opacity_input.setValue(
+            self._settings.value(f"{key_prefix}/confluence_line_opacity", self.confluence_line_opacity_input.value(), type=float)
+        )
         self.ema_line_opacity_input.setValue(
             self._settings.value(f"{key_prefix}/ema_line_opacity", self.ema_line_opacity_input.value(), type=float)
         )
@@ -1451,6 +1483,8 @@ class CVDSingleChartDialog(QDialog):
         self.hide_simulator_btn_check.blockSignals(False)
         self.chart_line_width_input.blockSignals(False)
         self.chart_line_opacity_input.blockSignals(False)
+        self.confluence_line_width_input.blockSignals(False)
+        self.confluence_line_opacity_input.blockSignals(False)
         self.ema_line_opacity_input.blockSignals(False)
         self.bg_target_combo.blockSignals(False)
         for cb in self.setup_ema_default_checks.values():
@@ -1485,6 +1519,8 @@ class CVDSingleChartDialog(QDialog):
         self._settings.setValue(f"{key_prefix}/hide_simulator_button", self.hide_simulator_btn_check.isChecked())
         self._settings.setValue(f"{key_prefix}/chart_line_width", float(self.chart_line_width_input.value()))
         self._settings.setValue(f"{key_prefix}/chart_line_opacity", float(self.chart_line_opacity_input.value()))
+        self._settings.setValue(f"{key_prefix}/confluence_line_width", float(self.confluence_line_width_input.value()))
+        self._settings.setValue(f"{key_prefix}/confluence_line_opacity", float(self.confluence_line_opacity_input.value()))
         self._settings.setValue(f"{key_prefix}/ema_line_opacity", float(self.ema_line_opacity_input.value()))
         self._settings.setValue(f"{key_prefix}/chart_line_color", self._chart_line_color)
         self._settings.setValue(f"{key_prefix}/price_line_color", self._price_line_color)
@@ -2580,12 +2616,12 @@ class CVDSingleChartDialog(QDialog):
             if key in self._confluence_line_map:
                 return
 
-            pen = pg.mkPen(color, width=2.0)
+            pen = pg.mkPen(color, width=self._confluence_line_width)
             pairs = []
 
             for plot in (self.price_plot, self.plot):
                 line = pg.InfiniteLine(pos=x, angle=90, movable=False, pen=pen)
-                line.setOpacity(self._chart_line_opacity)
+                line.setOpacity(self._confluence_line_opacity)
                 line.setZValue(-10)
                 plot.addItem(line)
                 pairs.append((plot, line))
