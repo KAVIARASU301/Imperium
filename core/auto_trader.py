@@ -2873,6 +2873,7 @@ class CVDSingleChartDialog(QDialog):
         cvd_ema51 = self._calculate_ema(cvd_close, 51)
 
         stop_points = float(max(0.1, self.automation_stoploss_input.value()))
+        atr_trailing_step_points = 10.0
 
         result = {
             "taken_long_x": [], "taken_long_y": [], "taken_short_x": [], "taken_short_y": [],
@@ -2912,6 +2913,27 @@ class CVDSingleChartDialog(QDialog):
                 price_close = close[idx]
                 signal_side = active_trade["signal_side"]
                 sl_underlying = active_trade["sl_underlying"]
+
+                if active_trade.get("strategy_type") == "atr_reversal":
+                    favorable_move = (
+                        price_close - active_trade["entry_price"]
+                        if signal_side == "long"
+                        else active_trade["entry_price"] - price_close
+                    )
+                    trail_steps = int(max(0.0, favorable_move) // atr_trailing_step_points)
+                    if trail_steps > 0:
+                        trail_offset = trail_steps * atr_trailing_step_points
+                        new_sl = (
+                            active_trade["entry_price"] - stop_points + trail_offset
+                            if signal_side == "long"
+                            else active_trade["entry_price"] + stop_points - trail_offset
+                        )
+                        if signal_side == "long":
+                            sl_underlying = max(sl_underlying, new_sl)
+                        else:
+                            sl_underlying = min(sl_underlying, new_sl)
+                        active_trade["sl_underlying"] = sl_underlying
+
                 hit_stop = price_close <= sl_underlying if signal_side == "long" else price_close >= sl_underlying
 
                 prev_price = active_trade.get("last_price_close")

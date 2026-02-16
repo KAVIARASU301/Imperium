@@ -904,6 +904,7 @@ class ScalperMainWindow(QMainWindow):
         lots = max(1, int(self.header.lot_size_spin.value()))
         quantity = max(1, int(contract.lot_size) * lots)
         stoploss_points = float(payload.get("stoploss_points") or state.get("stoploss_points") or 50.0)
+        atr_trailing_step_points = 10.0
         entry_price = float(contract.ltp or 0.0)
         entry_underlying = float(payload.get("price_close") or state.get("price_close") or 0.0)
         signal_type = payload.get("signal_type") or state.get("signal_filter")
@@ -951,6 +952,8 @@ class ScalperMainWindow(QMainWindow):
             "signal_timestamp": payload.get("timestamp"),  # Track when signal was generated
             "strategy_type": strategy_type,
             "stoploss_points": stoploss_points,
+            "atr_trailing_step_points": atr_trailing_step_points,
+            "entry_underlying": entry_underlying,
             "sl_underlying": sl_underlying,
             "last_price_close": entry_underlying,
             "last_ema10": state.get("ema10"),
@@ -1032,8 +1035,40 @@ class ScalperMainWindow(QMainWindow):
 
         signal_side = active_trade.get("signal_side")
         strategy_type = active_trade.get("strategy_type") or "atr_reversal"
+        stoploss_points = float(active_trade.get("stoploss_points") or 0.0)
+        atr_trailing_step_points = float(active_trade.get("atr_trailing_step_points") or 10.0)
+        entry_underlying = float(active_trade.get("entry_underlying") or 0.0)
         sl_underlying = active_trade.get("sl_underlying")
         hit_stop = False
+
+        # ATR trend-reversal trades: trail SL in 10-point blocks as the
+        # underlying moves in favor on each minute update.
+        if (
+                strategy_type == "atr_reversal"
+                and stoploss_points > 0
+                and atr_trailing_step_points > 0
+                and entry_underlying > 0
+        ):
+            favorable_move = (
+                price_close - entry_underlying
+                if signal_side == "long"
+                else entry_underlying - price_close
+            )
+            trail_steps = int(max(0.0, favorable_move) // atr_trailing_step_points)
+            if trail_steps > 0:
+                trail_offset = trail_steps * atr_trailing_step_points
+                new_sl_underlying = (
+                    entry_underlying - stoploss_points + trail_offset
+                    if signal_side == "long"
+                    else entry_underlying + stoploss_points - trail_offset
+                )
+                if sl_underlying is None:
+                    sl_underlying = new_sl_underlying
+                elif signal_side == "long":
+                    sl_underlying = max(float(sl_underlying), new_sl_underlying)
+                else:
+                    sl_underlying = min(float(sl_underlying), new_sl_underlying)
+                active_trade["sl_underlying"] = sl_underlying
 
         if sl_underlying is not None:
             if signal_side == "long":
