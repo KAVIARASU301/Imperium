@@ -349,7 +349,7 @@ class HeaderToolbar(QFrame):
                     stop:0.5 #1A1F2E,
                     stop:1 #141925
                 );
-                background-image: url("assets/textures/texture_darker.png");
+                background-image: url("assets/textures/header_toolbar_texture.png");
                 border-top: 1px solid rgba(41, 199, 201, 0.08);
                 border-bottom: 1px solid #0B0E14;
                 font-family: "Segoe UI", sans-serif;

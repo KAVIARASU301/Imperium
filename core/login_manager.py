@@ -614,7 +614,7 @@ class LoginManager(QDialog):
         """Applies a premium, modern dark theme."""
         self.setStyleSheet("""
             #mainContainer {
-                background-image: url("assets/textures/main_window_bg.png");
+                background-image: url("assets/textures/login_manager_texture.png");
                 background-color: #161A25;
                 border: 1px solid #3A4458;
                 border-radius: 12px;

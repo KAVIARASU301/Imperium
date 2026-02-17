@@ -1362,7 +1362,7 @@ class PositionsTable(QWidget):
             }
 
             #footer {
-                background: #041D27;
+                background: transparent;
                 border-top: 1px solid #3A4458;
             }
 

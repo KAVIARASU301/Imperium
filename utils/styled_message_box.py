@@ -9,7 +9,8 @@ def show_message(
     *,
     icon=QMessageBox.Information,
     buttons=QMessageBox.Ok,
-    min_width: int = 420,
+    min_width: int = 460,
+    min_height: int = 260,
     align: Qt.AlignmentFlag = Qt.AlignCenter
 ):
     msg = QMessageBox(parent)
@@ -19,9 +20,10 @@ def show_message(
     msg.setStandardButtons(buttons)
     msg.setWindowModality(Qt.WindowModal)
 
-    # ---- FORCE CONSISTENT WIDTH (SAFE) ----
+    # ---- PROFESSIONAL MINIMUM FOOTPRINT ----
     msg.setMinimumWidth(min_width)
-    msg.setFixedWidth(min_width)
+    msg.setMinimumHeight(min_height)
+    msg.resize(min_width, min_height)
 
     # ---- Apply style ----
     msg.setStyleSheet("""
@@ -64,6 +66,6 @@ def show_message(
     for label in msg.findChildren(QLabel):
         label.setAlignment(align | Qt.AlignVCenter)
         label.setWordWrap(True)
-        label.setMaximumWidth(min_width - 40)
+        label.setMaximumWidth(min_width - 56)
 
     return msg.exec()

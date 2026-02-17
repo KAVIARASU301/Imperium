@@ -26,7 +26,8 @@ class WatchlistGroup(QWidget):
         self.list_widget = QListWidget()
         self.list_widget.setObjectName("watchlistItems")
         self.list_widget.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
-        self.list_widget.setSpacing(2)
+        self.list_widget.setSpacing(0)
+        self.list_widget.setUniformItemSizes(True)
         self.list_widget.itemClicked.connect(self._on_item_clicked)
         layout.addWidget(self.list_widget)
 
@@ -70,7 +71,7 @@ class WatchlistDialog(QDialog):
             | Qt.WindowType.WindowCloseButtonHint
             | Qt.WindowType.WindowMinimizeButtonHint
         )
-        self.setMinimumSize(320, 360)
+        self.setMinimumSize(380, 480)
 
         self._setup_ui()
         self._apply_styles()
@@ -78,8 +79,8 @@ class WatchlistDialog(QDialog):
 
     def _setup_ui(self):
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(12, 10, 12, 10)
-        main_layout.setSpacing(10)
+        main_layout.setContentsMargins(10, 8, 10, 10)
+        main_layout.setSpacing(8)
 
         header_layout = QHBoxLayout()
         header_layout.setSpacing(8)
@@ -130,102 +131,160 @@ class WatchlistDialog(QDialog):
     def _apply_styles(self):
         self.setStyleSheet("""
             QDialog {
-                background-color: #121722;
-                color: #E3E8F0;
-                border: 1px solid #2A3140;
+                background-color: #0E1319;
+                color: #C9D1DE;
+                border: 1px solid #1E2633;
                 border-radius: 8px;
             }
 
             QLabel#watchlistTitle {
-                color: #F1F5FF;
-                letter-spacing: 0.5px;
+                color: #E8EDF5;
+                font-size: 12px;
+                letter-spacing: 0.8px;
+                font-weight: 600;
             }
 
             QToolButton#addGroupButton {
-                background-color: #20283A;
-                color: #9EE3E3;
-                border: 1px solid #2E3A52;
-                border-radius: 8px;
-                font-size: 14px;
-                padding: 2px 8px;
+                background-color: #161E2C;
+                color: #5ECFCF;
+                border: 1px solid #253040;
+                border-radius: 6px;
+                font-size: 13px;
+                font-weight: 500;
+                padding: 1px 7px;
+                min-width: 22px;
+                min-height: 22px;
             }
 
             QToolButton#addGroupButton:hover {
-                background-color: #29C7C9;
-                color: #0F1117;
+                background-color: #1D2A3E;
+                color: #7ADFDF;
+                border-color: #5ECFCF;
             }
 
             QLineEdit#watchlistSearch {
-                background-color: #151C2B;
-                border: 1px solid #2A3140;
-                border-radius: 6px;
-                padding: 6px 10px;
-                color: #E3E8F0;
+                background-color: #111820;
+                border: 1px solid #1E2A3C;
+                border-radius: 5px;
+                padding: 5px 9px;
+                color: #C9D1DE;
                 font-size: 11px;
+                selection-background-color: #1E3A50;
             }
 
             QLineEdit#watchlistSearch:focus {
-                border: 1px solid #29C7C9;
-                background-color: #1A2334;
+                border: 1px solid #3ABFBF;
+                background-color: #131B28;
             }
 
             QPushButton#watchlistAddButton {
-                background-color: #29C7C9;
-                color: #0F1117;
-                border-radius: 6px;
-                padding: 6px 12px;
+                background-color: #1D8C8C;
+                color: #E8F8F8;
+                border: none;
+                border-radius: 5px;
+                padding: 5px 14px;
+                font-size: 11px;
                 font-weight: 600;
+                letter-spacing: 0.3px;
             }
 
             QPushButton#watchlistAddButton:hover {
-                background-color: #36D6D6;
+                background-color: #22A3A3;
+            }
+
+            QPushButton#watchlistAddButton:pressed {
+                background-color: #187878;
             }
 
             QTabWidget#watchlistTabs::pane {
-                border: 1px solid #2A3140;
-                border-radius: 8px;
-                background-color: #121722;
-                padding: 2px;
+                border: 1px solid #1A2535;
+                border-top: none;
+                background-color: #0E1319;
+            }
+
+            QTabWidget#watchlistTabs > QTabBar {
+                alignment: left;
             }
 
             QTabBar::tab {
-                background-color: #1A2233;
-                color: #AEB6C7;
-                border: 1px solid #2A3140;
-                padding: 4px 10px;
-                border-top-left-radius: 6px;
-                border-top-right-radius: 6px;
-                margin-right: 3px;
-                font-weight: 600;
+                background-color: transparent;
+                color: #6B7A90;
+                border: none;
+                border-bottom: 2px solid transparent;
+                padding: 5px 12px 4px 12px;
+                margin-right: 1px;
+                font-weight: 500;
                 font-size: 10.5px;
+                letter-spacing: 0.3px;
+                min-width: 50px;
+            }
+
+            QTabBar::tab:hover {
+                color: #98A8BE;
+                border-bottom: 2px solid #2E4060;
             }
 
             QTabBar::tab:selected {
-                background-color: #29C7C9;
-                color: #0F1117;
-                border: 1px solid #29C7C9;
+                background-color: transparent;
+                color: #4DCACA;
+                border-bottom: 2px solid #4DCACA;
+                font-weight: 600;
             }
 
             QListWidget#watchlistItems {
-                background-color: #101621;
+                background-color: #0E1319;
                 border: none;
-                padding: 4px;
+                outline: none;
+                padding: 0px;
             }
 
             QListWidget#watchlistItems::item {
-                background-color: #151C2B;
-                color: #E3E8F0;
-                padding: 6px 10px;
-                margin: 4px 2px;
-                border-radius: 6px;
-                border: 1px solid #1F2937;
-                font-size: 11px;
+                background-color: transparent;
+                color: #B8C4D4;
+                padding: 7px 12px;
+                margin: 0px;
+                border: none;
+                border-bottom: 1px solid #141C28;
+                font-size: 11.5px;
+                font-weight: 500;
+                letter-spacing: 0.4px;
+            }
+
+            QListWidget#watchlistItems::item:hover {
+                background-color: #131C2A;
+                color: #D8E2EF;
             }
 
             QListWidget#watchlistItems::item:selected {
-                background-color: #223449;
-                border: 1px solid #29C7C9;
-                color: #CFFBFB;
+                background-color: #142030;
+                color: #5ECFCF;
+                border-bottom: 1px solid #1E3045;
+            }
+
+            QScrollBar:vertical {
+                background: #0E1319;
+                width: 6px;
+                border: none;
+            }
+
+            QScrollBar::handle:vertical {
+                background: #253040;
+                border-radius: 3px;
+                min-height: 20px;
+            }
+
+            QScrollBar::handle:vertical:hover {
+                background: #344A62;
+            }
+
+            QScrollBar::add-line:vertical,
+            QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+
+            QScrollBar::add-page:vertical,
+            QScrollBar::sub-page:vertical {
+                background: none;
             }
         """)
 

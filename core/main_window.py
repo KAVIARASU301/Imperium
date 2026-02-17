@@ -268,16 +268,16 @@ class ScalperMainWindow(QMainWindow):
         self.setStyleSheet("""
             QMainWindow { background-image: url("assets/textures/main_window_bg.png");background-color: #0f0f0f !important; color: #ffffff; border: 1px solid #333; }
             QWidget { margin: 0px; padding: 0px; }
-            QMessageBox { background-image: url("assets/textures/texture.png");background-color: #161A25 !important; color: #E0E0E0 !important; border: 1px solid #3A4458; border-radius: 8px; }
+            QMessageBox { background-image: url("assets/textures/Qmessage_texture.png");background-color: #161A25 !important; color: #E0E0E0 !important; border: 1px solid #3A4458; border-radius: 8px; min-width: 460px; min-height: 260px; }
             QMessageBox { border: none; margin: 0px; }
-            QMessageBox::title, QMessageBox QWidget, QMessageBox * { background-image: url("assets/textures/texture.png"); background-color: #161A25 !important; color: #E0E0E0 !important; }
-            QMessageBox QLabel { color: #E0E0E0 !important; background-color: #161A25 !important; font-size: 13px; }
+            QMessageBox::title, QMessageBox QWidget, QMessageBox * { background-image: url("assets/textures/Qmessage_texture.png"); background-color: #161A25 !important; color: #E0E0E0 !important; }
+            QMessageBox QLabel { color: #E0E0E0 !important; background-color: #161A25 !important; font-size: 13px; min-height: 120px; }
             QMessageBox QPushButton { background-color: #212635 !important; color: #E0E0E0 !important; border: 1px solid #3A4458; border-radius: 5px; padding: 8px 16px; font-weight: 500; min-width: 70px; }
             QMessageBox QPushButton:hover { background-color: #29C7C9 !important; color: #04b3bd !important; border-color: #29C7C9; }
             QMessageBox QPushButton:pressed { background-color: #1f8a8c !important; }
             QDialog { background-color: #161A25; color: #E0E0E0; }
             QStatusBar {
-                background-image: url("assets/textures/texture_darker.png");
+                background-image: url("assets/textures/status_bar_texture.png");
                 background-color: #141A27;
                 color: #8F9CB2;
                 border-top: 1px solid #242C3B;
@@ -893,18 +893,17 @@ class ScalperMainWindow(QMainWindow):
                     )
                     return
 
-                active_symbol = active_trade.get("tradingsymbol")
-                active_position = self.position_manager.get_position(active_symbol) if active_symbol else None
-                if active_position:
+                active_symbols = active_trade.get("tradingsymbols") or [active_trade.get("tradingsymbol")]
+                active_symbols = [s for s in active_symbols if s]
+                if active_symbols:
                     logger.info(
-                        "[AUTO] Opposite higher-priority signal for token=%s (%s/%s -> %s/%s). Reversing position.",
-                        token,
-                        active_side,
-                        active_strategy,
-                        signal_side,
-                        incoming_strategy,
+                        "[AUTO] Opposite higher-priority signal for token=%s (%s/%s -> %s/%s). Reversing %d position(s).",
+                        token, active_side, active_strategy, signal_side, incoming_strategy, len(active_symbols),
                     )
-                    self._exit_position_automated(active_position, reason="AUTO_REVERSE")
+                    for sym in active_symbols:
+                        active_position = self.position_manager.get_position(sym)
+                        if active_position:
+                            self._exit_position_automated(active_position, reason="AUTO_REVERSE")
                 if self._cvd_automation_positions.pop(token, None) is not None:
                     self._persist_cvd_automation_state()
 
@@ -957,6 +956,7 @@ class ScalperMainWindow(QMainWindow):
         }
 
         tracked_tradingsymbol = contract.tradingsymbol
+        all_tradingsymbols = [contract.tradingsymbol]  # default: single ATM; overwritten for buy_exit_panel
         order_details = None
 
         if route == "buy_exit_panel" and self.buy_exit_panel and self.strike_ladder:
@@ -971,15 +971,21 @@ class ScalperMainWindow(QMainWindow):
 
             # Build order details directly from the panel with its current settings
             order_details = self.buy_exit_panel.build_order_details()
+            # store ALL strike tradingsymbols
             if order_details and order_details.get('strikes'):
-                first_contract = order_details.get('strikes', [{}])[0].get('contract')
-                if first_contract and getattr(first_contract, "tradingsymbol", None):
-                    tracked_tradingsymbol = first_contract.tradingsymbol
+                all_tradingsymbols = [
+                    s['contract'].tradingsymbol
+                    for s in order_details['strikes']
+                    if s.get('contract') and getattr(s['contract'], 'tradingsymbol', None)
+                ]
+                if all_tradingsymbols:
+                    tracked_tradingsymbol = all_tradingsymbols[0]  # keep for backward compat
 
         # Register the position BEFORE calling execute so that if the signal fires
         # again within the async 500ms confirmation window we don't double-enter.
         self._cvd_automation_positions[token] = {
             "tradingsymbol": tracked_tradingsymbol,
+            "tradingsymbols": all_tradingsymbols if route == "buy_exit_panel" else [tracked_tradingsymbol],
             "signal_side": signal_side,
             "route": route,
             "signal_timestamp": payload.get("timestamp"),  # Track when signal was generated
@@ -1051,19 +1057,26 @@ class ScalperMainWindow(QMainWindow):
         if not active_trade:
             return
 
-        tradingsymbol = active_trade.get("tradingsymbol")
-        position = self.position_manager.get_position(tradingsymbol)
-        if not position:
-            if self._has_pending_order_for_symbol(tradingsymbol):
+        # AFTER: check against all tracked symbols
+        tradingsymbols = active_trade.get("tradingsymbols") or [active_trade.get("tradingsymbol")]
+        tradingsymbols = [s for s in tradingsymbols if s]  # filter None
+
+        # Use primary symbol for pending-order check / cleanup logic
+        tradingsymbol = tradingsymbols[0] if tradingsymbols else None
+        positions = [self.position_manager.get_position(s) for s in tradingsymbols]
+        positions = [p for p in positions if p]
+
+        if not positions:
+            if tradingsymbol and self._has_pending_order_for_symbol(tradingsymbol):
                 self._start_cvd_pending_retry(token)
                 return
-
             self._stop_cvd_pending_retry(token)
             if self._cvd_automation_positions.pop(token, None) is not None:
                 self._persist_cvd_automation_state()
             return
 
         self._stop_cvd_pending_retry(token)
+        position = positions[0]  # use first for SL/ema check logic (underlying-based, same for all)
 
         def _to_finite_float(value, default=0.0):
             try:
@@ -1200,7 +1213,8 @@ class ScalperMainWindow(QMainWindow):
                 exit_reason = "AUTO_ATR_REVERSAL_EXIT"
 
         if exit_reason:
-            self._exit_position_automated(position, reason=exit_reason)
+            for pos in positions:
+                self._exit_position_automated(pos, reason=exit_reason)
             if self._cvd_automation_positions.pop(token, None) is not None:
                 self._persist_cvd_automation_state()
             return
@@ -1223,17 +1237,16 @@ class ScalperMainWindow(QMainWindow):
 
         closed_tokens = []
         for token, active_trade in list(self._cvd_automation_positions.items()):
-            tradingsymbol = active_trade.get("tradingsymbol")
-            if not tradingsymbol:
+            tradingsymbols = active_trade.get("tradingsymbols") or [active_trade.get("tradingsymbol")]
+            tradingsymbols = [s for s in tradingsymbols if s]
+            if not tradingsymbols:
                 closed_tokens.append(token)
                 continue
 
-            position = self.position_manager.get_position(tradingsymbol)
-            if not position:
-                closed_tokens.append(token)
-                continue
-
-            self._exit_position_automated(position, reason=reason)
+            for sym in tradingsymbols:
+                position = self.position_manager.get_position(sym)
+                if position:
+                    self._exit_position_automated(position, reason=reason)
             closed_tokens.append(token)
 
         for token in closed_tokens:

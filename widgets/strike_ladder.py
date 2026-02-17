@@ -3,7 +3,7 @@ from typing import Dict, List, Optional, Union
 from datetime import date
 
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QSizePolicy,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QMenu, QDialog, QFormLayout, QSpinBox, QCheckBox,
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QProgressBar, QStyle
 )
@@ -72,22 +72,12 @@ class StrikeLadderWidget(QWidget):
         self._last_centered_atm: Optional[float] = None
         self._user_scrolling = False
         self._last_atm_strike: Optional[float] = None
-        self.underlying_data = {
-            'ltp': 0.0,
-            'prev_close': 0.0,
-            'change_pct': 0.0,
-            'day_high': 0.0,
-            'day_low': 0.0,
-            'volume': 0,
-            'vix': 0.0
-        }
         self._index_ltp = None
         self._visible_tokens_timer = QTimer(self)
         self._visible_tokens_timer.setSingleShot(True)
         self._visible_tokens_timer.setInterval(120)
         self._visible_tokens_timer.timeout.connect(self._emit_visible_tokens_changed)
 
-        self.vix_value = 0.0
         self._init_ui()
         self._apply_styles()
         self._connect_signals()
@@ -121,81 +111,9 @@ class StrikeLadderWidget(QWidget):
             self._schedule_visible_tokens_emit
         )
 
-        # Create footer
-        self._create_footer()
-        main.addWidget(self.footer)
 
     def _reset_user_scroll(self):
         self._user_scrolling = False
-
-    def _create_footer(self):
-        """Institutional-grade footer with key metrics."""
-        self.footer = QWidget()
-        self.footer.setObjectName("ladderFooter")
-        self.footer.setFixedHeight(28)
-
-        layout = QHBoxLayout(self.footer)
-        layout.setContentsMargins(8, 0, 8, 0)
-        layout.setSpacing(6)
-
-        # Settings button
-        self.settings_btn = QPushButton("⚙")
-        self.settings_btn.setObjectName("settingsBtn")
-        self.settings_btn.setFixedSize(21, 21)
-        self.settings_btn.setToolTip("Ladder Settings")
-
-        # --- UNDERLYING METRICS ---
-        self.underlying_lbl = QLabel("—")
-        self.underlying_lbl.setObjectName("underlyingLabel")
-        self.underlying_lbl.setToolTip("Underlying LTP & Change")
-        self.underlying_lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-
-        # self.range_lbl = QLabel("Range: —")
-        # self.range_lbl.setObjectName("footerStat")
-        # self.range_lbl.setToolTip("Day High/Low")
-
-        # --- OPTIONS METRICS ---
-        self.call_oi_lbl = QLabel("CE OI: —")
-        self.call_oi_lbl.setObjectName("footerStat")
-
-        self.put_oi_lbl = QLabel("PE OI: —")
-        self.put_oi_lbl.setObjectName("footerStat")
-
-        self.pcr_label = QLabel("PCR: —")
-        self.pcr_label.setObjectName("pcrLabel")
-
-        self.vix_label = QLabel("VIX: —")
-        self.vix_label.setObjectName("vixLabel")
-
-        # Alignment
-        for lbl in [self.underlying_lbl,
-                    self.call_oi_lbl, self.put_oi_lbl, self.pcr_label, self.vix_label]:
-            lbl.setAlignment(Qt.AlignCenter)
-            lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-
-        # Assemble left → right
-        layout.addWidget(self.settings_btn, 0, Qt.AlignVCenter)
-
-        metrics_layout = QHBoxLayout()
-        metrics_layout.setSpacing(0)
-        metrics_layout.setContentsMargins(0, 0, 0, 0)
-        metrics_layout.addWidget(self.underlying_lbl, 1)
-        metrics_layout.addWidget(self._footer_sep())
-        metrics_layout.addWidget(self.call_oi_lbl, 1)
-        metrics_layout.addWidget(self._footer_sep())
-        metrics_layout.addWidget(self.put_oi_lbl, 1)
-        metrics_layout.addWidget(self._footer_sep())
-        metrics_layout.addWidget(self.pcr_label, 1)
-        metrics_layout.addWidget(self._footer_sep())
-        metrics_layout.addWidget(self.vix_label, 1)
-        layout.addLayout(metrics_layout, 1)
-
-    def _footer_sep(self):
-        sep = QLabel("|")
-        sep.setObjectName("footerDivider")
-        sep.setAlignment(Qt.AlignCenter)
-        sep.setFixedWidth(12)
-        return sep
 
     def _apply_styles(self):
         self.table.verticalHeader().hide()
@@ -207,6 +125,9 @@ class StrikeLadderWidget(QWidget):
         self.table.setCurrentCell(-1, -1)
 
         h = self.table.horizontalHeader()
+        h.setFixedHeight(30)
+        h.setMinimumHeight(30)
+        h.setMaximumHeight(30)
 
         # Fixed columns
         h.setSectionResizeMode(self.CE_BTN, QHeaderView.Fixed)
@@ -265,34 +186,6 @@ class StrikeLadderWidget(QWidget):
             QScrollBar::handle:vertical:hover {
                 background: rgba(169, 177, 195, 0.4);
             }
-            #ladderFooter {
-                background: #041D27;
-                border-top: 1px solid #3A4458;
-            }
-
-            #settingsBtn {
-                background: transparent;
-                color: #A9B1C3;
-                border: 1px solid #3A4458;
-                border-radius: 3px;
-                padding: 0px;
-            }
-
-            #settingsBtn:hover {
-                background: #3A4458;
-            }
-
-            #footerStat {
-                color: #A9B1C3;
-                font-size: 10.5px;
-            }
-
-            #pcrLabel {
-                font-size: 10.5px;
-                font-weight: 700;
-            }
-
-
             QCheckBox {
                 color: #A9B1C3;
                 font-size: 11px;
@@ -306,14 +199,6 @@ class StrikeLadderWidget(QWidget):
             QCheckBox::indicator:checked {
                 background: #29C7C9;
                 border-color: #29C7C9;
-            }
-            #pcrLabel {
-                font-size: 12px;
-                font-weight: 700;
-            }
-            #footerStat {
-                color: #A9B1C3;
-                font-size: 11px;
             }
             QMenu {
                 background: #1B2030;
@@ -329,26 +214,6 @@ class StrikeLadderWidget(QWidget):
             }
             QMenu::item:selected {
                 background: #2A3350;
-            }
-            #underlyingLabel {
-                font-size: 12px;
-                font-weight: 700;
-                color: #E6EDF8;
-            }
-
-            #vixLabel {
-                font-size: 11px;
-                font-weight: 700;
-            }
-
-            #footerDivider {
-                color: #3A4458;
-                font-size: 11px;
-                font-weight: 600;
-            }
-
-            #ladderFooter QLabel {
-                letter-spacing: 0.2px;
             }
         """)
 
@@ -392,7 +257,6 @@ class StrikeLadderWidget(QWidget):
             self.table.setColumnWidth(col, max(w, 40))
 
     def _connect_signals(self):
-        self.settings_btn.clicked.connect(self._show_settings)
         self.table.customContextMenuRequested.connect(self._show_menu)
 
     def _show_menu(self, pos: QPoint):
@@ -471,7 +335,6 @@ class StrikeLadderWidget(QWidget):
         # ✅ Reverse the sort - lowest strikes at top, highest at bottom
         for strike in sorted(self.contracts.keys()):  # removed reverse=True
             self._add_row(strike)
-        self._update_stats()
         QTimer.singleShot(120, self._force_center_atm)
         QTimer.singleShot(0, self._apply_weighted_column_widths)
         self._schedule_visible_tokens_emit()
@@ -629,8 +492,6 @@ class StrikeLadderWidget(QWidget):
                 self._update_oi_widget(row, self.CE_OI, ce)
                 self._update_oi_widget(row, self.PE_OI, pe)
 
-        self._update_stats()
-
     def _set_price_item_text(self, row: int, col: int, val: float):
         item = self.table.item(row, col)
         if not item:
@@ -649,18 +510,6 @@ class StrikeLadderWidget(QWidget):
             lbl.setText(format_indian(c.oi))
         if bar:
             bar.setValue(int((c.oi / self._max_oi) * 100) if self._max_oi > 0 else 0)
-
-    def _update_stats(self):
-        ce_oi = sum(c.oi for sc in self.contracts.values() for c in [sc.get('CE')] if c)
-        pe_oi = sum(c.oi for sc in self.contracts.values() for c in [sc.get('PE')] if c)
-
-        self.call_oi_lbl.setText(f"CE OI: {self._format_oi_lakhs(ce_oi)}")
-        self.put_oi_lbl.setText(f"PE OI: {self._format_oi_lakhs(pe_oi)}")
-
-        pcr = pe_oi / ce_oi if ce_oi > 0 else 0
-        col = "#1DE9B6" if pcr > 1 else "#F85149" if pcr < 0.7 else "#FBBF24"
-        self.pcr_label.setText(f"PCR: {pcr:.2f}")
-        self.pcr_label.setStyleSheet(f"color: {col}; font-weight: 700; font-size: 10.5px;")
 
     def _jump_to_atm(self):
         if self._user_scrolling:
@@ -872,39 +721,17 @@ class StrikeLadderWidget(QWidget):
             )
 
             sym = f"{exchange}:{name}"
+            quote_data = self.kite.quote([sym])
 
-            # 🔥 Fetch full quote for underlying + VIX
-            quote_data = self.kite.quote([sym, "NSE:INDIA VIX"])
-
-            # --- UNDERLYING DATA ---
             underlying = quote_data.get(sym, {})
-            if underlying:
-                ohlc = underlying.get('ohlc', {})
-                self.underlying_data.update({
-                    'ltp': underlying.get('last_price', 0.0),
-                    'prev_close': ohlc.get('close', 0.0),
-                    'day_high': ohlc.get('high', 0.0),
-                    'day_low': ohlc.get('low', 0.0),
-                    'volume': underlying.get('volume', 0)
-                })
+            if not underlying:
+                return
 
-                # Calculate % change
-                if self.underlying_data['prev_close'] > 0:
-                    change = self.underlying_data['ltp'] - self.underlying_data['prev_close']
-                    self.underlying_data['change_pct'] = (change / self.underlying_data['prev_close']) * 100
+            new_price = underlying.get('last_price', 0.0)
+            if not new_price:
+                return
 
-                self._update_underlying_display()
-
-            self._index_ltp = self.underlying_data['ltp']
-
-            # --- VIX DATA ---
-            vix_data = quote_data.get("NSE:INDIA VIX", {})
-            if vix_data:
-                self.underlying_data['vix'] = vix_data.get('last_price', 0.0)
-                self._update_vix_display()
-
-            # --- ATM LOGIC (existing) ---
-            new_price = self.underlying_data['ltp']
+            self._index_ltp = new_price
             new_atm = self._calculate_atm_strike(new_price)
 
             if self._user_scrolling:
@@ -917,10 +744,6 @@ class StrikeLadderWidget(QWidget):
             if new_atm == self._last_atm_strike:
                 return
 
-            if not self._index_ltp:
-                logger.warning("Index LTP unavailable — retaining previous ATM")
-                return
-
             self._last_atm_strike = new_atm
             self.update_strikes(self.symbol, new_price, self.expiry, self.user_strike_interval)
 
@@ -931,30 +754,6 @@ class StrikeLadderWidget(QWidget):
         if self.symbol and self.expiry and self.current_price:
             self.update_strikes(self.symbol, self.current_price, self.expiry, self.user_strike_interval)
 
-    def _update_underlying_display(self):
-        """Update underlying price with color-coded change."""
-        d = self.underlying_data
-
-        # Color based on direction
-        if d['change_pct'] > 0:
-            color = "#1DE9B6"
-            sign = "+"
-        elif d['change_pct'] < 0:
-            color = "#F85149"
-            sign = ""
-        else:
-            color = "#A9B1C3"
-            sign = ""
-
-        # Format: "NIFTY 24,850.50  +0.45%"
-        self.underlying_lbl.setText(
-            f"{self.symbol} {d['ltp']:,.2f}  {sign}{d['change_pct']:.2f}%"
-        )
-        self.underlying_lbl.setStyleSheet(
-            f"color: {color}; font-weight: 700; font-size: 12px;"
-        )
-
-
     def _format_oi_lakhs(self, oi: int) -> str:
         """Format OI in Lakhs notation."""
         if oi >= 100_000:  # 1 Lakh
@@ -962,22 +761,6 @@ class StrikeLadderWidget(QWidget):
         elif oi >= 1_000:
             return f"{oi / 1_000:.1f}K"
         return str(oi) if oi > 0 else "—"
-
-    def _update_vix_display(self):
-        """Update VIX with color coding."""
-        vix = self.underlying_data['vix']
-
-        if vix > 20:
-            color = "#F85149"  # High volatility (fear)
-        elif vix < 12:
-            color = "#1DE9B6"  # Low volatility (calm)
-        else:
-            color = "#FBBF24"  # Medium
-
-        self.vix_label.setText(f"VIX: {vix:.2f}")
-        self.vix_label.setStyleSheet(
-            f"color: {color}; font-weight: 700; font-size: 10.5px;"
-        )
 
     def set_auto_adjust(self, enabled: bool):
         self.auto_adjust_enabled = enabled
