@@ -16,7 +16,7 @@ class PnlLogger:
         """
         if db_path is None:
             home = os.path.expanduser("~")
-            db_dir = os.path.join(home, ".options_badger")
+            db_dir = os.path.join(home, ".imperium_desk")
             os.makedirs(db_dir, exist_ok=True)
             # Create a mode-specific database file
             db_filename = f"pnl_history_{mode}.db"

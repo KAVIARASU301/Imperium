@@ -124,7 +124,7 @@ class ScalperMainWindow(QMainWindow):
         self._cvd_pending_retry_timers: Dict[int, QTimer] = {}
         self._cvd_automation_state_file = (
             Path.home()
-            / ".options_badger"
+            / ".imperium_desk"
             / f"cvd_automation_state_{self.trading_mode}.json"
         )
         self._load_cvd_automation_state()
@@ -132,7 +132,7 @@ class ScalperMainWindow(QMainWindow):
         # CVD monitor symbols (v1 – fixed indices)
         self.cvd_symbols = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"]
         self.active_cvd_tokens: set[int] = set()
-        self.cvd_symbol_set_manager = CVDSymbolSetManager(base_dir=Path.home() / ".options_badger")
+        self.cvd_symbol_set_manager = CVDSymbolSetManager(base_dir=Path.home() / ".imperium_desk")
 
         # --- FIX: UI Throttling Implementation ---
         self._latest_market_data = {}
@@ -3337,7 +3337,7 @@ class ScalperMainWindow(QMainWindow):
 
             # Play sound
             sound_effect = QSoundEffect(self)
-            filename = "Pop.wav" if success else "fail.wav"
+            filename = "success.wav" if success else "fail.wav"
             base_path = os.path.dirname(os.path.abspath(__file__))
             assets_dir = os.path.join(base_path, "..", "assets")
             if not os.path.exists(assets_dir):

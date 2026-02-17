@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 from datetime import date
 
-DATA_DIR = Path.home() / ".options_badger"
+DATA_DIR = Path.home() / ".imperium_desk"
 DATA_DIR.mkdir(exist_ok=True)
 
 DATA_FILE = DATA_DIR / "fii_dii_data.json"

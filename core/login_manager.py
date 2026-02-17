@@ -69,7 +69,7 @@ class RequestTokenServer(QThread):
                     self.wfile.write(
                         b"<html><body style='font-family:Segoe UI,sans-serif;background:#111;color:#eee;text-align:center;padding-top:40px;'>"
                         b"<h2>Login successful</h2>"
-                        b"<p>You can now return to Options Badger Pro.</p>"
+                        b"<p>You can now return to Imperium Desk.</p>"
                         b"</body></html>"
                     )
 
@@ -105,7 +105,7 @@ class LoginManager(QDialog):
 
         self.token_server: Optional[RequestTokenServer] = None
 
-        self.setWindowTitle("Options Badger Pro - Authentication")
+        self.setWindowTitle("Imperium Desk - Authentication")
         self.setMinimumSize(420, 450)
         self.setModal(True)
         # --- Make window frameless for custom styling ---
@@ -135,7 +135,7 @@ class LoginManager(QDialog):
         container_layout.setSpacing(15)
 
         # App Title
-        app_title = QLabel(" 🦡 Options Badger Pro")
+        app_title = QLabel("Imperium Desk")
         app_title.setObjectName("appTitle")
         container_layout.addWidget(app_title, 0, Qt.AlignmentFlag.AlignCenter)
 

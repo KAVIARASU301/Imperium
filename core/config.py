@@ -10,7 +10,7 @@ from pathlib import Path
 from datetime import datetime
 
 # Application constants
-APP_NAME = "Options Badger"
+APP_NAME = "Imperium Desk"
 APP_VERSION = "1.0.0"
 
 # Trading constants
@@ -40,12 +40,12 @@ COLORS = {
 
 def setup_logging():
     """Configure application logging"""
-    log_dir = Path.home() / ".options_badger" / "logs"
+    log_dir = Path.home() / ".imperium_desk" / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
 
     # Create timestamp for a log file
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file = log_dir / f"scalper_{timestamp}.log"
+    log_file = log_dir / f"imperium_{timestamp}.log"
 
     logging.basicConfig(
         level=logging.INFO,
@@ -63,5 +63,5 @@ def setup_logging():
 
     # Log startup
     logger = logging.getLogger(__name__)
-    logger.info(f"Options Scalper {APP_VERSION} starting...")
+    logger.info(f"Imperium Desk {APP_VERSION} starting...")
     logger.info(f"Log file: {log_file}")

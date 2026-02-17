@@ -1,3 +1,8 @@
+import logging
+from datetime import datetime, timedelta
+from typing import Optional
+logger = logging.getLogger(__name__)
+
 
 class APICircuitBreaker:
     def __init__(self, failure_threshold: int = 5, timeout_seconds: int = 60):

@@ -35,7 +35,7 @@ class TradeLedger:
 
         # Separate DB files: trades_paper.db and trades_live.db
         db_name = f"trades_{self.mode}.db"
-        self.db_path = Path.home() / ".options_badger" / db_name
+        self.db_path = Path.home() / ".imperium_desk" / db_name
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
         self._conn = sqlite3.connect(

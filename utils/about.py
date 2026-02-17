@@ -13,7 +13,7 @@ def show_about(parent):
     ">
 
         <h2 style="margin-bottom:4px; color:#FFFFFF;">
-            🦡 Options Badger Trading Terminal
+            Imperium Desk
         </h2>
 
         <div style="color:#9AA4B2; margin-bottom:12px;">
@@ -42,7 +42,7 @@ def show_about(parent):
         <hr style="margin:14px 0; border:1px solid #2A3140;">
 
         <p>
-            <b>Options Badger</b> is a high-performance desktop trading terminal
+            <b>Imperium Desk</b> is a high-performance desktop trading terminal
             designed for speed, stability, and clarity during live market conditions.
         </p>
 

@@ -823,7 +823,7 @@ class PositionsTable(QWidget):
     # ------------------------------------------------------------------
     def _load_table_state(self):
         try:
-            path = os.path.expanduser("~/.options_scalper/positions_table_order.json")
+            path = os.path.expanduser("~/.imperium_desk/positions_table_order.json")
             if not os.path.exists(path):
                 return
 
@@ -844,7 +844,7 @@ class PositionsTable(QWidget):
 
     def _save_table_state(self):
         try:
-            path = os.path.expanduser("~/.options_scalper/positions_table_order.json")
+            path = os.path.expanduser("~/.imperium_desk/positions_table_order.json")
             os.makedirs(os.path.dirname(path), exist_ok=True)
 
             payload = {
@@ -861,7 +861,7 @@ class PositionsTable(QWidget):
 
     def _load_column_widths(self):
         try:
-            path = os.path.expanduser("~/.options_scalper/positions_table_columns.json")
+            path = os.path.expanduser("~/.imperium_desk/positions_table_columns.json")
             if not os.path.exists(path):
                 return False
             with open(path, "r") as f:
@@ -885,7 +885,7 @@ class PositionsTable(QWidget):
 
     def _save_column_widths(self):
         try:
-            path = os.path.expanduser("~/.options_scalper/positions_table_columns.json")
+            path = os.path.expanduser("~/.imperium_desk/positions_table_columns.json")
             os.makedirs(os.path.dirname(path), exist_ok=True)
             data = {h: self.table.columnWidth(i) for i, h in enumerate(self.table.headers)}
             with open(path, "w") as f:

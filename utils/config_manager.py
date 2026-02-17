@@ -14,7 +14,7 @@ class ConfigManager:
 
     def __init__(self, config_dir: Optional[Path] = None):
         if config_dir is None:
-            self.config_dir = Path.home() / ".options_badger"
+            self.config_dir = Path.home() / ".imperium_desk"
         else:
             self.config_dir = Path(config_dir)
 

@@ -2,7 +2,7 @@
 
 
 # Application info
-APP_NAME = "Options Scalper Pro"
+APP_NAME = "Imperium Desk"
 APP_VERSION = "1.0.0"
 APP_AUTHOR = "Trading Tools Inc."
 

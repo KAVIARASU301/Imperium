@@ -1356,7 +1356,7 @@ class CVDSingleChartDialog(QDialog):
 
     @staticmethod
     def _setup_json_file_path() -> Path:
-        config_dir = Path.home() / ".options_badger"
+        config_dir = Path.home() / ".imperium_desk"
         config_dir.mkdir(parents=True, exist_ok=True)
         return config_dir / "auto_trader_setup.json"
 

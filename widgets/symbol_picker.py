@@ -32,7 +32,7 @@ class SymbolPickerPopup(QWidget):
         self._last_selected_symbol: str | None = None
         self._visible_buttons: List[QPushButton] = []
         self._highlight_index = -1
-        self._settings = QSettings("OptionsBadger", "SymbolPicker")
+        self._settings = QSettings("ImperiumDesk", "SymbolPicker")
         self._load_recent_symbols()
 
         self._setup_ui()
