@@ -17,6 +17,9 @@ from PySide6.QtMultimedia import QSoundEffect
 from kiteconnect import KiteConnect
 from PySide6.QtGui import QPalette, QColor, QShortcut, QKeySequence, QPixmap
 import ctypes
+from PySide6.QtGui import QPixmap, QPainter, QColor
+from PySide6.QtCore import QPropertyAnimation, QEasingCurve
+from PySide6.QtWidgets import QGraphicsOpacityEffect
 
 # Internal imports
 from utils.config_manager import ConfigManager
@@ -521,23 +524,54 @@ class ScalperMainWindow(QMainWindow):
 
     def _update_network_icon(self, status: str):
         """
-        Updates the footer network icon based on connection status.
+        Updates footer network icon with color tint + smooth fade animation.
         """
+
         base_path = os.path.dirname(os.path.abspath(__file__))
         icons_dir = os.path.join(base_path, "..", "assets", "icons")
 
         connected_icon = os.path.join(icons_dir, "connected.svg")
         disconnected_icon = os.path.join(icons_dir, "disconnected.svg")
 
-        if "Connected" in status:
-            icon_path = connected_icon
-        elif "Disconnected" in status:
-            icon_path = disconnected_icon
-        else:
-            icon_path = disconnected_icon
+        # Determine state
+        is_connected = "Connected" in status
 
-        if os.path.exists(icon_path):
-            self.footer_network_icon.setPixmap(QPixmap(icon_path))
+        icon_path = connected_icon if is_connected else disconnected_icon
+        tint_color = QColor("#00E676") if is_connected else QColor("#FF5252")
+
+        if not os.path.exists(icon_path):
+            return
+
+        original = QPixmap(icon_path)
+        if original.isNull():
+            return
+
+        # 🔥 Tint SVG icon
+        tinted = QPixmap(original.size())
+        tinted.fill(Qt.transparent)
+
+        painter = QPainter(tinted)
+        painter.drawPixmap(0, 0, original)
+        painter.setCompositionMode(QPainter.CompositionMode_SourceIn)
+        painter.fillRect(tinted.rect(), tint_color)
+        painter.end()
+
+        self.footer_network_icon.setPixmap(tinted)
+
+        # 🔥 Smooth fade animation
+        if not hasattr(self, "_network_opacity_effect"):
+            self._network_opacity_effect = QGraphicsOpacityEffect()
+            self.footer_network_icon.setGraphicsEffect(self._network_opacity_effect)
+
+        animation = QPropertyAnimation(self._network_opacity_effect, b"opacity")
+        animation.setDuration(250)
+        animation.setStartValue(0.0)
+        animation.setEndValue(1.0)
+        animation.setEasingCurve(QEasingCurve.OutCubic)
+        animation.start()
+
+        # Prevent garbage collection
+        self._network_icon_animation = animation
 
     def _publish_status(self, message: str, timeout_ms: int = 4000, level: str = "info"):
         icon_map = {
@@ -3919,8 +3953,8 @@ class ScalperMainWindow(QMainWindow):
 
     def _on_network_status_changed(self, status: str):
         self.network_status = status
+        self.footer_network_chip.setText(status)
         self._update_network_icon(status)
-        self._update_ui()
 
     def _get_nearest_future_token(self, symbol: str):
         symbol = symbol.upper()
