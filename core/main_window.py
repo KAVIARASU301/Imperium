@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (QMainWindow, QApplication, QWidget, QVBoxLayout,
 from PySide6.QtCore import Qt, QTimer, QUrl, QByteArray
 from PySide6.QtMultimedia import QSoundEffect
 from kiteconnect import KiteConnect
-from PySide6.QtGui import QPalette, QColor, QShortcut, QKeySequence
+from PySide6.QtGui import QPalette, QColor, QShortcut, QKeySequence, QPixmap
 import ctypes
 
 # Internal imports
@@ -143,6 +143,8 @@ class ScalperMainWindow(QMainWindow):
 
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
         self.title_bar = TitleBar(self)
+        self.title_bar.set_title(self.trading_mode.upper())
+
         self.setMinimumSize(1200, 700)
         self.setWindowState(Qt.WindowState.WindowMaximized)
 
@@ -475,24 +477,35 @@ class ScalperMainWindow(QMainWindow):
         status_bar = self.statusBar()
         status_bar.setSizeGripEnabled(False)
 
+        # --- MODE CHIP ---
         self.footer_mode_chip = QLabel(self.trading_mode.upper())
         self.footer_mode_chip.setObjectName("footerModeChip")
 
+        # --- NETWORK ICON ---
+        self.footer_network_icon = QLabel()
+        self.footer_network_icon.setFixedSize(14, 14)
+        self.footer_network_icon.setScaledContents(True)
+
+        # --- NETWORK TEXT ---
         self.footer_network_chip = QLabel("Connecting")
         self.footer_network_chip.setObjectName("footerStatusChip")
 
+        # --- MARKET ---
         self.footer_market_chip = QLabel("Market --")
         self.footer_market_chip.setObjectName("footerStatusChip")
 
+        # --- API ---
         self.footer_api_chip = QLabel("API --")
         self.footer_api_chip.setObjectName("footerStatusChip")
 
+        # --- CLOCK ---
         self.footer_clock_chip = QLabel("--:--:--")
         self.footer_clock_chip.setObjectName("footerClockChip")
 
         for widget in (
                 self.footer_mode_chip,
                 self._footer_separator(),
+                self.footer_network_icon,
                 self.footer_network_chip,
                 self._footer_separator(),
                 self.footer_market_chip,
@@ -503,7 +516,28 @@ class ScalperMainWindow(QMainWindow):
         ):
             status_bar.addPermanentWidget(widget)
 
-        status_bar.showMessage("Happy trading! 🚀")
+        self._update_network_icon("Connecting")
+        status_bar.showMessage("Ready.")
+
+    def _update_network_icon(self, status: str):
+        """
+        Updates the footer network icon based on connection status.
+        """
+        base_path = os.path.dirname(os.path.abspath(__file__))
+        icons_dir = os.path.join(base_path, "..", "assets", "icons")
+
+        connected_icon = os.path.join(icons_dir, "connected.svg")
+        disconnected_icon = os.path.join(icons_dir, "disconnected.svg")
+
+        if "Connected" in status:
+            icon_path = connected_icon
+        elif "Disconnected" in status:
+            icon_path = disconnected_icon
+        else:
+            icon_path = disconnected_icon
+
+        if os.path.exists(icon_path):
+            self.footer_network_icon.setPixmap(QPixmap(icon_path))
 
     def _publish_status(self, message: str, timeout_ms: int = 4000, level: str = "info"):
         icon_map = {
@@ -3885,6 +3919,7 @@ class ScalperMainWindow(QMainWindow):
 
     def _on_network_status_changed(self, status: str):
         self.network_status = status
+        self._update_network_icon(status)
         self._update_ui()
 
     def _get_nearest_future_token(self, symbol: str):
