@@ -66,6 +66,8 @@ from dialogs.fii_dii_dialog import FIIDIIDialog
 from dialogs.watchlist_dialog import WatchlistDialog
 from dialogs.journal_dialog import JournalDialog
 from widgets.status_bar import StatusBarWidget
+from utils.network_utils import with_timeout, NetworkError, NetworkMonitor
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +119,12 @@ class ScalperMainWindow(QMainWindow):
         self.ws_ready_event_fired = False
         self._cached_index_prices = {}  # Price cache for fallback
         self._network_error_shown = False  # Track if error notification shown
+
+        # Network monitoring
+        self.network_monitor = NetworkMonitor(self)
+        self.network_monitor.connection_lost.connect(self._on_connection_lost)
+        self.network_monitor.connection_restored.connect(self._on_connection_restored)
+        self._network_error_notification = None  # Track active notification
 
         self.active_quick_order_dialog: Optional[QuickOrderDialog] = None
         self.active_order_confirmation_dialog: Optional[OrderConfirmationDialog] = None
@@ -1705,6 +1713,12 @@ class ScalperMainWindow(QMainWindow):
         logger.error(f"Instrument loading failed: {error}")
         QMessageBox.critical(self, "Error", f"Failed to load instruments:\n{error}")
 
+    @with_timeout(timeout_seconds=5)
+    @with_timeout(timeout_seconds=5)
+    def _fetch_ltp_safe(self, instrument: str):
+        """Helper method to fetch LTP with timeout"""
+        return self.real_kite_client.ltp(instrument)
+
     def _get_current_price(self, symbol: str, max_retries: int = 3) -> Optional[float]:
         """
         Get current price with circuit breaker protection and retry logic
@@ -1748,11 +1762,12 @@ class ScalperMainWindow(QMainWindow):
         # Retry with exponential backoff
         for attempt in range(max_retries):
             try:
-                ltp_data = self.real_kite_client.ltp(instrument)
+                ltp_data = self._fetch_ltp_safe(instrument)
 
                 if ltp_data and instrument in ltp_data:
                     price = ltp_data[instrument]["last_price"]
                     self.profile_circuit_breaker.record_success()
+                    self.network_monitor.record_success()  # ✅ Network success
 
                     # Cache the price
                     self._cache_index_price(symbol, price)
@@ -1763,6 +1778,24 @@ class ScalperMainWindow(QMainWindow):
                     return price
 
                 logger.warning(f"LTP data not found for {instrument}. Response: {ltp_data}")
+
+            except NetworkError as e:
+                self.profile_circuit_breaker.record_failure()
+                self.network_monitor.record_failure()  # ❌ Network failure
+
+                if attempt < max_retries - 1:
+                    # Exponential backoff: 0.5s, 1s, 2s
+                    sleep_time = 0.5 * (2 ** attempt)
+                    logger.warning(
+                        f"Network error attempt {attempt + 1}/{max_retries} for {symbol}: {e}. "
+                        f"Retrying in {sleep_time}s..."
+                    )
+                    time.sleep(sleep_time)
+                else:
+                    logger.error(
+                        f"Network timeout for {symbol} after {max_retries} attempts: {e}"
+                    )
+                    api_logger.error(f"PRICE_FETCH_TIMEOUT symbol={symbol} error={str(e)[:100]}")
 
             except Exception as e:
                 self.profile_circuit_breaker.record_failure()
@@ -1843,12 +1876,23 @@ class ScalperMainWindow(QMainWindow):
 
         self.market_data_worker.set_instruments(required_tokens)
 
+    @with_timeout(timeout_seconds=5)
     def _periodic_api_health_check(self):
         logger.debug("Performing periodic API health check.")
         if self.profile_circuit_breaker.can_execute() or self.margin_circuit_breaker.can_execute():
             self._update_account_info()
         else:
             logger.debug("API health check skipped - circuit breakers are OPEN.")
+
+    @with_timeout(timeout_seconds=5)
+    def _fetch_profile_safe(self):
+        """Helper method to fetch profile with timeout"""
+        return self.real_kite_client.profile()
+
+    @with_timeout(timeout_seconds=5)
+    def _fetch_margins_safe(self):
+        """Helper method to fetch margins with timeout"""
+        return self.real_kite_client.margins()
 
     def _update_account_info(self):
         if isinstance(self.trader, PaperTradingManager):
@@ -1873,15 +1917,21 @@ class ScalperMainWindow(QMainWindow):
 
         if self.profile_circuit_breaker.can_execute():
             try:
-                profile = self.real_kite_client.profile()
+                profile = self._fetch_profile_safe()
                 if profile and isinstance(profile, dict):
                     self.last_successful_user_id = profile.get("user_id", "Unknown")
                     self.profile_circuit_breaker.record_success()
+                    self.network_monitor.record_success()  # ✅ Network success
                     api_logger.info("Profile fetch successful.")
                 else:
                     logger.warning(f"Profile fetch returned unexpected data type: {type(profile)}")
                     self.profile_circuit_breaker.record_failure()
                     api_logger.warning(f"Profile fetch: Unexpected data type {type(profile)}")
+            except NetworkError as e:
+                logger.warning(f"Profile fetch network error: {e}")
+                self.profile_circuit_breaker.record_failure()
+                self.network_monitor.record_failure()  # ❌ Network failure
+                api_logger.warning(f"Profile fetch network error: {e}")
             except Exception as e:
                 logger.warning(f"Profile fetch API call failed: {e}")
                 self.profile_circuit_breaker.record_failure()
@@ -1890,7 +1940,7 @@ class ScalperMainWindow(QMainWindow):
         current_balance_to_display = self.last_successful_balance
         if self.margin_circuit_breaker.can_execute():
             try:
-                margins_data = self.real_kite_client.margins()
+                margins_data = self._fetch_margins_safe()
                 if margins_data and isinstance(margins_data, dict):
                     calculated_balance = 0
                     if 'equity' in margins_data and margins_data['equity'] is not None:
@@ -1900,15 +1950,18 @@ class ScalperMainWindow(QMainWindow):
                     self.last_successful_balance = calculated_balance
                     current_balance_to_display = self.last_successful_balance
                     self.margin_circuit_breaker.record_success()
+                    self.network_monitor.record_success()  # ✅ Network success
                     api_logger.info(f"Margins fetch successful. Balance: {current_balance_to_display}")
                     self.rms_failures = 0
                 else:
                     logger.warning(f"Margins fetch returned unexpected data type: {type(margins_data)}")
                     self.margin_circuit_breaker.record_failure()
                     api_logger.warning(f"Margins fetch: Unexpected data type {type(margins_data)}")
-            except Exception as e:
-                logger.error(f"Margins fetch API call failed: {e}")
+            except NetworkError as e:
+                logger.error(f"Margins fetch network error: {e}")
                 self.margin_circuit_breaker.record_failure()
+                self.network_monitor.record_failure()  # ❌ Network failure
+                api_logger.error(f"Margins fetch network error: {e}")
                 api_logger.error(f"Margins fetch failed: {e}")
                 if self.margin_circuit_breaker.state == "OPEN":
                     self._publish_status("API issues (margins) - using cached data.", 5000, level="warning")
@@ -4384,3 +4437,65 @@ class ScalperMainWindow(QMainWindow):
 
         if message:
             logger.info(f"Network status: {normalized} - {message}")
+
+    def _on_connection_lost(self):
+        """Called when network connection is lost (detected by failed API calls)"""
+        logger.warning("🔴 Network connection lost - showing error banner")
+        self._show_connection_error_banner("No internet connection detected")
+
+        # Update status bar with persistent warning
+        self._publish_status(
+            "⚠️ Internet connection lost - retrying...",
+            duration=0,  # Persistent until resolved
+            level="error"
+        )
+
+    def _on_connection_restored(self):
+        """Called when network connection is restored"""
+        logger.info("✅ Network connection restored")
+
+        # Clear error banner
+        if self._network_error_notification:
+            self._network_error_notification.close()
+            self._network_error_notification = None
+
+        # Update status bar with success message
+        self._publish_status(
+            "✅ Internet connection restored",
+            duration=3000,
+            level="success"
+        )
+
+        # Refresh data after reconnection
+        self._periodic_api_health_check()
+        self._update_market_subscriptions()
+
+    def _show_connection_error_banner(self, message: str):
+        """Show persistent connection error banner at top of window"""
+        # Don't spam notifications
+        if self._network_error_notification:
+            return
+
+        banner = QFrame(self)
+        banner.setStyleSheet("""
+            QFrame {
+                background-color: #ff4444;
+                border: 2px solid #cc0000;
+                border-radius: 4px;
+                padding: 8px;
+            }
+        """)
+
+        layout = QVBoxLayout(banner)
+        label = QLabel(f"⚠️ {message}\nRetrying automatically...")
+        label.setStyleSheet("color: white; font-weight: bold; font-size: 12px;")
+        layout.addWidget(label)
+
+        # Position at top of window
+        banner.setParent(self)
+        banner.setGeometry(10, 60, self.width() - 20, 50)  # Below title bar
+        banner.show()
+        banner.raise_()
+
+        self._network_error_notification = banner
+        logger.debug("Connection error banner shown")
