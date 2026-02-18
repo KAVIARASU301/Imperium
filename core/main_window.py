@@ -3,6 +3,9 @@ import logging
 import os
 import math
 import json
+from enum import Enum
+from collections import deque
+import time
 from pathlib import Path
 from typing import Dict, List, Optional, Union
 from datetime import datetime, timedelta, time, date
@@ -72,6 +75,13 @@ api_handler.setFormatter(api_formatter)
 api_logger.setLevel(logging.INFO)
 
 
+class WebSocketState(Enum):
+    DISCONNECTED = "disconnected"
+    CONNECTING = "connecting"
+    CONNECTED = "connected"
+    RECONNECTING = "reconnecting"
+
+
 class ScalperMainWindow(QMainWindow):
     def __init__(self, trader: Union[KiteConnect, PaperTradingManager], real_kite_client: KiteConnect, api_key: str,
                  access_token: str):
@@ -97,6 +107,15 @@ class ScalperMainWindow(QMainWindow):
         self.api_health_check_timer = QTimer(self)
         self.api_health_check_timer.timeout.connect(self._periodic_api_health_check)
         self.api_health_check_timer.start(30000)
+
+        # WebSocket state management
+        self.ws_state = WebSocketState.DISCONNECTED
+        self.ws_connection_time: Optional[datetime] = None
+        self.subscription_queue = deque()  # Queue for subscriptions before WS ready
+        self.pending_subscriptions = set()  # Track what's queued
+        self.ws_ready_event_fired = False
+        self._cached_index_prices = {}  # Price cache for fallback
+        self._network_error_shown = False  # Track if error notification shown
 
         self.active_quick_order_dialog: Optional[QuickOrderDialog] = None
         self.active_order_confirmation_dialog: Optional[OrderConfirmationDialog] = None
@@ -126,9 +145,9 @@ class ScalperMainWindow(QMainWindow):
         self._cvd_automation_market_state: Dict[int, dict] = {}
         self._cvd_pending_retry_timers: Dict[int, QTimer] = {}
         self._cvd_automation_state_file = (
-            Path.home()
-            / ".imperium_desk"
-            / f"cvd_automation_state_{self.trading_mode}.json"
+                Path.home()
+                / ".imperium_desk"
+                / f"cvd_automation_state_{self.trading_mode}.json"
         )
         self._load_cvd_automation_state()
 
@@ -136,6 +155,9 @@ class ScalperMainWindow(QMainWindow):
         self.cvd_symbols = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"]
         self.active_cvd_tokens: set[int] = set()
         self.cvd_symbol_set_manager = CVDSymbolSetManager(base_dir=Path.home() / ".imperium_desk")
+
+        self._last_subscription_set: set[int] = set()
+
 
         # --- FIX: UI Throttling Implementation ---
         self._latest_market_data = {}
@@ -309,6 +331,8 @@ class ScalperMainWindow(QMainWindow):
         """)
 
     def _init_background_workers(self):
+
+
         self.instrument_loader = InstrumentLoader(self.real_kite_client)
         self.instrument_loader.instruments_loaded.connect(self._on_instruments_loaded)
         self.instrument_loader.error_occurred.connect(self._on_api_error)
@@ -317,16 +341,8 @@ class ScalperMainWindow(QMainWindow):
         self.market_data_worker = MarketDataWorker(self.api_key, self.access_token)
         self.market_data_worker.data_received.connect(self._on_market_data, Qt.QueuedConnection)
         self.market_data_worker.connection_status_changed.connect(self._on_network_status_changed)
-        # 🔑 PRE-SUBSCRIBE CVD FUTURES (CRITICAL)
-        preload_cvd_tokens = set()
-        for sym in self.cvd_symbols:
-            fut_token = self._get_nearest_future_token(sym)
-            if fut_token:
-                preload_cvd_tokens.add(fut_token)
-                self.active_cvd_tokens.add(fut_token)
+        # self.market_data_worker.state_changed.connect(self._on_websocket_state_changed)
 
-        if preload_cvd_tokens:
-            self.market_data_worker.set_instruments(preload_cvd_tokens)
         self.market_data_worker.start()
 
         self.update_timer = QTimer(self)
@@ -472,15 +488,17 @@ class ScalperMainWindow(QMainWindow):
 
         self._setup_menu_bar()
         self._setup_status_footer()
+        self._setup_connection_indicator()  # Add connection status indicator
 
         QTimer.singleShot(3000, self._update_account_info)
 
     def _setup_status_footer(self):
-        """Build a richer status footer with persistent operational telemetry."""
+        """Build institutional-grade status footer with telemetry."""
+
         status_bar = self.statusBar()
         status_bar.setSizeGripEnabled(False)
 
-        # --- MODE CHIP ---
+        # --- MODE ---
         self.footer_mode_chip = QLabel(self.trading_mode.upper())
         self.footer_mode_chip.setObjectName("footerModeChip")
 
@@ -497,7 +515,12 @@ class ScalperMainWindow(QMainWindow):
         self.footer_market_chip = QLabel("Market --")
         self.footer_market_chip.setObjectName("footerStatusChip")
 
-        # --- API ---
+        # --- API ICON ---
+        self.footer_api_icon = QLabel()
+        self.footer_api_icon.setFixedSize(14, 14)
+        self.footer_api_icon.setScaledContents(True)
+
+        # --- API TEXT ---
         self.footer_api_chip = QLabel("API --")
         self.footer_api_chip.setObjectName("footerStatusChip")
 
@@ -513,6 +536,7 @@ class ScalperMainWindow(QMainWindow):
                 self._footer_separator(),
                 self.footer_market_chip,
                 self._footer_separator(),
+                self.footer_api_icon,
                 self.footer_api_chip,
                 self._footer_separator(),
                 self.footer_clock_chip,
@@ -520,6 +544,7 @@ class ScalperMainWindow(QMainWindow):
             status_bar.addPermanentWidget(widget)
 
         self._update_network_icon("Connecting")
+        self._update_api_icon("Healthy")
         status_bar.showMessage("Ready.")
 
     def _update_network_icon(self, status: str):
@@ -572,6 +597,42 @@ class ScalperMainWindow(QMainWindow):
 
         # Prevent garbage collection
         self._network_icon_animation = animation
+
+    def _update_api_icon(self, api_status: str):
+        """
+        Update API health icon without animation.
+        Stable institutional behavior.
+        """
+
+        base_path = os.path.dirname(os.path.abspath(__file__))
+        icons_dir = os.path.join(base_path, "..", "assets", "icons")
+        heartbeat_icon = os.path.join(icons_dir, "heart_beat.svg")
+
+        if not os.path.exists(heartbeat_icon):
+            return
+
+        original = QPixmap(heartbeat_icon)
+        if original.isNull():
+            return
+
+        # Determine color by status
+        if api_status == "Healthy":
+            tint_color = QColor("#00E676")  # green
+        elif api_status == "Recovering":
+            tint_color = QColor("#FFC107")  # amber
+        else:
+            tint_color = QColor("#FF1744")  # red
+
+        tinted = QPixmap(original.size())
+        tinted.fill(Qt.transparent)
+
+        painter = QPainter(tinted)
+        painter.drawPixmap(0, 0, original)
+        painter.setCompositionMode(QPainter.CompositionMode_SourceIn)
+        painter.fillRect(tinted.rect(), tint_color)
+        painter.end()
+
+        self.footer_api_icon.setPixmap(tinted)
 
     def _publish_status(self, message: str, timeout_ms: int = 4000, level: str = "info"):
         icon_map = {
@@ -1801,85 +1862,143 @@ class ScalperMainWindow(QMainWindow):
         logger.error(f"Instrument loading failed: {error}")
         QMessageBox.critical(self, "Error", f"Failed to load instruments:\n{error}")
 
-    def _get_current_price(self, symbol: str) -> Optional[float]:
-        if not self.real_kite_client:
+    def _get_current_price(self, symbol: str, max_retries: int = 3) -> Optional[float]:
+        """
+        Get current price with circuit breaker protection and retry logic
+
+        Args:
+            symbol: Index symbol (NIFTY, BANKNIFTY, etc.)
+            max_retries: Maximum retry attempts with exponential backoff
+
+        Returns:
+            Current price or None if all attempts fail
+        """
+        if not symbol:
             return None
 
-        try:
-            index_map = {
-                "NIFTY": ("NSE", "NIFTY 50"),
-                "BANKNIFTY": ("NSE", "NIFTY BANK"),
-                "FINNIFTY": ("NSE", "NIFTY FIN SERVICE"),
-                "MIDCPNIFTY": ("NSE", "NIFTY MID SELECT"),
-                "SENSEX": ("BSE", "SENSEX"),
-                "BANKEX": ("BSE", "BANKEX"),
-            }
-
-            exchange, name = index_map.get(
-                symbol.upper(),
-                ("NSE", symbol.upper())
+        # Check circuit breaker first
+        if not self.profile_circuit_breaker.can_execute():
+            logger.warning(
+                f"Circuit breaker {self.profile_circuit_breaker.get_state()} - "
+                f"using cached price for {symbol}"
             )
-
-            instrument = f"{exchange}:{name}"
-            ltp_data = self.real_kite_client.ltp(instrument)
-
-            if ltp_data and instrument in ltp_data:
-                return ltp_data[instrument]["last_price"]
-
-            logger.warning(f"LTP data not found for {instrument}. Response: {ltp_data}")
+            # Try to use cached price from market data worker
+            cached_price = self._get_cached_index_price(symbol)
+            if cached_price:
+                return cached_price
+            # If no cache, we have to wait for circuit to recover
             return None
 
-        except Exception as e:
-            logger.error(f"Failed to get current price for {symbol}: {e}")
+        # Index mapping
+        index_map = {
+            "NIFTY": ("NSE", "NIFTY 50"),
+            "BANKNIFTY": ("NSE", "NIFTY BANK"),
+            "FINNIFTY": ("NSE", "NIFTY FIN SERVICE"),
+            "MIDCPNIFTY": ("NSE", "NIFTY MID SELECT"),
+            "SENSEX": ("BSE", "SENSEX"),
+            "BANKEX": ("BSE", "BANKEX"),
+        }
+
+        exchange, name = index_map.get(symbol.upper(), ("NSE", symbol.upper()))
+        instrument = f"{exchange}:{name}"
+
+        # Retry with exponential backoff
+        for attempt in range(max_retries):
+            try:
+                ltp_data = self.real_kite_client.ltp(instrument)
+
+                if ltp_data and instrument in ltp_data:
+                    price = ltp_data[instrument]["last_price"]
+                    self.profile_circuit_breaker.record_success()
+
+                    # Cache the price
+                    self._cache_index_price(symbol, price)
+
+                    if attempt > 0:
+                        logger.info(f"✓ Retrieved price for {symbol}: {price} (attempt {attempt + 1})")
+
+                    return price
+
+                logger.warning(f"LTP data not found for {instrument}. Response: {ltp_data}")
+
+            except Exception as e:
+                self.profile_circuit_breaker.record_failure()
+
+                if attempt < max_retries - 1:
+                    # Exponential backoff: 0.5s, 1s, 2s
+                    sleep_time = 0.5 * (2 ** attempt)
+                    logger.warning(
+                        f"Attempt {attempt + 1}/{max_retries} failed for {symbol}: {e}. "
+                        f"Retrying in {sleep_time}s..."
+                    )
+                    time.sleep(sleep_time)
+                else:
+                    logger.error(
+                        f"Failed to get current price for {symbol} after {max_retries} attempts: {e}"
+                    )
+                    api_logger.error(f"PRICE_FETCH_FAILED symbol={symbol} error={str(e)[:100]}")
+
+        # All retries failed - try cache as last resort
+        cached_price = self._get_cached_index_price(symbol)
+        if cached_price:
+            logger.warning(f"Using cached price for {symbol}: {cached_price}")
+            return cached_price
+
+        return None
+
+    def _cache_index_price(self, symbol: str, price: float):
+        """Cache index price for fallback use"""
+        if not hasattr(self, '_cached_index_prices'):
+            self._cached_index_prices = {}
+
+        self._cached_index_prices[symbol] = {
+            'price': price,
+            'timestamp': datetime.now()
+        }
+
+    def _get_cached_index_price(self, symbol: str) -> Optional[float]:
+        """
+        Get cached index price if available and fresh (< 5 minutes old)
+        """
+        if not hasattr(self, '_cached_index_prices'):
             return None
+
+        cached = self._cached_index_prices.get(symbol)
+        if not cached:
+            return None
+
+        # Check if cache is stale (> 5 minutes)
+        age = (datetime.now() - cached['timestamp']).total_seconds()
+        if age > 300:  # 5 minutes
+            logger.debug(f"Cached price for {symbol} is stale ({age:.0f}s old)")
+            return None
+
+        return cached['price']
 
     def _update_market_subscriptions(self):
-        tokens_to_subscribe = set()
-        # --- INDEX TOKEN SUBSCRIPTION ---
-        current_symbol = self.header.get_current_settings().get("symbol")
 
-        if current_symbol and current_symbol in self.instrument_data:
-            index_token = self.instrument_data[current_symbol].get("instrument_token")
-            if index_token:
-                tokens_to_subscribe.add(index_token)
+        required_tokens = set()
 
-        # 1. Get tokens from the strike ladder (visible rows only)
-        if self.strike_ladder:
-            if hasattr(self.strike_ladder, "get_visible_contract_tokens"):
-                tokens_to_subscribe.update(self.strike_ladder.get_visible_contract_tokens())
-            elif self.strike_ladder.contracts:
-                for strike_val_dict in self.strike_ladder.contracts.values():
-                    for contract_obj in strike_val_dict.values():
-                        if contract_obj and contract_obj.instrument_token:
-                            tokens_to_subscribe.add(contract_obj.instrument_token)
+        # Visible ladder tokens
+        if hasattr(self.strike_ladder, "get_visible_contract_tokens"):
+            ladder_tokens = self.strike_ladder.get_visible_contract_tokens()
+            required_tokens.update(ladder_tokens)
 
-        # 2. Get the underlying index token (existing logic)
-        current_settings = self.header.get_current_settings()
-        underlying_symbol = current_settings.get('symbol')
-        if underlying_symbol and underlying_symbol in self.instrument_data:
-            index_token = self.instrument_data[underlying_symbol].get('instrument_token')
-            if index_token:
-                tokens_to_subscribe.add(index_token)
+        # Active CVD tokens
+        required_tokens.update(self.active_cvd_tokens)
 
-        # 3. Get tokens from open positions (existing logic)
-        for pos in self.position_manager.get_all_positions():
-            if pos.contract and pos.contract.instrument_token:
-                tokens_to_subscribe.add(pos.contract.instrument_token)
+        if required_tokens == self._last_subscription_set:
+            logger.debug("Subscription set unchanged. Skipping update.")
+            return
 
-        # 4. *** ADD THIS NEW LOGIC ***
-        #    Get tokens from all open market monitor dialogs.
-        for monitor_dialog in self.market_monitor_dialogs:
-            # Check if the dialog is open and has a token map
-            if monitor_dialog and hasattr(monitor_dialog, 'token_to_chart_map'):
-                tokens_to_subscribe.update(monitor_dialog.token_to_chart_map.keys())
+        logger.info(
+            f"Subscription diff detected | Old: {len(self._last_subscription_set)} "
+            f"| New: {len(required_tokens)}"
+        )
 
-        # 5. ---ADD CVD FUTURES SYMBOLS ---
+        self._last_subscription_set = required_tokens.copy()
 
-        tokens_to_subscribe.update(self.active_cvd_tokens)
-
-        # 6. Make the final, consolidated call
-        if self.market_data_worker:
-            self.market_data_worker.set_instruments(tokens_to_subscribe)
+        self.market_data_worker.set_instruments(required_tokens)
 
     def _periodic_api_health_check(self):
         logger.debug("Performing periodic API health check.")
@@ -2269,21 +2388,11 @@ class ScalperMainWindow(QMainWindow):
 
             expiry_date = datetime.strptime(expiry_str, '%d%b%y').date()
 
-            current_price = self._get_current_price(symbol)
-            if current_price is None:
-                logger.error(f"Could not get current price for {symbol}. Ladder update aborted.")
+            # Use fallback-enabled ladder update instead of hard abort
+            if not self._update_strike_ladder_with_fallback(symbol, expiry_date):
+                # All fallback strategies failed
                 self._settings_changing = False
                 return
-
-            calculated_interval = self.strike_ladder.calculate_strike_interval(symbol)
-
-            self.strike_ladder.update_strikes(
-                symbol=symbol,
-                current_price=current_price,
-                expiry=expiry_date,
-                strike_interval=calculated_interval
-            )
-            self._update_market_subscriptions()
 
             lot_quantity = self.instrument_data[symbol].get('lot_size', 1)
             self.buy_exit_panel.update_parameters(symbol, settings['lot_size'], lot_quantity, expiry_str)
@@ -3115,7 +3224,6 @@ class ScalperMainWindow(QMainWindow):
                 [], [{'symbol': contract_to_trade.tradingsymbol,
                       'error': "Order rejected or status not confirmed"}])
 
-
     def _has_pending_order_for_symbol(self, tradingsymbol: str | None) -> bool:
         if not tradingsymbol:
             return False
@@ -3175,7 +3283,7 @@ class ScalperMainWindow(QMainWindow):
         pending_candidates = [
             order for order in (self.position_manager.get_pending_orders() or [])
             if order.get("tradingsymbol") == tradingsymbol
-            and order.get("status") in {'OPEN', 'TRIGGER PENDING', 'AMO REQ RECEIVED'}
+               and order.get("status") in {'OPEN', 'TRIGGER PENDING', 'AMO REQ RECEIVED'}
         ]
         if not pending_candidates:
             logger.info("[AUTO] No pending order left for %s during retry tick", tradingsymbol)
@@ -3214,7 +3322,8 @@ class ScalperMainWindow(QMainWindow):
             "order_type": self.trader.ORDER_TYPE_LIMIT,
             "price": retry_price,
             "product": pending_order.get("product") or active_trade.get("product") or self.trader.PRODUCT_MIS,
-            "transaction_type": pending_order.get("transaction_type") or active_trade.get("transaction_type") or self.trader.TRANSACTION_TYPE_BUY,
+            "transaction_type": pending_order.get("transaction_type") or active_trade.get(
+                "transaction_type") or self.trader.TRANSACTION_TYPE_BUY,
             "group_name": active_trade.get("group_name") or f"CVD_AUTO_{token}",
             "auto_token": token,
         }
@@ -3799,6 +3908,7 @@ class ScalperMainWindow(QMainWindow):
             api_status = "Recovering"
         else:
             api_status = "Healthy"
+        self._update_api_icon(api_status)
 
         if "Connected" in self.network_status:
             network_chip_status = "Connected"
@@ -3950,11 +4060,6 @@ class ScalperMainWindow(QMainWindow):
                 if contract.tradingsymbol == tradingsymbol:
                     return contract
         return None
-
-    def _on_network_status_changed(self, status: str):
-        self.network_status = status
-        self.footer_network_chip.setText(status)
-        self._update_network_icon(status)
 
     def _get_nearest_future_token(self, symbol: str):
         symbol = symbol.upper()
@@ -4249,3 +4354,240 @@ class ScalperMainWindow(QMainWindow):
             self.fii_dii_dialog.activateWindow()
         else:
             self.fii_dii_dialog.show()
+
+    def _update_strike_ladder_with_fallback(self, symbol: str, expiry_date):
+        """
+        Update strike ladder with graceful degradation on price fetch failure
+        """
+        current_price = self._get_current_price(symbol)
+
+        if current_price is None:
+            # CRITICAL: Don't abort - use fallback strategies
+            logger.warning(f"Could not get current price for {symbol}. Trying fallback strategies...")
+
+            # Strategy 1: Use last known index price from market data
+            if hasattr(self.strike_ladder, 'last_index_price') and self.strike_ladder.last_index_price:
+                current_price = self.strike_ladder.last_index_price
+                logger.info(f"Using last known index price: {current_price}")
+
+            # Strategy 2: Use position-based price estimate
+            elif self.position_manager.get_all_positions():
+                estimated_price = self._estimate_underlying_from_positions(symbol)
+                if estimated_price:
+                    current_price = estimated_price
+                    logger.info(f"Using position-based price estimate: {current_price}")
+
+            # Strategy 3: Load from yesterday's close (if you have this data)
+            if current_price is None:
+                # Show clear error to user with retry option
+                self._show_network_error_notification(symbol)
+                logger.error(f"All fallback strategies failed for {symbol}. Ladder update aborted.")
+                return False
+
+        # Proceed with ladder update
+        calculated_interval = self.strike_ladder.calculate_strike_interval(symbol)
+
+        self.strike_ladder.update_strikes(
+            symbol=symbol,
+            current_price=current_price,
+            expiry=expiry_date,
+            strike_interval=calculated_interval
+        )
+
+        self._update_market_subscriptions()
+        return True
+
+    def _estimate_underlying_from_positions(self, symbol: str) -> Optional[float]:
+        """
+        Estimate underlying price from current option positions
+        Uses Black-Scholes reverse calculation approximation
+        """
+        positions = self.position_manager.get_all_positions()
+
+        for pos in positions:
+            if pos.contract and pos.contract.symbol == symbol:
+                # Simple approximation: ATM strike ≈ underlying
+                # For better accuracy, you'd use IV and Greeks
+                if abs(pos.contract.strike - pos.last_price) < 1000:  # Near ATM
+                    return pos.contract.strike
+
+        return None
+
+    def _show_network_error_notification(self, symbol: str):
+        """Show user-friendly network error with retry option"""
+        # Only show once per session to avoid spam
+        if hasattr(self, '_network_error_shown') and self._network_error_shown:
+            return
+
+        self._network_error_shown = True
+
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Warning)
+        msg.setWindowTitle("Network Issue")
+        msg.setText(
+            f"Unable to fetch current price for {symbol}.\n\n"
+            "This may be due to:\n"
+            "• Network connectivity issues\n"
+            "• Kite API temporarily unavailable\n"
+            "• DNS resolution failure\n\n"
+            "The app will continue with cached data where possible."
+        )
+        msg.setStandardButtons(QMessageBox.Retry | QMessageBox.Ignore)
+
+        # Show status in status bar
+        self._publish_status(
+            f"⚠ Network issue detected - using cached data for {symbol}",
+            duration=10000,
+            level="warning"
+        )
+
+        if msg.exec() == QMessageBox.Retry:
+            # Clear circuit breaker and retry
+            self.profile_circuit_breaker.reset()
+            self._network_error_shown = False
+
+    def _on_websocket_state_changed(self, new_state: str):
+        """
+        Handle WebSocket state changes with proper subscription management
+
+        Called by market_data_worker when connection state changes
+        """
+        if new_state == "connected":
+            self.ws_state = WebSocketState.CONNECTED
+            self.ws_connection_time = datetime.now()
+            self.ws_ready_event_fired = True
+
+            logger.info("WebSocket connected - processing subscription queue")
+
+            # 🔥 Subscribe ALL required tokens cleanly
+            self._update_market_subscriptions()
+
+            self._process_subscription_queue()
+
+            self._publish_status("✓ Market data connected", 3000, level="success")
+
+
+        elif new_state == "connecting":
+            self.ws_state = WebSocketState.CONNECTING
+            self._publish_status("Connecting to market data...", 5000, level="action")
+
+        elif new_state == "disconnected":
+            old_state = self.ws_state
+            self.ws_state = WebSocketState.DISCONNECTED
+            self.ws_ready_event_fired = False
+
+            if old_state == WebSocketState.CONNECTED:
+                logger.warning("WebSocket disconnected - will queue subscriptions")
+                self._publish_status("⚠ Market data disconnected - reconnecting...", 0, level="warning")
+
+        elif new_state == "reconnecting":
+            self.ws_state = WebSocketState.RECONNECTING
+            self._publish_status("Reconnecting to market data...", 5000, level="action")
+
+    def _process_subscription_queue(self):
+        """
+        Process all queued subscriptions when WebSocket becomes ready
+        """
+        if not self.subscription_queue:
+            logger.debug("Subscription queue is empty")
+            return
+
+        logger.info(f"Processing {len(self.subscription_queue)} queued subscriptions")
+
+        # Merge all queued token sets
+        all_tokens = set()
+        while self.subscription_queue:
+            tokens = self.subscription_queue.popleft()
+            all_tokens.update(tokens)
+
+        self.pending_subscriptions.clear()
+
+        if all_tokens:
+            logger.info(f"Subscribing to {len(all_tokens)} tokens from queue")
+            self.market_data_worker.set_instruments(all_tokens)
+
+    def _setup_connection_indicator(self):
+        """
+        Add visual connection status indicator to status bar
+        """
+        self.connection_indicator = QLabel()
+        self.connection_indicator.setStyleSheet("""
+            QLabel {
+                background-color: #2a2a2a;
+                border-radius: 8px;
+                padding: 4px 12px;
+                margin: 2px;
+                font-weight: 500;
+            }
+        """)
+        self.statusBar().addPermanentWidget(self.connection_indicator)
+
+        self._update_connection_indicator("initializing")
+
+    def _update_connection_indicator(self, status: str):
+        """
+        Update connection status indicator
+
+        Args:
+            status: One of "connected", "disconnected", "connecting", "initializing", "degraded"
+        """
+        status_config = {
+            "connected": ("● Connected", "#10b981", "#065f46"),
+            "disconnected": ("● Disconnected", "#ef4444", "#991b1b"),
+            "connecting": ("● Connecting...", "#f59e0b", "#92400e"),
+            "initializing": ("● Initializing...", "#6b7280", "#374151"),
+            "degraded": ("⚠ Degraded", "#f59e0b", "#92400e"),
+        }
+
+        text, color, bg = status_config.get(status, status_config["initializing"])
+
+        self.connection_indicator.setText(text)
+        self.connection_indicator.setStyleSheet(f"""
+            QLabel {{
+                background-color: {bg};
+                color: {color};
+                border: 1px solid {color};
+                border-radius: 8px;
+                padding: 4px 12px;
+                margin: 2px;
+                font-weight: 500;
+            }}
+        """)
+
+    def _on_network_status_changed(self, status):
+        """
+        Normalize and handle network status changes.
+        Handles decorated strings like:
+        'Connected (Post-Market)'
+        'Connected (Pre-Market)'
+        """
+
+        if isinstance(status, dict):
+            raw_state = str(status.get("state", "")).strip().lower()
+            message = status.get("message", "")
+        else:
+            raw_state = str(status).strip().lower()
+            message = ""
+
+        # 🔥 FIX: Use prefix matching instead of exact match
+        if raw_state.startswith("connected"):
+            normalized = "connected"
+        elif raw_state.startswith("connecting") or raw_state.startswith("reconnecting"):
+            normalized = "connecting"
+        elif raw_state.startswith("disconnected") or raw_state.startswith("error"):
+            normalized = "disconnected"
+        else:
+            normalized = "initializing"
+
+        self.network_status = raw_state
+        self.footer_network_chip.setText(status)
+        self._update_network_icon(status)
+
+        # 🔥 CRITICAL
+        self._on_websocket_state_changed(normalized)
+
+        if hasattr(self, "connection_indicator"):
+            self._update_connection_indicator(normalized)
+
+        if message:
+            logger.info(f"Network status: {normalized} - {message}")

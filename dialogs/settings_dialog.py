@@ -8,7 +8,7 @@ from PySide6.QtCore import Qt, Signal
 
 from utils.config_manager import ConfigManager
 from core.token_manager import TokenManager
-
+from widgets.ui_kit.close_button import CloseButton
 logger = logging.getLogger(__name__)
 
 
@@ -87,9 +87,9 @@ class SettingsDialog(QDialog):
         title.setObjectName("dialogTitle")
 
         # Close button
-        close_btn = QPushButton("✕")
+        # Replace your old close button code with:
+        close_btn = CloseButton(style="minimal", size=20)
         close_btn.setObjectName("closeButton")
-        close_btn.setFixedSize(32, 32)
         close_btn.setToolTip("Close (Esc)")
         close_btn.clicked.connect(self._on_close_requested)
 

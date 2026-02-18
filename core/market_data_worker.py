@@ -270,15 +270,8 @@ class MarketDataWorker(QObject):
         if not self.heartbeat_timer.isActive():
             self.heartbeat_timer.start(15000)
 
-        # 🔥 FIX: Subscribe to any queued tokens
-        if self.subscribed_tokens:
-            token_list = list(self.subscribed_tokens)
-            try:
-                self.kws.subscribe(token_list)
-                self.kws.set_mode(self.kws.MODE_FULL, token_list)
-                logger.info(f"Subscribed to {len(token_list)} tokens on connect.")
-            except Exception as e:
-                logger.error(f"Failed to subscribe on connect: {e}")
+        # Subscriptions handled by main window after connection
+        logger.debug("Connection established. Waiting for subscription instructions.")
 
     def _handle_close(self, code, reason):
         """Callback on connection close."""
