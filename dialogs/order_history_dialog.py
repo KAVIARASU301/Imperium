@@ -222,7 +222,7 @@ class OrderHistoryDialog(QDialog):
         self.orders_table = OrderHistoryTable()
         layout.addWidget(self.orders_table, 1)
 
-        layout.addLayout(self._create_footer())
+        layout.addWidget(self._create_footer())
 
         # Enable dragging from background too
         self.container.mousePressEvent = self.mousePressEvent
@@ -261,12 +261,47 @@ class OrderHistoryDialog(QDialog):
 
         refresh_btn = QPushButton("REFRESH")
         refresh_btn.setObjectName("secondaryButton")
+        refresh_btn.setCursor(Qt.PointingHandCursor)
+        refresh_btn.setFixedHeight(28)
         refresh_btn.clicked.connect(self.refresh_requested.emit)
+
+        # Footer container styling (scoped)
+        footer_widget = QWidget()
+        footer_widget.setLayout(h)
+        footer_widget.setStyleSheet("""
+            QLabel#footerLabel {
+                color: #8F9CB2;
+                font-size: 12px;
+                font-weight: 600;
+                letter-spacing: 0.5px;
+            }
+
+            QPushButton#secondaryButton {
+                background-color: #1F2430;
+                color: #9CCAF4;
+                border: 1px solid #3A4458;
+                border-radius: 4px;
+                padding: 4px 12px;
+                font-size: 11px;
+                font-weight: 600;
+            }
+
+            QPushButton#secondaryButton:hover {
+                background-color: #2A3142;
+                border: 1px solid #5B9BD5;
+                color: #FFFFFF;
+            }
+
+            QPushButton#secondaryButton:pressed {
+                background-color: #161A25;
+            }
+        """)
 
         h.addWidget(self.trade_count_label)
         h.addStretch()
         h.addWidget(refresh_btn)
-        return h
+
+        return footer_widget
 
     def update_trades(self, trades: list[dict]):
         self.orders_table.update_trades(trades)
