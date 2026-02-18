@@ -65,6 +65,7 @@ from utils.shortcuts import show_shortcuts
 from dialogs.fii_dii_dialog import FIIDIIDialog
 from dialogs.watchlist_dialog import WatchlistDialog
 from dialogs.journal_dialog import JournalDialog
+from widgets.status_bar import StatusBarWidget
 
 logger = logging.getLogger(__name__)
 
@@ -157,7 +158,6 @@ class ScalperMainWindow(QMainWindow):
         self.cvd_symbol_set_manager = CVDSymbolSetManager(base_dir=Path.home() / ".imperium_desk")
 
         self._last_subscription_set: set[int] = set()
-
 
         # --- FIX: UI Throttling Implementation ---
         self._latest_market_data = {}
@@ -332,7 +332,6 @@ class ScalperMainWindow(QMainWindow):
 
     def _init_background_workers(self):
 
-
         self.instrument_loader = InstrumentLoader(self.real_kite_client)
         self.instrument_loader.instruments_loaded.connect(self._on_instruments_loaded)
         self.instrument_loader.error_occurred.connect(self._on_api_error)
@@ -488,172 +487,16 @@ class ScalperMainWindow(QMainWindow):
 
         self._setup_menu_bar()
         self._setup_status_footer()
-        self._setup_connection_indicator()  # Add connection status indicator
 
         QTimer.singleShot(3000, self._update_account_info)
 
     def _setup_status_footer(self):
-        """Build institutional-grade status footer with telemetry."""
-
-        status_bar = self.statusBar()
-        status_bar.setSizeGripEnabled(False)
-
-        # --- MODE ---
-        self.footer_mode_chip = QLabel(self.trading_mode.upper())
-        self.footer_mode_chip.setObjectName("footerModeChip")
-
-        # --- NETWORK ICON ---
-        self.footer_network_icon = QLabel()
-        self.footer_network_icon.setFixedSize(14, 14)
-        self.footer_network_icon.setScaledContents(True)
-
-        # --- NETWORK TEXT ---
-        self.footer_network_chip = QLabel("Connecting")
-        self.footer_network_chip.setObjectName("footerStatusChip")
-
-        # --- MARKET ---
-        self.footer_market_chip = QLabel("Market --")
-        self.footer_market_chip.setObjectName("footerStatusChip")
-
-        # --- API ICON ---
-        self.footer_api_icon = QLabel()
-        self.footer_api_icon.setFixedSize(14, 14)
-        self.footer_api_icon.setScaledContents(True)
-
-        # --- API TEXT ---
-        self.footer_api_chip = QLabel("API --")
-        self.footer_api_chip.setObjectName("footerStatusChip")
-
-        # --- CLOCK ---
-        self.footer_clock_chip = QLabel("--:--:--")
-        self.footer_clock_chip.setObjectName("footerClockChip")
-
-        for widget in (
-                self.footer_mode_chip,
-                self._footer_separator(),
-                self.footer_network_icon,
-                self.footer_network_chip,
-                self._footer_separator(),
-                self.footer_market_chip,
-                self._footer_separator(),
-                self.footer_api_icon,
-                self.footer_api_chip,
-                self._footer_separator(),
-                self.footer_clock_chip,
-        ):
-            status_bar.addPermanentWidget(widget)
-
-        self._update_network_icon("Connecting")
-        self._update_api_icon("Healthy")
-        status_bar.showMessage("Ready.")
-
-    def _update_network_icon(self, status: str):
-        """
-        Updates footer network icon with color tint + smooth fade animation.
-        """
-
-        base_path = os.path.dirname(os.path.abspath(__file__))
-        icons_dir = os.path.join(base_path, "..", "assets", "icons")
-
-        connected_icon = os.path.join(icons_dir, "connected.svg")
-        disconnected_icon = os.path.join(icons_dir, "disconnected.svg")
-
-        # Determine state
-        is_connected = "Connected" in status
-
-        icon_path = connected_icon if is_connected else disconnected_icon
-        tint_color = QColor("#00E676") if is_connected else QColor("#FF5252")
-
-        if not os.path.exists(icon_path):
-            return
-
-        original = QPixmap(icon_path)
-        if original.isNull():
-            return
-
-        # 🔥 Tint SVG icon
-        tinted = QPixmap(original.size())
-        tinted.fill(Qt.transparent)
-
-        painter = QPainter(tinted)
-        painter.drawPixmap(0, 0, original)
-        painter.setCompositionMode(QPainter.CompositionMode_SourceIn)
-        painter.fillRect(tinted.rect(), tint_color)
-        painter.end()
-
-        self.footer_network_icon.setPixmap(tinted)
-
-        # 🔥 Smooth fade animation
-        if not hasattr(self, "_network_opacity_effect"):
-            self._network_opacity_effect = QGraphicsOpacityEffect()
-            self.footer_network_icon.setGraphicsEffect(self._network_opacity_effect)
-
-        animation = QPropertyAnimation(self._network_opacity_effect, b"opacity")
-        animation.setDuration(250)
-        animation.setStartValue(0.0)
-        animation.setEndValue(1.0)
-        animation.setEasingCurve(QEasingCurve.OutCubic)
-        animation.start()
-
-        # Prevent garbage collection
-        self._network_icon_animation = animation
-
-    def _update_api_icon(self, api_status: str):
-        """
-        Update API health icon without animation.
-        Stable institutional behavior.
-        """
-
-        base_path = os.path.dirname(os.path.abspath(__file__))
-        icons_dir = os.path.join(base_path, "..", "assets", "icons")
-        heartbeat_icon = os.path.join(icons_dir, "heart_beat.svg")
-
-        if not os.path.exists(heartbeat_icon):
-            return
-
-        original = QPixmap(heartbeat_icon)
-        if original.isNull():
-            return
-
-        # Determine color by status
-        if api_status == "Healthy":
-            tint_color = QColor("#00E676")  # green
-        elif api_status == "Recovering":
-            tint_color = QColor("#FFC107")  # amber
-        else:
-            tint_color = QColor("#FF1744")  # red
-
-        tinted = QPixmap(original.size())
-        tinted.fill(Qt.transparent)
-
-        painter = QPainter(tinted)
-        painter.drawPixmap(0, 0, original)
-        painter.setCompositionMode(QPainter.CompositionMode_SourceIn)
-        painter.fillRect(tinted.rect(), tint_color)
-        painter.end()
-
-        self.footer_api_icon.setPixmap(tinted)
+        """Initialize status bar widget"""
+        self.status_bar_widget = StatusBarWidget(self.statusBar(), self.trading_mode)
 
     def _publish_status(self, message: str, timeout_ms: int = 4000, level: str = "info"):
-        icon_map = {
-            "success": "✅",
-            "warning": "⚠️",
-            "error": "❌",
-            "action": "⏳",
-            "info": "ℹ️",
-        }
-        icon = icon_map.get(level, "ℹ️")
-        formatted_message = message if message[:1] in {"✅", "⚠", "❌", "⏳", "ℹ"} else f"{icon} {message}"
-
-        self.statusBar().showMessage(formatted_message, timeout_ms)
-
-    @staticmethod
-    def _footer_separator() -> QFrame:
-        separator = QFrame()
-        separator.setObjectName("footerSeparator")
-        separator.setFrameShape(QFrame.Shape.VLine)
-        separator.setFrameShadow(QFrame.Shadow.Plain)
-        return separator
+        """Publish status message through StatusBarWidget"""
+        self.status_bar_widget.publish_message(message, timeout_ms, level)
 
     def _create_main_widgets(self):
         self.buy_exit_panel = BuyExitPanel(self.trader)
@@ -3908,22 +3751,24 @@ class ScalperMainWindow(QMainWindow):
             api_status = "Recovering"
         else:
             api_status = "Healthy"
-        self._update_api_icon(api_status)
 
-        if "Connected" in self.network_status:
+        # Update status bar through StatusBarWidget
+        self.status_bar_widget.update_api_status(f"API {api_status}")
+
+        # Use case-insensitive check since self.network_status is lowercase
+        network_status_lower = self.network_status.lower()
+        if "connected" in network_status_lower and "disconnected" not in network_status_lower:
             network_chip_status = "Connected"
-        elif "Disconnected" in self.network_status:
+        elif "disconnected" in network_status_lower:
             network_chip_status = "Disconnected"
-        elif "Connecting" in self.network_status or "Reconnecting" in self.network_status:
-            network_chip_status = self.network_status
+        elif "connecting" in network_status_lower or "reconnecting" in network_status_lower:
+            network_chip_status = self.network_status.title()  # Capitalize first letter
         else:
-            network_chip_status = self.network_status
+            network_chip_status = self.network_status.title()
 
-        if hasattr(self, "footer_network_chip"):
-            self.footer_network_chip.setText(network_chip_status)
-            self.footer_market_chip.setText(f"Market {market_status}")
-            self.footer_api_chip.setText(f"API {api_status}")
-            self.footer_clock_chip.setText(now.strftime("%H:%M:%S"))
+        self.status_bar_widget.update_network_status(network_chip_status)
+        self.status_bar_widget.update_market_status(f"Market {market_status}")
+        self.status_bar_widget.update_clock(now.strftime("%H:%M:%S"))
 
     def _get_cached_positions(self) -> List[Position]:
         return self.position_manager.get_all_positions()
@@ -4506,54 +4351,6 @@ class ScalperMainWindow(QMainWindow):
             logger.info(f"Subscribing to {len(all_tokens)} tokens from queue")
             self.market_data_worker.set_instruments(all_tokens)
 
-    def _setup_connection_indicator(self):
-        """
-        Add visual connection status indicator to status bar
-        """
-        self.connection_indicator = QLabel()
-        self.connection_indicator.setStyleSheet("""
-            QLabel {
-                background-color: #2a2a2a;
-                border-radius: 8px;
-                padding: 4px 12px;
-                margin: 2px;
-                font-weight: 500;
-            }
-        """)
-        self.statusBar().addPermanentWidget(self.connection_indicator)
-
-        self._update_connection_indicator("initializing")
-
-    def _update_connection_indicator(self, status: str):
-        """
-        Update connection status indicator
-
-        Args:
-            status: One of "connected", "disconnected", "connecting", "initializing", "degraded"
-        """
-        status_config = {
-            "connected": ("● Connected", "#10b981", "#065f46"),
-            "disconnected": ("● Disconnected", "#ef4444", "#991b1b"),
-            "connecting": ("● Connecting...", "#f59e0b", "#92400e"),
-            "initializing": ("● Initializing...", "#6b7280", "#374151"),
-            "degraded": ("⚠ Degraded", "#f59e0b", "#92400e"),
-        }
-
-        text, color, bg = status_config.get(status, status_config["initializing"])
-
-        self.connection_indicator.setText(text)
-        self.connection_indicator.setStyleSheet(f"""
-            QLabel {{
-                background-color: {bg};
-                color: {color};
-                border: 1px solid {color};
-                border-radius: 8px;
-                padding: 4px 12px;
-                margin: 2px;
-                font-weight: 500;
-            }}
-        """)
-
     def _on_network_status_changed(self, status):
         """
         Normalize and handle network status changes.
@@ -4580,14 +4377,10 @@ class ScalperMainWindow(QMainWindow):
             normalized = "initializing"
 
         self.network_status = raw_state
-        self.footer_network_chip.setText(status)
-        self._update_network_icon(status)
+        self.status_bar_widget.update_network_status(status)
 
         # 🔥 CRITICAL
         self._on_websocket_state_changed(normalized)
-
-        if hasattr(self, "connection_indicator"):
-            self._update_connection_indicator(normalized)
 
         if message:
             logger.info(f"Network status: {normalized} - {message}")
