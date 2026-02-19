@@ -2328,6 +2328,10 @@ class ScalperMainWindow(QMainWindow):
             logger.error(f"Failed to save settings: {e}")
 
     def closeEvent(self, event):
+        if getattr(self, '_close_in_progress', False):
+            event.ignore()
+            return
+        self._close_in_progress = True
         logger.info("Close event triggered.")
 
         # Stop timers first
@@ -2343,6 +2347,7 @@ class ScalperMainWindow(QMainWindow):
         # Background workers
         if hasattr(self, 'market_data_worker') and self.market_data_worker.is_running:
             logger.info("Stopping market data worker...")
+            self.market_data_worker.stop()
 
         if hasattr(self, 'instrument_loader') and self.instrument_loader.isRunning():
             logger.info("Stopping instrument loader...")

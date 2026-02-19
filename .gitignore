@@ -49,3 +49,14 @@ user_data/
 # ==============================
 =
 /=
+# Generated charts
+chart_*.png
+
+# Runtime JSON
+dialogs/pnl_history/*.json
+
+# Documents
+*.odt
+
+# Temporary analysis
+optimization_analysis.md
