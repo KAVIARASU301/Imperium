@@ -168,6 +168,33 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self._load_and_plot(force=True)
         self._start_refresh_timer()
 
+    def keyPressEvent(self, event):
+        """Keyboard shortcuts for date navigation and simulator execution."""
+        focus_widget = self.focusWidget()
+        if isinstance(focus_widget, (QSpinBox, QDoubleSpinBox, QComboBox)):
+            super().keyPressEvent(event)
+            return
+
+        if event.modifiers() == Qt.NoModifier:
+            if event.key() == Qt.Key_Left:
+                self.navigator.btn_back.click()
+                event.accept()
+                return
+
+            if event.key() == Qt.Key_Right:
+                if self.navigator.btn_forward.isEnabled():
+                    self.navigator.btn_forward.click()
+                event.accept()
+                return
+
+            if event.key() == Qt.Key_Space:
+                if self.simulator_run_btn.isEnabled() and self.simulator_run_btn.isVisible():
+                    self.simulator_run_btn.click()
+                event.accept()
+                return
+
+        super().keyPressEvent(event)
+
     # ------------------------------------------------------------------
 
     @staticmethod
@@ -328,6 +355,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self.simulator_run_btn = QPushButton("Run Simulator")
         self.simulator_run_btn.setFixedHeight(28)
         self.simulator_run_btn.setMinimumWidth(120)
+        self.simulator_run_btn.setToolTip("Run simulator (Space)")
         self.simulator_run_btn.setStyleSheet("""
             QPushButton {
                 background:#212635;
@@ -441,6 +469,9 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         top_bar.addStretch()
 
         root.addLayout(top_bar)
+
+        self.navigator.btn_back.setToolTip("Previous trading day (←)")
+        self.navigator.btn_forward.setToolTip("Next trading day (→)")
 
         # ================= EMA CONTROL BAR (NEW) =================
         ema_bar = QHBoxLayout()
