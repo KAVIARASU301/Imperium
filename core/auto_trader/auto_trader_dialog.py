@@ -255,47 +255,40 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
 
         top_bar.addStretch()
 
-        # -------- Timeframe buttons (LEFT of center) --------
-        tf_layout = QHBoxLayout()
-        tf_layout.setSpacing(4)
+        # -------- Timeframe dropdown (LEFT of center) --------
+        tf_label = QLabel("TF")
+        tf_label.setStyleSheet("color: #8A9BA8; font-size: 11px; font-weight: 600;")
+        top_bar.addWidget(tf_label)
 
-        self.tf_buttons = {}
+        self.timeframe_combo = QComboBox()
+        self.timeframe_combo.setFixedHeight(26)
+        self.timeframe_combo.setFixedWidth(84)
+        self.timeframe_combo.setStyleSheet(compact_combo_style)
 
-        for label, minutes in [("1m", 1), ("3m", 3), ("5m", 5), ("15m", 15), ("1h", 60)]:
-            btn = QPushButton(label)
-            btn.setCheckable(True)
-            btn.setFixedHeight(26)
-            btn.setStyleSheet("""
-                QPushButton {
-                    background:#1B1F2B;
-                    border:1px solid #3A4458;
-                    padding:2px 8px;
-                }
-                QPushButton:checked {
-                    background:#5B9BD5;
-                    color:#000;
-                    font-weight:600;
-                }
-            """)
-            btn.clicked.connect(lambda checked, m=minutes: self._on_timeframe_changed(m))
-            self.tf_buttons[minutes] = btn
-            tf_layout.addWidget(btn)
+        self._timeframe_options = [
+            ("1m", 1),
+            ("3m", 3),
+            ("5m", 5),
+            ("15m", 15),
+            ("1h", 60),
+        ]
+        for label, minutes in self._timeframe_options:
+            self.timeframe_combo.addItem(label, minutes)
 
         # Default select 1m
-        self.tf_buttons[1].setChecked(True)
-
-        top_bar.addLayout(tf_layout)
+        self.timeframe_combo.setCurrentIndex(0)
+        self.timeframe_combo.currentIndexChanged.connect(self._on_timeframe_combo_changed)
+        top_bar.addWidget(self.timeframe_combo)
 
         # Navigator (CENTER)
         self.navigator = DateNavigator(self)
-        top_bar.addWidget(self.navigator)
 
-        # Focus Button (placed on second row, right side)
-        self.btn_focus = QPushButton("Single Day View")
+        # Day View Toggle (unchecked => 1D, checked => 2D)
+        self.btn_focus = QPushButton("1D")
         self.btn_focus.setCheckable(True)
-        self.btn_focus.setChecked(True)
+        self.btn_focus.setChecked(False)
         self.btn_focus.setFixedHeight(28)
-        self.btn_focus.setMinimumWidth(120)
+        self.btn_focus.setMinimumWidth(56)
         self.btn_focus.setStyleSheet("""
             QPushButton {
                 background:#212635;
@@ -309,9 +302,17 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
                 font-weight:600;
             }
         """)
+        self.btn_focus.setToolTip("Toggle 2-day view")
         self.btn_focus.toggled.connect(self._on_focus_mode_changed)
+        top_bar.addWidget(self.btn_focus)
+        self.btn_focus.setText("1D")
 
-        # Automate Toggle (next to Single Day View)
+        top_bar.addWidget(self.navigator)
+
+        if self.cvd_engine:
+            self.cvd_engine.set_mode(CVDMode.SINGLE_DAY)
+
+        # Automate Toggle
         self.automate_toggle = QCheckBox("Automate")
         self.automate_toggle.setChecked(False)
         self.automate_toggle.setStyleSheet(compact_toggle_style)
@@ -527,7 +528,6 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
 
         self._build_setup_dialog(compact_combo_style, compact_spinbox_style)
 
-        ema_bar.addWidget(self.btn_focus)
         ema_bar.addWidget(self.btn_export)
         ema_bar.addStretch()
         root.addLayout(ema_bar)
@@ -1256,12 +1256,12 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
 
 
     def _on_focus_mode_changed(self, enabled: bool):
-        self.btn_focus.setText("Single Day View" if enabled else "Two Day View")
+        self.btn_focus.setText("2D" if enabled else "1D")
         if self.cvd_engine:
             if enabled:
-                self.cvd_engine.set_mode(CVDMode.SINGLE_DAY)
-            else:
                 self.cvd_engine.set_mode(CVDMode.NORMAL)
+            else:
+                self.cvd_engine.set_mode(CVDMode.SINGLE_DAY)
 
         # Clear visual state
         self.prev_curve.clear()
@@ -1312,8 +1312,8 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self.crosshair_line.show()
         self.price_crosshair.show()
 
-        if self.btn_focus.isChecked():
-            # Focus mode: find nearest timestamp by session minute
+        if not self.btn_focus.isChecked():
+            # Single-day mode: find nearest timestamp by session minute
             ts = min(
                 self.all_timestamps,
                 key=lambda t: abs(self._time_to_session_index(t) - x)
@@ -1365,7 +1365,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         if not self.kite or not getattr(self.kite, "access_token", None):
             return
 
-        focus_mode = self.btn_focus.isChecked()
+        focus_mode = not self.btn_focus.isChecked()
 
         if self.live_mode:
             to_dt = datetime.now()
@@ -1494,7 +1494,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
 
 
     def _plot_data(self, cvd_df: pd.DataFrame, price_df: pd.DataFrame, prev_close: float):
-        focus_mode = self.btn_focus.isChecked()
+        focus_mode = not self.btn_focus.isChecked()
 
         # Clear all curves
         self.prev_curve.clear()
@@ -1549,7 +1549,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
                 price_y_raw)  # 🆕 NEW
 
             # Rebasing logic for CVD
-            if i == 0 and len(sessions) == 2 and not self.btn_focus.isChecked():
+            if i == 0 and len(sessions) == 2 and self.btn_focus.isChecked():
                 cvd_y = cvd_y_raw - prev_close
                 cvd_high = cvd_high_raw - prev_close
                 cvd_low = cvd_low_raw - prev_close
@@ -1798,15 +1798,20 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
 
 
 
+    def _on_timeframe_combo_changed(self, index: int):
+        minutes = self.timeframe_combo.itemData(index)
+        if minutes is None:
+            return
+        self._on_timeframe_changed(int(minutes))
+
+
+
     def _on_timeframe_changed(self, minutes: int):
         if self.timeframe_minutes == minutes:
             return
 
         self.timeframe_minutes = minutes
         self.strategy_detector.timeframe_minutes = minutes
-
-        for m, btn in self.tf_buttons.items():
-            btn.setChecked(m == minutes)
 
         # Clear visuals
         self.prev_curve.clear()
@@ -1860,7 +1865,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         if self._current_session_start_ts is None:
             return
 
-        focus_mode = self.btn_focus.isChecked()
+        focus_mode = not self.btn_focus.isChecked()
         session_start_ts = pd.Timestamp(self._current_session_start_ts)
 
         def _align_tick_ts(ts: datetime) -> pd.Timestamp:
