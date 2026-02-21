@@ -2,7 +2,7 @@ import re
 
 import pyqtgraph as pg
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QPixmap, QTransform
 from PySide6.QtWidgets import (
     QDialog,
     QVBoxLayout,
@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QColorDialog,
     QFileDialog,
+    QGraphicsPixmapItem,
 )
 
 
@@ -379,29 +380,40 @@ class SetupPanelMixin:
         ema_defaults_row.addStretch()
         appearance_form.addRow("Default EMAs", ema_defaults_row)
 
-        self.bg_target_combo = QComboBox()
-        self.bg_target_combo.setStyleSheet(compact_combo_style)
-        _set_combo_w(self.bg_target_combo)
-        self.bg_target_combo.addItem("No BG Image",       self.BG_TARGET_NONE)
-        self.bg_target_combo.addItem("Apply to Chart",    self.BG_TARGET_CHART)
-        self.bg_target_combo.addItem("Apply to Window",   self.BG_TARGET_WINDOW)
-        self.bg_target_combo.currentIndexChanged.connect(self._on_setup_visual_settings_changed)
-        appearance_form.addRow("BG Target", self.bg_target_combo)
+        self.show_grid_lines_check = QCheckBox("Show grid lines")
+        self.show_grid_lines_check.setChecked(True)
+        self.show_grid_lines_check.toggled.connect(self._on_setup_visual_settings_changed)
+        appearance_form.addRow("Grid", self.show_grid_lines_check)
 
-        bg_row = QHBoxLayout()
-        bg_row.setSpacing(4)
-        self.bg_image_label = QLabel("No image")
-        self.bg_image_label.setStyleSheet("color:#8A9BA8; font-size:10px;")
-        self.bg_upload_btn = QPushButton("Upload")
-        self.bg_upload_btn.setStyleSheet(color_btn_style)
-        self.bg_upload_btn.clicked.connect(self._on_pick_background_image)
-        self.bg_clear_btn = QPushButton("Clear")
-        self.bg_clear_btn.setStyleSheet(color_btn_style)
-        self.bg_clear_btn.clicked.connect(self._on_clear_background_image)
-        bg_row.addWidget(self.bg_image_label, 1)
-        bg_row.addWidget(self.bg_upload_btn)
-        bg_row.addWidget(self.bg_clear_btn)
-        appearance_form.addRow("BG Image", bg_row)
+        window_bg_row = QHBoxLayout()
+        window_bg_row.setSpacing(4)
+        self.window_bg_image_label = QLabel("No image selected")
+        self.window_bg_image_label.setStyleSheet("color:#8A9BA8; font-size:10px;")
+        self.window_bg_upload_btn = QPushButton("Upload")
+        self.window_bg_upload_btn.setStyleSheet(color_btn_style)
+        self.window_bg_upload_btn.clicked.connect(lambda: self._on_pick_background_image("window"))
+        self.window_bg_clear_btn = QPushButton("Clear")
+        self.window_bg_clear_btn.setStyleSheet(color_btn_style)
+        self.window_bg_clear_btn.clicked.connect(lambda: self._on_clear_background_image("window"))
+        window_bg_row.addWidget(self.window_bg_image_label, 1)
+        window_bg_row.addWidget(self.window_bg_upload_btn)
+        window_bg_row.addWidget(self.window_bg_clear_btn)
+        appearance_form.addRow("Window BG", window_bg_row)
+
+        chart_bg_row = QHBoxLayout()
+        chart_bg_row.setSpacing(4)
+        self.chart_bg_image_label = QLabel("No image selected")
+        self.chart_bg_image_label.setStyleSheet("color:#8A9BA8; font-size:10px;")
+        self.chart_bg_upload_btn = QPushButton("Upload")
+        self.chart_bg_upload_btn.setStyleSheet(color_btn_style)
+        self.chart_bg_upload_btn.clicked.connect(lambda: self._on_pick_background_image("chart"))
+        self.chart_bg_clear_btn = QPushButton("Clear")
+        self.chart_bg_clear_btn.setStyleSheet(color_btn_style)
+        self.chart_bg_clear_btn.clicked.connect(lambda: self._on_clear_background_image("chart"))
+        chart_bg_row.addWidget(self.chart_bg_image_label, 1)
+        chart_bg_row.addWidget(self.chart_bg_upload_btn)
+        chart_bg_row.addWidget(self.chart_bg_clear_btn)
+        appearance_form.addRow("Chart BG", chart_bg_row)
 
         col3.addWidget(appearance_group)
         col3.addStretch()
@@ -458,7 +470,7 @@ class SetupPanelMixin:
 
 
 
-    def _on_pick_background_image(self):
+    def _on_pick_background_image(self, target: str):
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             "Select Background Image",
@@ -467,53 +479,130 @@ class SetupPanelMixin:
         )
         if not file_path:
             return
-        self._window_bg_image_path = file_path
-        self._update_bg_image_label()
-        self._apply_background_image()
-        self._persist_setup_values()
 
-
-
-    def _on_clear_background_image(self):
-        self._window_bg_image_path = ""
-        self._update_bg_image_label()
-        self._apply_background_image()
-        self._persist_setup_values()
-
-
-
-    def _update_bg_image_label(self):
-        if not self._window_bg_image_path:
-            self.bg_image_label.setText("No image selected")
+        if target == "window":
+            self._window_bg_image_path = file_path
+        elif target == "chart":
+            self._chart_bg_image_path = file_path
+        else:
             return
-        self.bg_image_label.setText(self._window_bg_image_path.split('/')[-1])
+
+        self._update_bg_image_labels()
+        self._apply_background_image()
+        self._persist_setup_values()
+
+
+
+    def _on_clear_background_image(self, target: str):
+        if target == "window":
+            self._window_bg_image_path = ""
+        elif target == "chart":
+            self._chart_bg_image_path = ""
+        else:
+            return
+
+        self._update_bg_image_labels()
+        self._apply_background_image()
+        self._persist_setup_values()
+
+
+
+    def _update_bg_image_labels(self):
+        window_name = self._window_bg_image_path.split('/')[-1] if self._window_bg_image_path else "No image selected"
+        chart_name = self._chart_bg_image_path.split('/')[-1] if self._chart_bg_image_path else "No image selected"
+        self.window_bg_image_label.setText(window_name)
+        self.chart_bg_image_label.setText(chart_name)
 
 
 
     def _apply_background_image(self):
-        image_path = self._window_bg_image_path
-        target = self.bg_target_combo.currentData() if hasattr(self, 'bg_target_combo') else self.BG_TARGET_NONE
-        self._window_bg_target = target or self.BG_TARGET_NONE
+        window_image_path = self._window_bg_image_path
+        chart_image_path = self._chart_bg_image_path
 
-        # reset to defaults
+        # reset top-level styling
         self.setStyleSheet("")
         self.price_plot.setStyleSheet("")
         self.plot.setStyleSheet("")
-        self.price_plot.setBackground("#161A25")
-        self.plot.setBackground("#161A25")
 
-        if not image_path or target == self.BG_TARGET_NONE:
+        if window_image_path:
+            normalized_window = window_image_path.replace('\\', '/')
+            self.setStyleSheet(
+                f"QDialog#autoTraderWindow {{background-image: url('{normalized_window}'); background-position: center;}}"
+            )
+
+        chart_image_applied = False
+        if chart_image_path:
+            chart_pixmap = QPixmap(chart_image_path)
+            if not chart_pixmap.isNull():
+                self._ensure_chart_bg_items()
+                self._price_bg_item.setPixmap(chart_pixmap)
+                self._cvd_bg_item.setPixmap(chart_pixmap)
+                self._price_bg_item.show()
+                self._cvd_bg_item.show()
+                self._sync_chart_bg_item_geometry(self.price_plot, self._price_bg_item)
+                self._sync_chart_bg_item_geometry(self.plot, self._cvd_bg_item)
+                chart_image_applied = True
+
+        if chart_image_applied:
+            self.price_plot.setBackground(None)
+            self.plot.setBackground(None)
+        else:
+            self._clear_chart_bg_items()
+            self.price_plot.setBackground("#161A25")
+            self.plot.setBackground("#161A25")
+
+        show_grid = self.show_grid_lines_check.isChecked() if hasattr(self, 'show_grid_lines_check') else True
+        self.price_plot.showGrid(x=show_grid, y=show_grid, alpha=0.12)
+        self.plot.showGrid(x=show_grid, y=show_grid, alpha=0.12)
+
+
+
+    def _ensure_chart_bg_items(self):
+        if not hasattr(self, '_price_bg_item'):
+            self._price_bg_item = QGraphicsPixmapItem()
+            self._price_bg_item.setZValue(-1e9)
+            self.price_plot.plotItem.vb.addItem(self._price_bg_item, ignoreBounds=True)
+            self.price_plot.plotItem.vb.sigRangeChanged.connect(
+                lambda *_: self._sync_chart_bg_item_geometry(self.price_plot, self._price_bg_item)
+            )
+
+        if not hasattr(self, '_cvd_bg_item'):
+            self._cvd_bg_item = QGraphicsPixmapItem()
+            self._cvd_bg_item.setZValue(-1e9)
+            self.plot.plotItem.vb.addItem(self._cvd_bg_item, ignoreBounds=True)
+            self.plot.plotItem.vb.sigRangeChanged.connect(
+                lambda *_: self._sync_chart_bg_item_geometry(self.plot, self._cvd_bg_item)
+            )
+
+
+
+    def _clear_chart_bg_items(self):
+        if hasattr(self, '_price_bg_item'):
+            self._price_bg_item.hide()
+        if hasattr(self, '_cvd_bg_item'):
+            self._cvd_bg_item.hide()
+
+
+
+    @staticmethod
+    def _sync_chart_bg_item_geometry(plot_widget, pixmap_item: QGraphicsPixmapItem):
+        pixmap = pixmap_item.pixmap()
+        if pixmap.isNull():
             return
 
-        normalized = image_path.replace('\\', '/')
-        if target == self.BG_TARGET_WINDOW:
-            self.setStyleSheet(
-                f"QDialog#autoTraderWindow {{background-image: url('{normalized}'); background-position: center;}}"
-            )
-        elif target == self.BG_TARGET_CHART:
-            chart_style = f"QWidget {{background-image: url('{normalized}'); background-position: center;}}"
-            self.price_plot.setStyleSheet(chart_style)
-            self.plot.setStyleSheet(chart_style)
+        x_range, y_range = plot_widget.plotItem.vb.viewRange()
+        x_min, x_max = float(x_range[0]), float(x_range[1])
+        y_min, y_max = float(y_range[0]), float(y_range[1])
+        width = max(1.0, float(pixmap.width()))
+        height = max(1.0, float(pixmap.height()))
+
+        sx = (x_max - x_min) / width if width else 1.0
+        sy = (y_max - y_min) / height if height else 1.0
+
+        transform = QTransform()
+        transform.translate(x_min, y_max)
+        transform.scale(sx, -sy)
+        pixmap_item.setTransform(transform)
 
 
 

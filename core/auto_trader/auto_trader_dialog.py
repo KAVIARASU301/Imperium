@@ -124,7 +124,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self._confluence_line_opacity = 1.0
         self._ema_line_opacity = 0.85
         self._window_bg_image_path = ""
-        self._window_bg_target = self.BG_TARGET_NONE
+        self._chart_bg_image_path = ""
 
         # 🆕 Strategy-aware chop filter defaults
         self._chop_filter_atr_reversal = True
@@ -868,7 +868,11 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self.confluence_line_width_input.blockSignals(True)
         self.confluence_line_opacity_input.blockSignals(True)
         self.ema_line_opacity_input.blockSignals(True)
-        self.bg_target_combo.blockSignals(True)
+        self.show_grid_lines_check.blockSignals(True)
+        self.window_bg_upload_btn.blockSignals(True)
+        self.window_bg_clear_btn.blockSignals(True)
+        self.chart_bg_upload_btn.blockSignals(True)
+        self.chart_bg_clear_btn.blockSignals(True)
         for cb in self.setup_ema_default_checks.values():
             cb.blockSignals(True)
 
@@ -954,6 +958,9 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self.ema_line_opacity_input.setValue(
             _read_setting("ema_line_opacity", self.ema_line_opacity_input.value(), float)
         )
+        self.show_grid_lines_check.setChecked(
+            _read_setting("show_grid_lines", self.show_grid_lines_check.isChecked(), bool)
+        )
 
         self._chart_line_color = _read_setting("chart_line_color", self._chart_line_color)
         self._price_line_color = _read_setting("price_line_color", self._price_line_color)
@@ -964,13 +971,20 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
             default_enabled = (period == 51)
             cb.setChecked(_read_setting(f"ema_default_{period}", default_enabled, bool))
 
-        self._window_bg_image_path = _read_setting("background_image_path", "") or ""
-        self._update_bg_image_label()
-        _apply_combo_value(
-            self.bg_target_combo,
-            _read_setting("background_target", self.BG_TARGET_NONE),
-            fallback_index=0,
-        )
+        persisted_window_bg = _read_setting("window_background_image_path", "") or ""
+        persisted_chart_bg = _read_setting("chart_background_image_path", "") or ""
+
+        # Backward compatibility with older single-target setting.
+        legacy_bg_path = _read_setting("background_image_path", "") or ""
+        legacy_bg_target = _read_setting("background_target", self.BG_TARGET_NONE)
+        if not persisted_window_bg and legacy_bg_target == self.BG_TARGET_WINDOW:
+            persisted_window_bg = legacy_bg_path
+        if not persisted_chart_bg and legacy_bg_target == self.BG_TARGET_CHART:
+            persisted_chart_bg = legacy_bg_path
+
+        self._window_bg_image_path = persisted_window_bg
+        self._chart_bg_image_path = persisted_chart_bg
+        self._update_bg_image_labels()
 
 
         self.automate_toggle.blockSignals(False)
@@ -998,7 +1012,11 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self.confluence_line_width_input.blockSignals(False)
         self.confluence_line_opacity_input.blockSignals(False)
         self.ema_line_opacity_input.blockSignals(False)
-        self.bg_target_combo.blockSignals(False)
+        self.show_grid_lines_check.blockSignals(False)
+        self.window_bg_upload_btn.blockSignals(False)
+        self.window_bg_clear_btn.blockSignals(False)
+        self.chart_bg_upload_btn.blockSignals(False)
+        self.chart_bg_clear_btn.blockSignals(False)
         for cb in self.setup_ema_default_checks.values():
             cb.blockSignals(False)
 
@@ -1043,12 +1061,13 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
             "confluence_line_width": float(self.confluence_line_width_input.value()),
             "confluence_line_opacity": float(self.confluence_line_opacity_input.value()),
             "ema_line_opacity": float(self.ema_line_opacity_input.value()),
+            "show_grid_lines": self.show_grid_lines_check.isChecked(),
             "chart_line_color": self._chart_line_color,
             "price_line_color": self._price_line_color,
             "confluence_short_color": self._confluence_short_color,
             "confluence_long_color": self._confluence_long_color,
-            "background_image_path": self._window_bg_image_path,
-            "background_target": self.bg_target_combo.currentData() or self.BG_TARGET_NONE,
+            "window_background_image_path": self._window_bg_image_path,
+            "chart_background_image_path": self._chart_bg_image_path,
         }
 
         for period, cb in self.setup_ema_default_checks.items():
