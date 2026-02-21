@@ -1,6 +1,7 @@
 import numpy as np
 import pyqtgraph as pg
 import pandas as pd
+from datetime import time
 
 from core.auto_trader.indicators import calculate_ema, calculate_atr, is_chop_regime
 
@@ -566,5 +567,4 @@ class SignalRendererMixin:
         }
 
         QTimer.singleShot(0, lambda p=payload: self.automation_signal.emit(p))
-
 

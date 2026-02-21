@@ -1,5 +1,6 @@
 import numpy as np
 import pyqtgraph as pg
+from datetime import time
 from core.auto_trader.indicators import calculate_ema, is_chop_regime
 
 

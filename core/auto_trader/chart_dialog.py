@@ -20,7 +20,7 @@ from pyqtgraph import AxisItem, TextItem
 from kiteconnect import KiteConnect
 from core.cvd.cvd_historical import CVDHistoricalBuilder
 from core.cvd.cvd_mode import CVDMode
-from core.strategy_signal_detector import StrategySignalDetector
+from core.auto_trader.strategy_signal_detector import StrategySignalDetector
 from core.auto_trader.constants import TRADING_START, TRADING_END, MINUTES_PER_SESSION
 from core.auto_trader.data_worker import _DataFetchWorker
 from core.auto_trader.date_navigator import DateNavigator
@@ -1330,9 +1330,6 @@ class CVDSingleChartDialog(SetupPanelMixin, SettingsManagerMixin, SignalRenderer
         self._load_and_plot(force=True)
 
     # ------------------------------------------------------------------
-
-    @staticmethod
-
 
     def _load_and_plot(self, force: bool = False):
         """
