@@ -73,7 +73,7 @@ core/
 
 ```python
 # core/auto_trader/__init__.py
-from core.auto_trader.chart_dialog import CVDSingleChartDialog
+from core.auto_trader.auto_trader_dialog import CVDSingleChartDialog
 
 __all__ = ["CVDSingleChartDialog"]
 ```
