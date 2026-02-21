@@ -203,6 +203,8 @@ class SignalRendererMixin:
             "symbol": self.symbol,
             "enabled": self.automate_toggle.isChecked(),
             "stoploss_points": float(self.automation_stoploss_input.value()),
+            "max_profit_giveback_points": float(self.max_profit_giveback_input.value()),
+            "max_profit_giveback_strategies": self._selected_max_giveback_strategies(),
             "route": self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL,
             "signal_filter": self._selected_signal_filter(),
             "bar_x": float(x_arr[idx]),

@@ -64,6 +64,11 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
     BREAKOUT_SWITCH_PREFER_ATR = "prefer_atr_reversal"
     BREAKOUT_SWITCH_ADAPTIVE = "adaptive"
 
+    MAX_GIVEBACK_STRATEGY_ATR_REVERSAL = "atr_reversal"
+    MAX_GIVEBACK_STRATEGY_EMA_CROSS = "ema_cross"
+    MAX_GIVEBACK_STRATEGY_ATR_DIVERGENCE = "atr_divergence"
+    MAX_GIVEBACK_STRATEGY_RANGE_BREAKOUT = "range_breakout"
+
     ROUTE_BUY_EXIT_PANEL = "buy_exit_panel"
     ROUTE_DIRECT = "direct"
 
@@ -344,6 +349,39 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self.automation_stoploss_input.setFixedWidth(96)
         self.automation_stoploss_input.setStyleSheet(compact_spinbox_style)
         self.automation_stoploss_input.valueChanged.connect(self._on_automation_settings_changed)
+
+        self.max_profit_giveback_input = QSpinBox()
+        self.max_profit_giveback_input.setRange(0, 5000)
+        self.max_profit_giveback_input.setValue(75)
+        self.max_profit_giveback_input.setSingleStep(5)
+        self.max_profit_giveback_input.setSpecialValueText("Off")
+        self.max_profit_giveback_input.setFixedWidth(96)
+        self.max_profit_giveback_input.setStyleSheet(compact_spinbox_style)
+        self.max_profit_giveback_input.setToolTip(
+            "Exit when current profit pulls back from peak profit by this many points.\n"
+            "0 = Off"
+        )
+        self.max_profit_giveback_input.valueChanged.connect(self._on_automation_settings_changed)
+
+        self.max_giveback_atr_reversal_check = QCheckBox("ATR Rev")
+        self.max_giveback_atr_reversal_check.setChecked(True)
+        self.max_giveback_atr_reversal_check.setToolTip("Apply max profit giveback exit to ATR Reversal trades.")
+        self.max_giveback_atr_reversal_check.toggled.connect(self._on_automation_settings_changed)
+
+        self.max_giveback_ema_cross_check = QCheckBox("EMA Cross")
+        self.max_giveback_ema_cross_check.setChecked(True)
+        self.max_giveback_ema_cross_check.setToolTip("Apply max profit giveback exit to EMA Cross trades.")
+        self.max_giveback_ema_cross_check.toggled.connect(self._on_automation_settings_changed)
+
+        self.max_giveback_atr_divergence_check = QCheckBox("ATR Div")
+        self.max_giveback_atr_divergence_check.setChecked(True)
+        self.max_giveback_atr_divergence_check.setToolTip("Apply max profit giveback exit to ATR Divergence trades.")
+        self.max_giveback_atr_divergence_check.toggled.connect(self._on_automation_settings_changed)
+
+        self.max_giveback_range_breakout_check = QCheckBox("Breakout")
+        self.max_giveback_range_breakout_check.setChecked(True)
+        self.max_giveback_range_breakout_check.setToolTip("Apply max profit giveback exit to Range Breakout trades.")
+        self.max_giveback_range_breakout_check.toggled.connect(self._on_automation_settings_changed)
 
         self.automation_route_combo = QComboBox()
         self.automation_route_combo.setFixedWidth(180)
@@ -847,6 +885,11 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
 
         self.automate_toggle.blockSignals(True)
         self.automation_stoploss_input.blockSignals(True)
+        self.max_profit_giveback_input.blockSignals(True)
+        self.max_giveback_atr_reversal_check.blockSignals(True)
+        self.max_giveback_ema_cross_check.blockSignals(True)
+        self.max_giveback_atr_divergence_check.blockSignals(True)
+        self.max_giveback_range_breakout_check.blockSignals(True)
         self.automation_route_combo.blockSignals(True)
         self.atr_base_ema_input.blockSignals(True)
         self.atr_distance_input.blockSignals(True)
@@ -887,6 +930,16 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self.automation_stoploss_input.setValue(
             _read_setting("stoploss_points", self.automation_stoploss_input.value(), int)
         )
+        self.max_profit_giveback_input.setValue(
+            _read_setting("max_profit_giveback_points", self.max_profit_giveback_input.value(), int)
+        )
+        max_giveback_strategies = _read_setting(
+            "max_profit_giveback_strategies",
+            list(self._max_giveback_strategy_defaults()),
+        )
+        if not isinstance(max_giveback_strategies, (list, tuple, set)):
+            max_giveback_strategies = self._max_giveback_strategy_defaults()
+        self._apply_max_giveback_strategy_selection(list(max_giveback_strategies))
         _apply_combo_value(
             self.automation_route_combo,
             _read_setting("route", self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL),
@@ -1006,6 +1059,11 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
 
         self.automate_toggle.blockSignals(False)
         self.automation_stoploss_input.blockSignals(False)
+        self.max_profit_giveback_input.blockSignals(False)
+        self.max_giveback_atr_reversal_check.blockSignals(False)
+        self.max_giveback_ema_cross_check.blockSignals(False)
+        self.max_giveback_atr_divergence_check.blockSignals(False)
+        self.max_giveback_range_breakout_check.blockSignals(False)
         self.automation_route_combo.blockSignals(False)
         self.atr_base_ema_input.blockSignals(False)
         self.atr_distance_input.blockSignals(False)
@@ -1057,6 +1115,8 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         values_to_persist = {
             "enabled": self.automate_toggle.isChecked(),
             "stoploss_points": int(self.automation_stoploss_input.value()),
+            "max_profit_giveback_points": int(self.max_profit_giveback_input.value()),
+            "max_profit_giveback_strategies": self._selected_max_giveback_strategies(),
             "route": self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL,
             "atr_base_ema": int(self.atr_base_ema_input.value()),
             "atr_distance": float(self.atr_distance_input.value()),
@@ -1112,6 +1172,8 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
             "symbol": self.symbol,
             "enabled": self.automate_toggle.isChecked(),
             "stoploss_points": float(self.automation_stoploss_input.value()),
+            "max_profit_giveback_points": float(self.max_profit_giveback_input.value()),
+            "max_profit_giveback_strategies": self._selected_max_giveback_strategies(),
             "route": self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL,
             "signal_filter": self._selected_signal_filter(),
         })
@@ -1174,6 +1236,47 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
     def _selected_breakout_switch_mode(self) -> str:
         return self.breakout_switch_mode_combo.currentData() or self.BREAKOUT_SWITCH_ADAPTIVE
 
+
+
+    @classmethod
+    def _max_giveback_strategy_defaults(cls) -> tuple[str, ...]:
+        return (
+            cls.MAX_GIVEBACK_STRATEGY_ATR_REVERSAL,
+            cls.MAX_GIVEBACK_STRATEGY_EMA_CROSS,
+            cls.MAX_GIVEBACK_STRATEGY_ATR_DIVERGENCE,
+            cls.MAX_GIVEBACK_STRATEGY_RANGE_BREAKOUT,
+        )
+
+
+
+    def _selected_max_giveback_strategies(self) -> list[str]:
+        selected: list[str] = []
+        if self.max_giveback_atr_reversal_check.isChecked():
+            selected.append(self.MAX_GIVEBACK_STRATEGY_ATR_REVERSAL)
+        if self.max_giveback_ema_cross_check.isChecked():
+            selected.append(self.MAX_GIVEBACK_STRATEGY_EMA_CROSS)
+        if self.max_giveback_atr_divergence_check.isChecked():
+            selected.append(self.MAX_GIVEBACK_STRATEGY_ATR_DIVERGENCE)
+        if self.max_giveback_range_breakout_check.isChecked():
+            selected.append(self.MAX_GIVEBACK_STRATEGY_RANGE_BREAKOUT)
+        return selected
+
+
+
+    def _apply_max_giveback_strategy_selection(self, strategies: list[str]):
+        selected = set(strategies or [])
+        self.max_giveback_atr_reversal_check.setChecked(
+            self.MAX_GIVEBACK_STRATEGY_ATR_REVERSAL in selected
+        )
+        self.max_giveback_ema_cross_check.setChecked(
+            self.MAX_GIVEBACK_STRATEGY_EMA_CROSS in selected
+        )
+        self.max_giveback_atr_divergence_check.setChecked(
+            self.MAX_GIVEBACK_STRATEGY_ATR_DIVERGENCE in selected
+        )
+        self.max_giveback_range_breakout_check.setChecked(
+            self.MAX_GIVEBACK_STRATEGY_RANGE_BREAKOUT in selected
+        )
 
 
     def _on_cvd_tick_update(self, token: int, cvd_value: float, last_price: float):

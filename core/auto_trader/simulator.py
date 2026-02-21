@@ -168,6 +168,8 @@ class SimulatorMixin:
         cvd_ema51 = calculate_ema(cvd_close, 51)
 
         stop_points = float(max(0.1, self.automation_stoploss_input.value()))
+        max_profit_giveback_points = float(max(0.0, self.max_profit_giveback_input.value()))
+        max_profit_giveback_strategies = set(self._selected_max_giveback_strategies())
         atr_trailing_step_points = 10.0
         atr_skip_limit = int(getattr(self, "atr_skip_limit_input", None) and
                              self.atr_skip_limit_input.value() or 0)
@@ -234,6 +236,9 @@ class SimulatorMixin:
                 if not np.isfinite(favorable_move):
                     favorable_move = 0.0
 
+                max_favorable_points = max(active_trade.get("max_favorable_points", 0.0), favorable_move)
+                active_trade["max_favorable_points"] = max_favorable_points
+
                 trail_offset = 0.0
                 if active_trade.get("strategy_type") == "atr_reversal":
                     if atr_trailing_step_points > 0:
@@ -289,6 +294,13 @@ class SimulatorMixin:
                 exit_now = False
                 if hit_stop:
                     exit_now = True
+                elif (
+                    active_strategy_type in max_profit_giveback_strategies
+                    and max_profit_giveback_points > 0
+                    and max_favorable_points > 0
+                ):
+                    giveback_points = max_favorable_points - favorable_move
+                    exit_now = giveback_points >= max_profit_giveback_points
                 elif active_strategy_type == "ema_cross":
                     exit_now = (signal_side == "long" and cvd_cross_below_ema10) or (signal_side == "short" and cvd_cross_above_ema10)
                 elif active_strategy_type == "atr_divergence":
@@ -393,6 +405,7 @@ class SimulatorMixin:
                 "signal_timestamp": ts,
                 "strategy_type": signal_strategy,
                 "entry_price": entry_price,
+                "max_favorable_points": 0.0,
                 "entry_bar_idx": idx,      # used by ATR skip counter
                 "atr_skip_count": 0,       # fallback counter if raw masks unavailable
                 "sl_underlying": sl_underlying,
@@ -424,5 +437,4 @@ class SimulatorMixin:
             _close_trade(length - 1)
 
         return result
-
 

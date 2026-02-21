@@ -913,6 +913,18 @@ class ImperiumMainWindow(QMainWindow):
         lots = max(1, int(self.header.lot_size_spin.value()))
         quantity = max(1, int(contract.lot_size) * lots)
         stoploss_points = float(payload.get("stoploss_points") or state.get("stoploss_points") or 50.0)
+        max_profit_giveback_points = float(
+            payload.get("max_profit_giveback_points")
+            or state.get("max_profit_giveback_points")
+            or 0.0
+        )
+        max_profit_giveback_strategies = (
+            payload.get("max_profit_giveback_strategies")
+            or state.get("max_profit_giveback_strategies")
+            or ["atr_reversal", "ema_cross", "atr_divergence", "range_breakout"]
+        )
+        if not isinstance(max_profit_giveback_strategies, (list, tuple, set)):
+            max_profit_giveback_strategies = ["atr_reversal", "ema_cross", "atr_divergence", "range_breakout"]
         atr_trailing_step_points = 10.0
         entry_price = float(contract.ltp or 0.0)
         entry_underlying = float(payload.get("price_close") or state.get("price_close") or 0.0)
@@ -989,8 +1001,11 @@ class ImperiumMainWindow(QMainWindow):
             "signal_timestamp": payload.get("timestamp"),  # Track when signal was generated
             "strategy_type": strategy_type,
             "stoploss_points": stoploss_points,
+            "max_profit_giveback_points": max_profit_giveback_points,
+            "max_profit_giveback_strategies": list(max_profit_giveback_strategies),
             "atr_trailing_step_points": atr_trailing_step_points,
             "entry_underlying": entry_underlying,
+            "max_favorable_points": 0.0,
             "sl_underlying": sl_underlying,
             "last_price_close": entry_underlying,
             "last_ema10": state.get("ema10"),
@@ -1101,24 +1116,34 @@ class ImperiumMainWindow(QMainWindow):
         signal_side = active_trade.get("signal_side")
         strategy_type = active_trade.get("strategy_type") or "atr_reversal"
         stoploss_points = _to_finite_float(active_trade.get("stoploss_points"), 0.0)
+        max_profit_giveback_points = _to_finite_float(active_trade.get("max_profit_giveback_points"), 0.0)
+        max_profit_giveback_strategies = active_trade.get("max_profit_giveback_strategies")
+        if not isinstance(max_profit_giveback_strategies, (list, tuple, set)):
+            max_profit_giveback_strategies = ["atr_reversal", "ema_cross", "atr_divergence", "range_breakout"]
+        max_profit_giveback_strategies = set(max_profit_giveback_strategies)
         atr_trailing_step_points = _to_finite_float(active_trade.get("atr_trailing_step_points"), 10.0)
         entry_underlying = _to_finite_float(active_trade.get("entry_underlying"), 0.0)
+        max_favorable_points = _to_finite_float(active_trade.get("max_favorable_points"), 0.0)
         sl_underlying = active_trade.get("sl_underlying")
         if sl_underlying is not None:
             sl_underlying = _to_finite_float(sl_underlying, None)
         hit_stop = False
+        favorable_move = 0.0
 
-        # Strategy-specific trailing logic based on favorable underlying movement.
-        if stoploss_points > 0 and entry_underlying > 0:
+        if entry_underlying > 0:
             favorable_move = (
                 price_close - entry_underlying
                 if signal_side == "long"
                 else entry_underlying - price_close
             )
-
             if not math.isfinite(favorable_move):
                 favorable_move = 0.0
 
+            max_favorable_points = max(max_favorable_points or 0.0, favorable_move)
+            active_trade["max_favorable_points"] = max_favorable_points
+
+        # Strategy-specific trailing logic based on favorable underlying movement.
+        if stoploss_points > 0 and entry_underlying > 0:
             trail_offset = 0.0
             if strategy_type == "atr_reversal" and atr_trailing_step_points > 0:
                 trail_steps = int(max(0.0, favorable_move) // atr_trailing_step_points)
@@ -1192,9 +1217,17 @@ class ImperiumMainWindow(QMainWindow):
         )
 
         exit_reason = None
-
         if hit_stop:
             exit_reason = "AUTO_SL"
+        elif (
+            strategy_type in max_profit_giveback_strategies
+            and max_profit_giveback_points > 0
+            and max_favorable_points is not None
+            and max_favorable_points > 0
+        ):
+            giveback_points = max_favorable_points - favorable_move
+            if giveback_points >= max_profit_giveback_points:
+                exit_reason = "AUTO_MAX_PROFIT_GIVEBACK"
         elif strategy_type == "ema_cross":
             if signal_side == "long" and cvd_cross_below_ema10:
                 exit_reason = "AUTO_EMA10_CROSS"

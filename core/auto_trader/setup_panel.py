@@ -93,8 +93,22 @@ class SetupPanelMixin:
 
         auto_group, auto_form = _compact_form("Automation")
         _set_input_w(self.automation_stoploss_input)
+        _set_input_w(self.max_profit_giveback_input)
         _set_combo_w(self.automation_route_combo)
         auto_form.addRow("Stop Loss", self.automation_stoploss_input)
+        auto_form.addRow("Max Profit Giveback", self.max_profit_giveback_input)
+
+        giveback_strategy_row = QWidget()
+        giveback_strategy_layout = QHBoxLayout(giveback_strategy_row)
+        giveback_strategy_layout.setContentsMargins(0, 0, 0, 0)
+        giveback_strategy_layout.setSpacing(6)
+        giveback_strategy_layout.addWidget(self.max_giveback_atr_reversal_check)
+        giveback_strategy_layout.addWidget(self.max_giveback_ema_cross_check)
+        giveback_strategy_layout.addWidget(self.max_giveback_atr_divergence_check)
+        giveback_strategy_layout.addWidget(self.max_giveback_range_breakout_check)
+        giveback_strategy_layout.addStretch()
+        auto_form.addRow("Giveback On", giveback_strategy_row)
+
         auto_form.addRow("Route", self.automation_route_combo)
         col1.addWidget(auto_group)
 
@@ -689,4 +703,3 @@ class SetupPanelMixin:
             for _, line in pairs:
                 line.setPen(pg.mkPen(color, width=self._confluence_line_width))
                 line.setOpacity(self._confluence_line_opacity)
-
