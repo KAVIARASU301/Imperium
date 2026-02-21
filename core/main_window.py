@@ -57,6 +57,7 @@ from dialogs.cvd_multi_chart_dialog import CVDMultiChartDialog
 from core.cvd.cvd_symbol_sets import CVDSymbolSetManager
 from dialogs.cvd_symbol_set_multi_chart_dialog import CVDSetMultiChartDialog
 from core.trade_ledger import TradeLedger
+from core.execution_stack import ExecutionRequest, ExecutionStack
 from utils.title_bar import TitleBar
 from utils.api_circuit_breaker import APICircuitBreaker
 from utils.about import show_about
@@ -150,6 +151,7 @@ class ImperiumMainWindow(QMainWindow):
         self.cvd_single_chart_dialogs = {}  # Dict[int, AutoTraderDialog] - token -> dialog
         self.header_linked_cvd_token: Optional[int] = None
         self.trade_ledger = TradeLedger(mode=self.trading_mode)
+        self.execution_stack = ExecutionStack(trading_mode=self.trading_mode, base_dir=Path.home() / ".imperium_desk")
         self._cvd_automation_positions: Dict[int, dict] = {}
         self._cvd_automation_market_state: Dict[int, dict] = {}
         self._cvd_pending_retry_timers: Dict[int, QTimer] = {}
@@ -2939,20 +2941,52 @@ class ImperiumMainWindow(QMainWindow):
                     {'symbol': f"Strike {strike_detail.get('strike')}", 'error': "Missing contract data"})
                 continue
             try:
-                order_id = self.trader.place_order(
-                    variety=self.trader.VARIETY_REGULAR,
-                    exchange=self.trader.EXCHANGE_NFO,
+                order_args = {
+                    'variety': self.trader.VARIETY_REGULAR,
+                    'exchange': self.trader.EXCHANGE_NFO,
+                    'tradingsymbol': contract_to_trade.tradingsymbol,
+                    'transaction_type': self.trader.TRANSACTION_TYPE_BUY,
+                    'quantity': total_quantity_per_strike,
+                    'product': order_product,
+                    'order_type': self.trader.ORDER_TYPE_MARKET,
+                }
+                execution_request = ExecutionRequest(
                     tradingsymbol=contract_to_trade.tradingsymbol,
                     transaction_type=self.trader.TRANSACTION_TYPE_BUY,
-                    quantity=total_quantity_per_strike,
-                    product=order_product,
+                    quantity=int(total_quantity_per_strike),
                     order_type=self.trader.ORDER_TYPE_MARKET,
+                    product=order_product,
+                    ltp=float(getattr(contract_to_trade, 'ltp', 0.0) or 0.0),
+                    bid=float(getattr(contract_to_trade, 'bid', 0.0) or 0.0),
+                    ask=float(getattr(contract_to_trade, 'ask', 0.0) or 0.0),
+                    limit_price=None,
+                    urgency=str(confirmed_order_details.get('execution_urgency') or 'normal'),
+                    participation_rate=float(confirmed_order_details.get('participation_rate') or 0.15),
+                    execution_algo=str(confirmed_order_details.get('execution_algo') or 'IMMEDIATE'),
+                    max_child_orders=int(confirmed_order_details.get('max_child_orders') or 1),
+                    randomize_slices=bool(confirmed_order_details.get('randomize_slices', True)),
+                    metadata={'source': 'buy_exit_panel'},
                 )
-                logger.info(
-                    f"Order placed attempt: {order_id} for {contract_to_trade.tradingsymbol}, Qty: {total_quantity_per_strike}")
+                placed_order_ids = self.execution_stack.execute(
+                    request=execution_request,
+                    place_order_fn=self.trader.place_order,
+                    base_order_args=order_args,
+                )
 
-                if not isinstance(self.trader, PaperTradingManager):
-                    import time
+                logger.info(
+                    "Execution stack placed %s child order(s) for panel order %s, Qty: %s",
+                    len(placed_order_ids),
+                    contract_to_trade.tradingsymbol,
+                    total_quantity_per_strike,
+                )
+                if isinstance(self.trader, PaperTradingManager):
+                    successful_orders_info.append(
+                        {'order_id': placed_order_ids[-1], 'symbol': contract_to_trade.tradingsymbol,
+                         'quantity': total_quantity_per_strike,
+                         'price': contract_to_trade.ltp})
+                    continue
+
+                for order_id in placed_order_ids:
                     time.sleep(0.5)
                     confirmed_order_api_data = self._confirm_order_success(order_id)
                     if confirmed_order_api_data:
@@ -2976,8 +3010,6 @@ class ImperiumMainWindow(QMainWindow):
                                 order_id=order_id,
                                 exchange=self.trader.EXCHANGE_NFO,
                                 product=order_product,
-
-                                # 🔑 ADD THESE THREE
                                 stop_loss_price=confirmed_order_details.get("stop_loss_price"),
                                 target_price=confirmed_order_details.get("target_price"),
                                 trailing_stop_loss=tsl if tsl > 0 else None
@@ -2987,7 +3019,7 @@ class ImperiumMainWindow(QMainWindow):
                             self.trade_logger.log_trade(confirmed_order_api_data)
                             successful_orders_info.append(
                                 {'order_id': order_id, 'symbol': contract_to_trade.tradingsymbol,
-                                 'quantity': total_quantity_per_strike,
+                                 'quantity': confirmed_order_api_data.get('filled_quantity', total_quantity_per_strike),
                                  'price': avg_price_from_order})
                             logger.info(
                                 f"Order {order_id} for {contract_to_trade.tradingsymbol} successful and position added.")
@@ -3093,8 +3125,39 @@ class ImperiumMainWindow(QMainWindow):
             }
             if order_type == self.trader.ORDER_TYPE_LIMIT and price is not None:
                 order_args['price'] = price
-            order_id = self.trader.place_order(**order_args)
-            logger.info(f"Single strike order placed attempt: {order_id} for {contract_to_trade.tradingsymbol}")
+
+            execution_request = ExecutionRequest(
+                tradingsymbol=contract_to_trade.tradingsymbol,
+                transaction_type=transaction_type,
+                quantity=int(quantity),
+                order_type=order_type,
+                product=product,
+                ltp=float(getattr(contract_to_trade, 'ltp', 0.0) or 0.0),
+                bid=float(getattr(contract_to_trade, 'bid', 0.0) or 0.0),
+                ask=float(getattr(contract_to_trade, 'ask', 0.0) or 0.0),
+                limit_price=float(price) if price is not None else None,
+                urgency=str(order_params.get('execution_urgency') or 'normal'),
+                participation_rate=float(order_params.get('participation_rate') or 0.15),
+                execution_algo=str(order_params.get('execution_algo') or 'IMMEDIATE'),
+                max_child_orders=int(order_params.get('max_child_orders') or 1),
+                randomize_slices=bool(order_params.get('randomize_slices', True)),
+                metadata={
+                    'auto_token': auto_token,
+                    'group_name': group_name,
+                },
+            )
+            placed_order_ids = self.execution_stack.execute(
+                request=execution_request,
+                place_order_fn=self.trader.place_order,
+                base_order_args=order_args,
+            )
+            order_id = placed_order_ids[-1]
+            logger.info(
+                "Execution stack placed %s child order(s) for %s. Last order id: %s",
+                len(placed_order_ids),
+                contract_to_trade.tradingsymbol,
+                order_id,
+            )
 
             # Re-anchor SL/TP from actual average fill, so entry behaves like MODIFY flow.
             def _build_fill_anchored_risk_values(position):
@@ -3177,15 +3240,22 @@ class ImperiumMainWindow(QMainWindow):
             # loop, stacks up pending timer callbacks and crashes the app under automation.
             # Use QTimer.singleShot to do the confirmation check asynchronously instead.
             if not isinstance(self.trader, PaperTradingManager):
-                QTimer.singleShot(500, lambda oid=order_id, c=contract_to_trade, qty=quantity,
-                                              p=price, tt=transaction_type, prod=product,
-                                              sl=stop_loss_price, tp=target_price,
-                                              tsl=trailing_stop_loss,
-                                              sl_amt=stop_loss_amount, tp_amt=target_amount,
-                                              tsl_amt=trailing_stop_loss_amount, gn=group_name,
-                                              at=auto_token:
-                self._confirm_and_finalize_order(oid, c, qty, p, tt, prod, sl, tp, tsl,
-                                                 sl_amt, tp_amt, tsl_amt, gn, at))
+                child_count = max(1, len(placed_order_ids))
+                child_qty = max(1, int(quantity / child_count))
+                for index, child_order_id in enumerate(placed_order_ids):
+                    delay_ms = 500 + (index * 250)
+                    QTimer.singleShot(
+                        delay_ms,
+                        lambda oid=child_order_id, c=contract_to_trade, qty=child_qty,
+                               p=price, tt=transaction_type, prod=product,
+                               sl=stop_loss_price, tp=target_price,
+                               tsl=trailing_stop_loss,
+                               sl_amt=stop_loss_amount, tp_amt=target_amount,
+                               tsl_amt=trailing_stop_loss_amount, gn=group_name,
+                               at=auto_token:
+                        self._confirm_and_finalize_order(oid, c, qty, p, tt, prod, sl, tp, tsl,
+                                                         sl_amt, tp_amt, tsl_amt, gn, at)
+                    )
                 return
 
         except Exception as e:
@@ -3747,12 +3817,12 @@ class ImperiumMainWindow(QMainWindow):
             if ask_price > 0: return round(ask_price / tick_size) * tick_size
             return tick_size
         if not (0 < bid_price < ask_price):
-            return ScalperMainWindow._calculate_ltp_based_price(base_price, tick_size)
-        spread_info = ScalperMainWindow._analyze_bid_ask_spread(bid_price, ask_price, base_price, tick_size)
+            return ImperiumMainWindow._calculate_ltp_based_price(base_price, tick_size)
+        spread_info = ImperiumMainWindow._analyze_bid_ask_spread(bid_price, ask_price, base_price, tick_size)
         if spread_info['has_valid_spread']:
-            return ScalperMainWindow._calculate_spread_based_price(base_price, bid_price, ask_price, spread_info)
+            return ImperiumMainWindow._calculate_spread_based_price(base_price, bid_price, ask_price, spread_info)
         else:
-            return ScalperMainWindow._calculate_ltp_based_price(base_price, tick_size)
+            return ImperiumMainWindow._calculate_ltp_based_price(base_price, tick_size)
 
     @staticmethod
     def _analyze_bid_ask_spread(bid_price: float, ask_price: float, ltp: float, tick_size: float) -> dict:

@@ -13,6 +13,7 @@ Options Badger is a desktop options trading terminal for Indian markets, built w
 - **Paper trading mode** for strategy testing without live capital.
 - **CVD and market monitor views** for market context.
 - **Session and credential persistence** with encrypted local storage.
+- **Execution stack v1** with routing abstraction, TWAP/VWAP/POV-style slicing, and fill-quality telemetry.
 
 ## Tech Stack
 
