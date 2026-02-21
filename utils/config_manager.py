@@ -35,6 +35,11 @@ class ConfigManager:
             'auto_refresh': True,
             'refresh_interval': 2,
             'timeout': 7,
+            # Risk hardening defaults (0 means disabled)
+            'risk_intraday_drawdown_limit': 0,
+            'risk_max_portfolio_loss': 0,
+            'risk_max_open_positions': 0,
+            'risk_max_gross_open_quantity': 0,
         }
 
     # ... (load_settings, save_settings, and other methods remain the same) ...

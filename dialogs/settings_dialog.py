@@ -60,6 +60,7 @@ class SettingsDialog(QDialog):
         tabs = QTabWidget()
         tabs.setObjectName("mainTabs")
         tabs.addTab(self._create_trading_tab(), "TRADING")
+        tabs.addTab(self._create_risk_tab(), "RISK")
         tabs.addTab(self._create_display_tab(), "DISPLAY")
         tabs.addTab(self._create_api_tab(), "API")
         content_layout.addWidget(tabs)
@@ -199,6 +200,62 @@ class SettingsDialog(QDialog):
         layout.addStretch()
         return tab
 
+    def _create_risk_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(15, 20, 15, 15)
+
+        group = QGroupBox("Risk Hard Limits")
+        grid = QGridLayout(group)
+        grid.setHorizontalSpacing(15)
+        grid.setVerticalSpacing(12)
+
+        grid.addWidget(QLabel("Max Portfolio Loss:"), 0, 0)
+        self.risk_max_portfolio_loss = QSpinBox()
+        self.risk_max_portfolio_loss.setRange(0, 10_000_000)
+        self.risk_max_portfolio_loss.setSingleStep(1000)
+        self.risk_max_portfolio_loss.setPrefix("₹")
+        self.risk_max_portfolio_loss.setToolTip("Trigger global kill switch when intraday P&L drops below -limit. 0 = disabled.")
+        grid.addWidget(self.risk_max_portfolio_loss, 0, 1)
+
+        grid.addWidget(QLabel("Intraday Drawdown Limit:"), 1, 0)
+        self.risk_intraday_drawdown_limit = QSpinBox()
+        self.risk_intraday_drawdown_limit.setRange(0, 10_000_000)
+        self.risk_intraday_drawdown_limit.setSingleStep(1000)
+        self.risk_intraday_drawdown_limit.setPrefix("₹")
+        self.risk_intraday_drawdown_limit.setToolTip(
+            "Lock trading if drawdown from intraday peak P&L crosses this value. 0 = disabled."
+        )
+        grid.addWidget(self.risk_intraday_drawdown_limit, 1, 1)
+
+        grid.addWidget(QLabel("Max Open Positions:"), 2, 0)
+        self.risk_max_open_positions = QSpinBox()
+        self.risk_max_open_positions.setRange(0, 500)
+        self.risk_max_open_positions.setToolTip("Block new symbols if active positions reach this count. 0 = disabled.")
+        grid.addWidget(self.risk_max_open_positions, 2, 1)
+
+        grid.addWidget(QLabel("Max Gross Open Quantity:"), 3, 0)
+        self.risk_max_gross_open_quantity = QSpinBox()
+        self.risk_max_gross_open_quantity.setRange(0, 5_000_000)
+        self.risk_max_gross_open_quantity.setSingleStep(100)
+        self.risk_max_gross_open_quantity.setToolTip(
+            "Block new entries when sum(abs(open quantities)) exceeds this cap. 0 = disabled."
+        )
+        grid.addWidget(self.risk_max_gross_open_quantity, 3, 1)
+
+        layout.addWidget(group)
+
+        info = QLabel(
+            "💡 Limits apply to entry orders only. Exits remain allowed.\n"
+            "Global kill-switch and drawdown lock reset at next trading-day reset."
+        )
+        info.setObjectName("infoLabel")
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        layout.addStretch()
+        return tab
+
     def _create_api_tab(self) -> QWidget:
         tab = QWidget()
         layout = QVBoxLayout(tab)
@@ -241,6 +298,10 @@ class SettingsDialog(QDialog):
         self.auto_refresh.stateChanged.connect(lambda: setattr(self, '_has_changes', True))
         self.refresh_interval.valueChanged.connect(lambda: setattr(self, '_has_changes', True))
         self.auto_adjust_ladder.stateChanged.connect(lambda: setattr(self, '_has_changes', True))
+        self.risk_intraday_drawdown_limit.valueChanged.connect(lambda: setattr(self, '_has_changes', True))
+        self.risk_max_portfolio_loss.valueChanged.connect(lambda: setattr(self, '_has_changes', True))
+        self.risk_max_open_positions.valueChanged.connect(lambda: setattr(self, '_has_changes', True))
+        self.risk_max_gross_open_quantity.valueChanged.connect(lambda: setattr(self, '_has_changes', True))
         self.api_key.textChanged.connect(lambda: setattr(self, '_has_changes', True))
         self.api_secret.textChanged.connect(lambda: setattr(self, '_has_changes', True))
 
@@ -442,6 +503,10 @@ class SettingsDialog(QDialog):
         self.auto_refresh.setChecked(settings.get("auto_refresh", True))
         self.refresh_interval.setValue(settings.get("refresh_interval", 2))
         self.auto_adjust_ladder.setChecked(settings.get("auto_adjust_ladder", True))
+        self.risk_intraday_drawdown_limit.setValue(int(settings.get("risk_intraday_drawdown_limit", 0) or 0))
+        self.risk_max_portfolio_loss.setValue(int(settings.get("risk_max_portfolio_loss", 0) or 0))
+        self.risk_max_open_positions.setValue(int(settings.get("risk_max_open_positions", 0) or 0))
+        self.risk_max_gross_open_quantity.setValue(int(settings.get("risk_max_gross_open_quantity", 0) or 0))
 
         creds = self.token_manager.load_credentials()
         if creds:
@@ -453,14 +518,19 @@ class SettingsDialog(QDialog):
         self._has_changes = False
 
     def _save_settings(self):
-        settings = {
+        settings = self.config_manager.load_settings()
+        settings.update({
             "default_symbol": self.default_symbol.currentText(),
             "default_product": self.default_product.currentText(),
             "default_lots": self.default_lots.value(),
             "auto_refresh": self.auto_refresh.isChecked(),
             "refresh_interval": self.refresh_interval.value(),
             "auto_adjust_ladder": self.auto_adjust_ladder.isChecked(),
-        }
+            "risk_intraday_drawdown_limit": self.risk_intraday_drawdown_limit.value(),
+            "risk_max_portfolio_loss": self.risk_max_portfolio_loss.value(),
+            "risk_max_open_positions": self.risk_max_open_positions.value(),
+            "risk_max_gross_open_quantity": self.risk_max_gross_open_quantity.value(),
+        })
 
         self.config_manager.save_settings(settings)
 
@@ -489,6 +559,10 @@ class SettingsDialog(QDialog):
             self.auto_refresh.setChecked(defaults.get("auto_refresh", True))
             self.refresh_interval.setValue(defaults.get("refresh_interval", 2))
             self.auto_adjust_ladder.setChecked(defaults.get("auto_adjust_ladder", True))
+            self.risk_intraday_drawdown_limit.setValue(int(defaults.get("risk_intraday_drawdown_limit", 0) or 0))
+            self.risk_max_portfolio_loss.setValue(int(defaults.get("risk_max_portfolio_loss", 0) or 0))
+            self.risk_max_open_positions.setValue(int(defaults.get("risk_max_open_positions", 0) or 0))
+            self.risk_max_gross_open_quantity.setValue(int(defaults.get("risk_max_gross_open_quantity", 0) or 0))
 
             self.api_key.clear()
             self.api_secret.clear()

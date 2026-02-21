@@ -59,4 +59,3 @@ dialogs/pnl_history/*.json
 *.odt
 
 # Temporary analysis
-optimization_analysis.md

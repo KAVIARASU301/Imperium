@@ -160,6 +160,18 @@ class ScalperMainWindow(QMainWindow):
         )
         self._load_cvd_automation_state()
 
+        # -----------------------------
+        # Risk-first hardening controls
+        # -----------------------------
+        self.global_kill_switch_active = False
+        self.global_kill_switch_reason = ""
+        self.intraday_drawdown_lock_active = False
+        self._intraday_peak_pnl = 0.0
+        self._intraday_drawdown_limit = float(max(0.0, self.settings.get("risk_intraday_drawdown_limit", 0.0)))
+        self._max_portfolio_loss = float(max(0.0, self.settings.get("risk_max_portfolio_loss", 0.0)))
+        self._max_open_positions = int(max(0, self.settings.get("risk_max_open_positions", 0)))
+        self._max_gross_open_quantity = int(max(0, self.settings.get("risk_max_gross_open_quantity", 0)))
+
         # CVD monitor symbols (v1 – fixed indices)
         self.cvd_symbols = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"]
         self.active_cvd_tokens: set[int] = set()
@@ -2063,6 +2075,12 @@ class ScalperMainWindow(QMainWindow):
             f"Portfolio exit handled by UI | Reason={reason}, PnL={pnl:.2f}"
         )
 
+        self._activate_global_kill_switch(
+            reason=f"PORTFOLIO_{reason}",
+            user_message=f"Portfolio {reason.replace('_', ' ').title()} hit at ₹{pnl:,.2f}. Exiting all and locking entries.",
+            exit_open_positions=True,
+        )
+
         # SUCCESS sound for TARGET, FAIL sound for SL
         if reason == "TARGET":
             self._play_sound(success=True)
@@ -2255,6 +2273,101 @@ class ScalperMainWindow(QMainWindow):
             self.strike_ladder.set_auto_adjust(auto_adjust)
 
         self._on_settings_changed(self.header.get_current_settings())
+        self._reload_risk_limits_from_settings()
+
+    def _reload_risk_limits_from_settings(self):
+        self._intraday_drawdown_limit = float(max(0.0, self.settings.get("risk_intraday_drawdown_limit", 0.0)))
+        self._max_portfolio_loss = float(max(0.0, self.settings.get("risk_max_portfolio_loss", 0.0)))
+        self._max_open_positions = int(max(0, self.settings.get("risk_max_open_positions", 0)))
+        self._max_gross_open_quantity = int(max(0, self.settings.get("risk_max_gross_open_quantity", 0)))
+
+    def _activate_global_kill_switch(self, reason: str, user_message: Optional[str] = None,
+                                     exit_open_positions: bool = True):
+        if self.global_kill_switch_active:
+            return
+
+        self.global_kill_switch_active = True
+        self.global_kill_switch_reason = reason
+        self.intraday_drawdown_lock_active = True
+
+        logger.critical("🚨 GLOBAL KILL SWITCH ACTIVATED | reason=%s", reason)
+
+        # Disable automation toggles and clear active auto-trade state.
+        for token, state in self._cvd_automation_market_state.items():
+            state["enabled"] = False
+        self._cvd_automation_positions.clear()
+        self._persist_cvd_automation_state()
+
+        if exit_open_positions:
+            positions = [p for p in self.position_manager.get_all_positions() if p.quantity != 0]
+            if positions:
+                self._execute_bulk_exit(positions)
+
+        msg = user_message or f"Global kill switch activated: {reason}."
+        self._publish_status(msg, 6000, level="error")
+        QMessageBox.critical(self, "Risk Lock Active", msg)
+
+    def _evaluate_risk_locks(self):
+        stats = self.trade_ledger.get_daily_trade_stats(trading_day=date.today().isoformat())
+        realized_pnl = float(stats.get("total_pnl") or 0.0)
+        unrealized_pnl = float(self.position_manager.get_total_pnl() or 0.0)
+        total_intraday_pnl = realized_pnl + unrealized_pnl
+
+        if total_intraday_pnl > self._intraday_peak_pnl:
+            self._intraday_peak_pnl = total_intraday_pnl
+
+        if self._max_portfolio_loss > 0 and total_intraday_pnl <= -self._max_portfolio_loss:
+            self._activate_global_kill_switch(
+                reason="MAX_PORTFOLIO_LOSS",
+                user_message=(
+                    f"Max portfolio loss breached: ₹{total_intraday_pnl:,.2f} "
+                    f"(limit ₹{-self._max_portfolio_loss:,.2f}). Exiting all and locking entries."
+                ),
+            )
+            return
+
+        if self._intraday_drawdown_limit > 0:
+            drawdown = self._intraday_peak_pnl - total_intraday_pnl
+            if drawdown >= self._intraday_drawdown_limit:
+                self._activate_global_kill_switch(
+                    reason="INTRADAY_DRAWDOWN_LOCK",
+                    user_message=(
+                        f"Intraday drawdown lock triggered: drawdown ₹{drawdown:,.2f} "
+                        f"from peak ₹{self._intraday_peak_pnl:,.2f}."
+                    ),
+                )
+
+    def _validate_pre_trade_risk(self, transaction_type: str, quantity: int, tradingsymbol: Optional[str]) -> tuple[bool, str]:
+        # Never block exits; only guard potentially opening legs.
+        if transaction_type != self.trader.TRANSACTION_TYPE_BUY:
+            return True, ""
+
+        if self.global_kill_switch_active:
+            return False, f"Global kill switch is active ({self.global_kill_switch_reason or 'risk lock'})."
+
+        if self._max_open_positions > 0:
+            active_symbols = {
+                p.tradingsymbol for p in self.position_manager.get_all_positions()
+                if p.quantity != 0
+            }
+            is_new_symbol = tradingsymbol not in active_symbols
+            if is_new_symbol and len(active_symbols) >= self._max_open_positions:
+                return False, f"Max open positions limit reached ({self._max_open_positions})."
+
+        if self._max_gross_open_quantity > 0:
+            current_gross_qty = sum(abs(int(p.quantity)) for p in self.position_manager.get_all_positions() if p.quantity)
+            if current_gross_qty + abs(int(quantity or 0)) > self._max_gross_open_quantity:
+                return False, (
+                    f"Gross quantity limit breached ({self._max_gross_open_quantity}). "
+                    f"Current {current_gross_qty}, requested +{abs(int(quantity or 0))}."
+                )
+
+        return True, ""
+
+    def _reject_order_for_risk(self, reason: str):
+        logger.warning("Order blocked by risk control: %s", reason)
+        self._publish_status(f"Risk block: {reason}", 5000, level="warning")
+        QMessageBox.warning(self, "Risk Control", f"Order blocked by risk controls.\n\n{reason}")
 
     def _on_settings_changed(self, settings: dict):
         """
@@ -2806,6 +2919,17 @@ class ScalperMainWindow(QMainWindow):
             QMessageBox.critical(self, "Order Error", "Order quantity is zero. Cannot place order.")
             return
 
+        for strike_detail in confirmed_order_details.get('strikes', []):
+            contract = strike_detail.get('contract')
+            ok, reason = self._validate_pre_trade_risk(
+                transaction_type=self.trader.TRANSACTION_TYPE_BUY,
+                quantity=total_quantity_per_strike,
+                tradingsymbol=getattr(contract, 'tradingsymbol', None),
+            )
+            if not ok:
+                self._reject_order_for_risk(reason)
+                return
+
         self._publish_status("Placing orders...", 2000, level="action")
         for strike_detail in confirmed_order_details.get('strikes', []):
             contract_to_trade: Optional[Contract] = strike_detail.get('contract')
@@ -2946,6 +3070,15 @@ class ScalperMainWindow(QMainWindow):
         if not contract_to_trade or not quantity:
             logger.error("Invalid parameters for single strike order.")
             QMessageBox.critical(self, "Order Error", "Missing contract or quantity for the order.")
+            return
+
+        ok, reason = self._validate_pre_trade_risk(
+            transaction_type=transaction_type,
+            quantity=quantity,
+            tradingsymbol=getattr(contract_to_trade, 'tradingsymbol', None),
+        )
+        if not ok:
+            self._reject_order_for_risk(reason)
             return
 
         try:
@@ -3804,11 +3937,18 @@ class ScalperMainWindow(QMainWindow):
     def _on_trading_day_reset(self):
         logger.info("Trading day reset at 07:30 AM")
 
+        # Reset intraday risk locks for the new session.
+        self.global_kill_switch_active = False
+        self.global_kill_switch_reason = ""
+        self.intraday_drawdown_lock_active = False
+        self._intraday_peak_pnl = 0.0
+
         self._update_account_summary_widget()
         self._schedule_trading_day_reset()  # schedule next day
 
     def _update_ui(self):
         self._update_account_summary_widget()
+        self._evaluate_risk_locks()
 
         ladder_data = self.strike_ladder.get_ladder_data()
         if ladder_data:
