@@ -466,6 +466,26 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         """)
         self.btn_export.clicked.connect(self._export_chart_image)
 
+        self.btn_refresh_plot = QPushButton("⟳")
+        self.btn_refresh_plot.setFixedSize(28, 28)
+        self.btn_refresh_plot.setToolTip("Refresh chart plot")
+        self.btn_refresh_plot.setStyleSheet("""
+            QPushButton {
+                background: #212635;
+                border: 1px solid #3A4458;
+                border-radius: 4px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background: #2A3142;
+                border: 1px solid #5B9BD5;
+            }
+            QPushButton:pressed {
+                background: #1B1F2B;
+            }
+        """)
+        self.btn_refresh_plot.clicked.connect(self._refresh_plot_only)
+
         top_bar.addStretch()
 
         root.addLayout(top_bar)
@@ -599,6 +619,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
 
         self._build_setup_dialog(compact_combo_style, compact_spinbox_style)
 
+        ema_bar.addWidget(self.btn_refresh_plot)
         ema_bar.addWidget(self.btn_export)
         ema_bar.addStretch()
         root.addLayout(ema_bar)
@@ -1387,18 +1408,6 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
 
     def _on_ema_toggled(self, period: int, checked: bool):
         """Toggle EMA visibility"""
-        opacity = self._ema_line_opacity if checked else 0.0
-
-        if period == 10:
-            self.price_ema10_curve.setOpacity(opacity)
-            self.cvd_ema10_curve.setOpacity(opacity)
-        elif period == 21:
-            self.price_ema21_curve.setOpacity(opacity)
-            self.cvd_ema21_curve.setOpacity(opacity)
-        elif period == 51:
-            self.price_ema51_curve.setOpacity(opacity)
-            self.cvd_ema51_curve.setOpacity(opacity)
-
         if hasattr(self, "setup_ema_default_checks") and period in self.setup_ema_default_checks:
             setup_cb = self.setup_ema_default_checks[period]
             if setup_cb.isChecked() != checked:
@@ -1409,7 +1418,68 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         if hasattr(self, "chart_line_width_input"):
             self._persist_setup_values()
 
-        # Update legends
+        self._refresh_plot_only()
+
+    def _refresh_plot_only(self):
+        """Refresh chart overlays from in-memory data without reloading sessions or touching trade state."""
+        if not self.all_timestamps or not self.all_cvd_data or not self.all_price_data:
+            return
+
+        focus_mode = not self.btn_focus.isChecked()
+        if focus_mode:
+            x_indices = [self._time_to_session_index(ts) for ts in self.all_timestamps]
+        else:
+            x_indices = list(range(len(self.all_timestamps)))
+
+        self._last_plot_x_indices = list(x_indices)
+        enabled_emas = self._enabled_ema_periods()
+
+        cvd_data_array = np.array(self.all_cvd_data)
+        price_data_array = np.array(self.all_price_data)
+
+        if 10 in enabled_emas:
+            self.cvd_ema10_curve.setData(x_indices, calculate_ema(cvd_data_array, 10))
+        else:
+            self.cvd_ema10_curve.clear()
+
+        if 21 in enabled_emas:
+            self.cvd_ema21_curve.setData(x_indices, calculate_ema(cvd_data_array, 21))
+        else:
+            self.cvd_ema21_curve.clear()
+
+        if 51 in enabled_emas:
+            self.cvd_ema51_curve.setData(x_indices, calculate_ema(cvd_data_array, 51))
+        else:
+            self.cvd_ema51_curve.clear()
+
+        if 10 in enabled_emas:
+            self.price_ema10_curve.setData(x_indices, calculate_ema(price_data_array, 10))
+        else:
+            self.price_ema10_curve.clear()
+
+        if 21 in enabled_emas:
+            self.price_ema21_curve.setData(x_indices, calculate_ema(price_data_array, 21))
+        else:
+            self.price_ema21_curve.clear()
+
+        if 51 in enabled_emas:
+            self.price_ema51_curve.setData(x_indices, calculate_ema(price_data_array, 51))
+        else:
+            self.price_ema51_curve.clear()
+
+        for ema_period, cb in self.ema_checkboxes.items():
+            opacity = self._ema_line_opacity if cb.isChecked() else 0.0
+            if ema_period == 10:
+                self.price_ema10_curve.setOpacity(opacity)
+                self.cvd_ema10_curve.setOpacity(opacity)
+            elif ema_period == 21:
+                self.price_ema21_curve.setOpacity(opacity)
+                self.cvd_ema21_curve.setOpacity(opacity)
+            elif ema_period == 51:
+                self.price_ema51_curve.setOpacity(opacity)
+                self.cvd_ema51_curve.setOpacity(opacity)
+
+        self._update_atr_reversal_markers()
         self._update_ema_legends()
 
 
@@ -1809,74 +1879,9 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
             self.axis.tickStrings = two_day_time_formatter
             self.price_axis.tickStrings = two_day_time_formatter
 
-        # 🔥 PLOT INSTITUTIONAL EMAS
+        # 🔥 PLOT INSTITUTIONAL EMAS + markers from current in-memory data
         if len(self.all_cvd_data) > 0:
-            cvd_data_array = np.array(self.all_cvd_data)
-            price_data_array = np.array(self.all_price_data)
-            if focus_mode:
-                x_indices = [
-                    self._time_to_session_index(ts)
-                    for ts in self.all_timestamps
-                ]
-            else:
-                x_indices = list(range(len(self.all_timestamps)))
-
-            # Calculate EMAs
-            self._last_plot_x_indices = list(x_indices)
-            enabled_emas = self._enabled_ema_periods()
-
-            # --- CVD EMAs ---
-            if 10 in enabled_emas:
-                self.cvd_ema10_curve.setData(
-                    x_indices, calculate_ema(cvd_data_array, 10)
-                )
-            else:
-                self.cvd_ema10_curve.clear()
-
-            if 21 in enabled_emas:
-                self.cvd_ema21_curve.setData(
-                    x_indices, calculate_ema(cvd_data_array, 21)
-                )
-            else:
-                self.cvd_ema21_curve.clear()
-
-            if 51 in enabled_emas:
-                self.cvd_ema51_curve.setData(
-                    x_indices, calculate_ema(cvd_data_array, 51)
-                )
-            else:
-                self.cvd_ema51_curve.clear()
-
-            # --- PRICE EMAs ---
-            if 10 in enabled_emas:
-                self.price_ema10_curve.setData(
-                    x_indices, calculate_ema(price_data_array, 10)
-                )
-            else:
-                self.price_ema10_curve.clear()
-
-            if 21 in enabled_emas:
-                self.price_ema21_curve.setData(
-                    x_indices, calculate_ema(price_data_array, 21)
-                )
-            else:
-                self.price_ema21_curve.clear()
-
-            if 51 in enabled_emas:
-                self.price_ema51_curve.setData(
-                    x_indices, calculate_ema(price_data_array, 51)
-                )
-            else:
-                self.price_ema51_curve.clear()
-
-            # Update legends
-            self._update_ema_legends()
-
-            # ✅ FORCE EMA VISIBILITY BASED ON CHECKBOX STATE
-            for period, cb in self.ema_checkboxes.items():
-                self._on_ema_toggled(period, cb.isChecked())
-
-            self._update_atr_reversal_markers()
+            self._refresh_plot_only()
 
         # Set X range
         self.plot.enableAutoRange(axis=pg.ViewBox.YAxis)
