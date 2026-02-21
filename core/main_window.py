@@ -85,7 +85,7 @@ class WebSocketState(Enum):
     RECONNECTING = "reconnecting"
 
 
-class ScalperMainWindow(QMainWindow):
+class ImperiumMainWindow(QMainWindow):
     def __init__(self, trader: Union[KiteConnect, PaperTradingManager], real_kite_client: KiteConnect, api_key: str,
                  access_token: str):
         super().__init__()

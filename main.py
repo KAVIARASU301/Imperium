@@ -5,7 +5,7 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox, QWidget
 from kiteconnect import KiteConnect
 from core.login_manager import LoginManager
-from core.main_window import ScalperMainWindow
+from core.main_window import ImperiumMainWindow
 from core.token_manager import TokenManager
 from core.paper_trading_manager import PaperTradingManager
 from core.config import setup_logging
@@ -55,7 +55,7 @@ def main():
             logger.info("Starting in PAPER TRADING mode.")
             trader = PaperTradingManager()
 
-        window = ScalperMainWindow(
+        window = ImperiumMainWindow(
             trader=trader,
             real_kite_client=real_kite_client,
             api_key=api_creds['api_key'],
