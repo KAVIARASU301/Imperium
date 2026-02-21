@@ -711,6 +711,12 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
             brush=pg.mkBrush("#B0BEC5"),
             pen=pg.mkPen("#ECEFF1", width=1.1),
         )
+        self.sim_trade_path_lines = pg.PlotCurveItem(
+            pen=pg.mkPen("#B0BEC5", width=1.4, style=Qt.DashLine),
+            connect="pairs",
+        )
+        self.sim_trade_path_lines.setZValue(18)
+        self.price_plot.addItem(self.sim_trade_path_lines)
         for marker in (
                 self.sim_taken_long_markers,
                 self.sim_taken_short_markers,

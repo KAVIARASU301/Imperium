@@ -32,6 +32,41 @@ class SimulatorMixin:
                 self.sim_skipped_markers,
         ):
             marker.clear()
+        self.sim_trade_path_lines.clear()
+        self._reset_simulator_confluence_line_styles()
+
+
+
+    def _reset_simulator_confluence_line_styles(self):
+        line_map = getattr(self, "_confluence_line_map", {})
+        if not line_map:
+            return
+
+        for key, pairs in line_map.items():
+            is_short = str(key).startswith("S:")
+            color = self._confluence_short_color if is_short else self._confluence_long_color
+            pen = pg.mkPen(color, width=self._confluence_line_width)
+            for _, line in pairs:
+                line.setPen(pen)
+                line.setOpacity(self._confluence_line_opacity)
+
+
+
+    def _apply_simulator_confluence_line_styles(self, skipped_line_keys: set[str] | None):
+        line_map = getattr(self, "_confluence_line_map", {})
+        if not line_map:
+            return
+
+        skipped_line_keys = skipped_line_keys or set()
+        skipped_pen = pg.mkPen("#CFD8DC", width=self._confluence_line_width)
+
+        for key, pairs in line_map.items():
+            is_short = str(key).startswith("S:")
+            default_color = self._confluence_short_color if is_short else self._confluence_long_color
+            pen = skipped_pen if key in skipped_line_keys else pg.mkPen(default_color, width=self._confluence_line_width)
+            for _, line in pairs:
+                line.setPen(pen)
+                line.setOpacity(self._confluence_line_opacity)
 
 
 
@@ -122,6 +157,8 @@ class SimulatorMixin:
         self.sim_exit_win_markers.setData(results["exit_win_x"], results["exit_win_y"])
         self.sim_exit_loss_markers.setData(results["exit_loss_x"], results["exit_loss_y"])
         self.sim_skipped_markers.setData(results["skipped_x"], results["skipped_y"])
+        self.sim_trade_path_lines.setData(results["trade_path_x"], results["trade_path_y"])
+        self._apply_simulator_confluence_line_styles(results.get("skipped_line_keys"))
 
         points = results["total_points"]
         color = "#66BB6A" if points >= 0 else "#EF5350"
@@ -150,7 +187,8 @@ class SimulatorMixin:
             return {
                 "taken_long_x": [], "taken_long_y": [], "taken_short_x": [], "taken_short_y": [],
                 "exit_win_x": [], "exit_win_y": [], "exit_loss_x": [], "exit_loss_y": [],
-                "skipped_x": [], "skipped_y": [], "total_points": 0.0,
+                "skipped_x": [], "skipped_y": [], "trade_path_x": [], "trade_path_y": [],
+                "skipped_line_keys": set(), "total_points": 0.0,
                 "trades": 0, "wins": 0, "losses": 0, "skipped": 0,
             }
 
@@ -186,7 +224,8 @@ class SimulatorMixin:
         result = {
             "taken_long_x": [], "taken_long_y": [], "taken_short_x": [], "taken_short_y": [],
             "exit_win_x": [], "exit_win_y": [], "exit_loss_x": [], "exit_loss_y": [],
-            "skipped_x": [], "skipped_y": [], "total_points": 0.0,
+            "skipped_x": [], "skipped_y": [], "trade_path_x": [], "trade_path_y": [],
+            "skipped_line_keys": set(), "total_points": 0.0,
             "trades": 0, "wins": 0, "losses": 0, "skipped": 0,
         }
 
@@ -203,6 +242,8 @@ class SimulatorMixin:
                 exit_price = float(active_trade["entry_price"])
             pnl = exit_price - active_trade["entry_price"] if active_trade["signal_side"] == "long" else active_trade["entry_price"] - exit_price
             result["total_points"] += float(pnl)
+            result["trade_path_x"].extend([float(x_arr[active_trade["entry_bar_idx"]]), float(x_arr[idx])])
+            result["trade_path_y"].extend([float(active_trade["entry_price"]), exit_price])
             if pnl > 0:
                 result["wins"] += 1
                 result["exit_win_x"].append(float(x_arr[idx]))
@@ -340,6 +381,7 @@ class SimulatorMixin:
                 result["skipped"] += 1
                 result["skipped_x"].append(float(x_arr[idx]))
                 result["skipped_y"].append(float((high[idx] + y_offset[idx]) if signal_side == "short" else (low[idx] - y_offset[idx])))
+                result["skipped_line_keys"].add(f"{'S' if signal_side == 'short' else 'L'}:{idx}")
                 continue
 
             if active_trade:
@@ -352,6 +394,7 @@ class SimulatorMixin:
                         result["skipped"] += 1
                         result["skipped_x"].append(float(x_arr[idx]))
                         result["skipped_y"].append(float((high[idx] + y_offset[idx]) if signal_side == "short" else (low[idx] - y_offset[idx])))
+                        result["skipped_line_keys"].add(f"{'S' if signal_side == 'short' else 'L'}:{idx}")
                         continue
                 else:
                     active_strategy = active_trade.get("strategy_type")
@@ -386,12 +429,14 @@ class SimulatorMixin:
                             result["skipped"] += 1
                             result["skipped_x"].append(float(x_arr[idx]))
                             result["skipped_y"].append(float((high[idx] + y_offset[idx]) if signal_side == "short" else (low[idx] - y_offset[idx])))
+                            result["skipped_line_keys"].add(f"{'S' if signal_side == 'short' else 'L'}:{idx}")
                             continue
                     # ──────────────────────────────────────────────────────────
                     elif new_priority <= active_priority:
                         result["skipped"] += 1
                         result["skipped_x"].append(float(x_arr[idx]))
                         result["skipped_y"].append(float((high[idx] + y_offset[idx]) if signal_side == "short" else (low[idx] - y_offset[idx])))
+                        result["skipped_line_keys"].add(f"{'S' if signal_side == 'short' else 'L'}:{idx}")
                         continue
                     else:
                         _close_trade(idx)
