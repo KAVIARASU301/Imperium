@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 
 # =============================================================================
-# Single CVD Chart Dialog (with navigator)
+# Auto Trader DIalog
 # =============================================================================
 
 class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixin, SimulatorMixin, QDialog):
