@@ -52,7 +52,7 @@ from dialogs.strategy_builder_dialog import StrategyBuilderDialog
 from dialogs.order_confirmation_dialog import OrderConfirmationDialog
 from dialogs.market_monitor_dialog import MarketMonitorDialog
 from core.cvd.cvd_engine import CVDEngine
-from core.auto_trader import CVDSingleChartDialog
+from core.auto_trader import AutoTraderDialog
 from dialogs.cvd_multi_chart_dialog import CVDMultiChartDialog
 from core.cvd.cvd_symbol_sets import CVDSymbolSetManager
 from dialogs.cvd_symbol_set_multi_chart_dialog import CVDSetMultiChartDialog
@@ -147,7 +147,7 @@ class ScalperMainWindow(QMainWindow):
         self.network_status = "Initializing..."
         self.cvd_engine = CVDEngine()
         self.cvd_monitor_dialog = None
-        self.cvd_single_chart_dialogs = {}  # Dict[int, CVDSingleChartDialog] - token -> dialog
+        self.cvd_single_chart_dialogs = {}  # Dict[int, AutoTraderDialog] - token -> dialog
         self.header_linked_cvd_token: Optional[int] = None
         self.trade_ledger = TradeLedger(mode=self.trading_mode)
         self._cvd_automation_positions: Dict[int, dict] = {}
@@ -732,7 +732,7 @@ class ScalperMainWindow(QMainWindow):
                     )
 
             # Create new dialog and store reference by token
-            dialog = CVDSingleChartDialog(
+            dialog = AutoTraderDialog(
                 kite=self.real_kite_client,
                 instrument_token=cvd_token,
                 symbol=f"{symbol}{suffix}",
@@ -794,6 +794,10 @@ class ScalperMainWindow(QMainWindow):
         token = payload.get("instrument_token")
         if token is None:
             return
+
+        dialog = self.cvd_single_chart_dialogs.get(token)
+        if dialog and hasattr(dialog, "_record_detected_signal"):
+            dialog._record_detected_signal(payload)
 
         if self._is_cvd_auto_cutoff_reached():
             self._enforce_cvd_auto_cutoff_exit(reason="AUTO_3PM_CUTOFF")
@@ -987,6 +991,9 @@ class ScalperMainWindow(QMainWindow):
         }
         self._persist_cvd_automation_state()
 
+        if dialog and hasattr(dialog, "_set_live_trade_state"):
+            dialog._set_live_trade_state("entered", self._cvd_automation_positions[token])
+
         if route == "buy_exit_panel" and self.buy_exit_panel and self.strike_ladder:
             if order_details and order_details.get('strikes'):
                 # Execute orders directly without showing confirmation dialog
@@ -1053,6 +1060,9 @@ class ScalperMainWindow(QMainWindow):
             self._stop_cvd_pending_retry(token)
             if self._cvd_automation_positions.pop(token, None) is not None:
                 self._persist_cvd_automation_state()
+                dialog = self.cvd_single_chart_dialogs.get(token)
+                if dialog and hasattr(dialog, "_set_live_trade_state"):
+                    dialog._set_live_trade_state("idle")
             return
 
         self._stop_cvd_pending_retry(token)
@@ -1197,6 +1207,18 @@ class ScalperMainWindow(QMainWindow):
                 self._exit_position_automated(pos, reason=exit_reason)
             if self._cvd_automation_positions.pop(token, None) is not None:
                 self._persist_cvd_automation_state()
+                dialog = self.cvd_single_chart_dialogs.get(token)
+                if dialog and hasattr(dialog, "_set_live_trade_state"):
+                    pnl_points = 0.0
+                    entry = active_trade.get("entry_underlying")
+                    if entry is not None:
+                        try:
+                            entry_v = float(entry)
+                            exit_v = float(price_close)
+                            pnl_points = (exit_v - entry_v) if signal_side == "long" else (entry_v - exit_v)
+                        except (TypeError, ValueError):
+                            pnl_points = 0.0
+                    dialog._set_live_trade_state("closed", {"points": pnl_points})
             return
 
         active_trade["last_price_close"] = price_close
@@ -1391,7 +1413,7 @@ class ScalperMainWindow(QMainWindow):
 
     def _retarget_cvd_dialog(
             self,
-            dialog: CVDSingleChartDialog,
+            dialog: AutoTraderDialog,
             old_token: int,
             new_token: int,
             symbol: str,
@@ -4218,7 +4240,7 @@ class ScalperMainWindow(QMainWindow):
                     logger.error(f"Failed to subscribe to CVD data: {e}")
 
             # Create new CVD Single Chart Dialog
-            dialog = CVDSingleChartDialog(
+            dialog = AutoTraderDialog(
                 kite=self.real_kite_client,
                 instrument_token=cvd_token,
                 symbol=symbol,

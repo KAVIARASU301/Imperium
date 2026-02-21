@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 # Single CVD Chart Dialog (with navigator)
 # =============================================================================
 
-class CVDSingleChartDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixin, SimulatorMixin, QDialog):
+class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixin, SimulatorMixin, QDialog):
     REFRESH_INTERVAL_MS = 3000
     LIVE_TICK_MAX_POINTS = 6000
     LIVE_TICK_REPAINT_MS = 80

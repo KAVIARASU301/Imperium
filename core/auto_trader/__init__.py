@@ -1,3 +1,3 @@
-from core.auto_trader.chart_dialog import CVDSingleChartDialog
+from core.auto_trader.chart_dialog import AutoTraderDialog
 
-__all__ = ["CVDSingleChartDialog"]
+__all__ = ["AutoTraderDialog"]
