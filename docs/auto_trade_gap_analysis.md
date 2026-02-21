@@ -49,6 +49,13 @@ Missing institutional features:
 Current:
 - Strategy filters and priorities, some chop/consolidation controls, and simulator overlay.
 
+Implemented baseline (lightweight):
+- Added a live signal governance layer with confidence scoring and strategy-fusion weighting.
+- Added regime-aware strategy enable/disable matrix (`trend`, `chop`, `high_vol`).
+- Added rolling walk-forward-style stability scoring from realized per-strategy edge snapshots.
+- Added feature drift score and strategy health score gates that can hold live execution.
+- Added deployment guardrails with `shadow` and `canary` modes before `live` enablement.
+
 Missing institutional features:
 - Robust out-of-sample walk-forward pipeline and parameter stability checks.
 - Regime classifier with automated strategy enable/disable matrix.

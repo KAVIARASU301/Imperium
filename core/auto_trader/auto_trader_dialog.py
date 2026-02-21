@@ -29,6 +29,7 @@ from core.auto_trader.settings_manager import SettingsManagerMixin
 from core.auto_trader.signal_renderer import SignalRendererMixin
 from core.auto_trader.simulator import SimulatorMixin
 from core.auto_trader.indicators import calculate_ema, calculate_atr, compute_adx, build_slope_direction_masks, is_chop_regime
+from core.auto_trader.signal_governance import SignalGovernance
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +90,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self._setup_values_ready = False
         self.timeframe_minutes = 1  # default = 1 minute
         self.strategy_detector = StrategySignalDetector(timeframe_minutes=self.timeframe_minutes)
+        self.signal_governance = SignalGovernance()
 
         self.live_mode = True
         self.current_date = None
@@ -857,6 +859,9 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self.range_lookback_input.blockSignals(True)  # 🆕 NEW
         self.breakout_switch_mode_combo.blockSignals(True)
         self.atr_skip_limit_input.blockSignals(True)
+        self.deploy_mode_combo.blockSignals(True)
+        self.min_confidence_input.blockSignals(True)
+        self.canary_ratio_input.blockSignals(True)
         self.hide_simulator_btn_check.blockSignals(True)
         self.chop_filter_atr_reversal_check.blockSignals(True)
         self.chop_filter_ema_cross_check.blockSignals(True)
@@ -927,6 +932,18 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self.atr_skip_limit_input.setValue(
             _read_setting("atr_skip_limit", 0, int)
         )
+        _apply_combo_value(
+            self.deploy_mode_combo,
+            _read_setting("deploy_mode", self.signal_governance.deploy_mode),
+            fallback_index=1,
+        )
+        self.min_confidence_input.setValue(
+            _read_setting("min_confidence_for_live", self.signal_governance.min_confidence_for_live, float)
+        )
+        self.canary_ratio_input.setValue(
+            _read_setting("canary_live_ratio", self.signal_governance.canary_live_ratio, float)
+        )
+        self._on_governance_settings_changed()
 
         self.hide_simulator_btn_check.setChecked(
             _read_setting("hide_simulator_button", False, bool)
@@ -1001,6 +1018,9 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self.range_lookback_input.blockSignals(False)  # 🆕 NEW
         self.breakout_switch_mode_combo.blockSignals(False)
         self.atr_skip_limit_input.blockSignals(False)
+        self.deploy_mode_combo.blockSignals(False)
+        self.min_confidence_input.blockSignals(False)
+        self.canary_ratio_input.blockSignals(False)
         self.hide_simulator_btn_check.blockSignals(False)
         self.chop_filter_atr_reversal_check.blockSignals(False)
         self.chop_filter_ema_cross_check.blockSignals(False)
@@ -1048,6 +1068,9 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
             "range_lookback": int(self.range_lookback_input.value()),
             "breakout_switch_mode": self._selected_breakout_switch_mode(),
             "atr_skip_limit": int(self.atr_skip_limit_input.value()),
+            "deploy_mode": self.deploy_mode_combo.currentData() or "canary",
+            "min_confidence_for_live": float(self.min_confidence_input.value()),
+            "canary_live_ratio": float(self.canary_ratio_input.value()),
             "hide_simulator_button": self.hide_simulator_btn_check.isChecked(),
             # 🆕 Chop filter per-strategy
             "chop_filter_atr_reversal": self.chop_filter_atr_reversal_check.isChecked(),
@@ -1132,6 +1155,14 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self._persist_setup_values()
         # Force reload to apply new range lookback
         self._load_and_plot(force=True)
+
+
+
+    def _on_governance_settings_changed(self, *_):
+        self.signal_governance.deploy_mode = self.deploy_mode_combo.currentData() or "canary"
+        self.signal_governance.min_confidence_for_live = float(self.min_confidence_input.value())
+        self.signal_governance.canary_live_ratio = float(self.canary_ratio_input.value())
+        self._persist_setup_values()
 
 
 

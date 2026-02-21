@@ -1,9 +1,14 @@
+import logging
 import numpy as np
 import pyqtgraph as pg
 import pandas as pd
 from datetime import time
 
+from PySide6.QtCore import QTimer
+
 from core.auto_trader.indicators import calculate_ema, calculate_atr, is_chop_regime
+
+logger = logging.getLogger(__name__)
 
 
 
@@ -343,6 +348,7 @@ class SignalRendererMixin:
         price_high = np.array(self.all_price_high_data, dtype=float)
         price_low = np.array(self.all_price_low_data, dtype=float)
         volume_data = np.array(self.all_volume_data, dtype=float)
+        atr_values = calculate_atr(price_high, price_low, price_data, period=14)
 
         long_breakout, short_breakout, range_highs, range_lows = \
             self.strategy_detector.detect_range_breakout_strategy(
@@ -544,6 +550,33 @@ class SignalRendererMixin:
         if side is None or strategy_type is None:
             return
 
+        governance = getattr(self, "signal_governance", None)
+        governance_decision = None
+        if governance is not None:
+            governance_decision = governance.fuse_signal(
+                strategy_type=strategy_type,
+                side=side,
+                strategy_masks=strategy_masks,
+                closed_idx=closed_idx,
+                price_close=np.asarray(self.all_price_data, dtype=float),
+                ema10=price_ema10,
+                ema51=price_ema51,
+                atr=np.asarray(atr_values, dtype=float),
+                cvd_close=np.asarray(self.all_cvd_data, dtype=float),
+                cvd_ema10=cvd_ema10,
+            )
+            if not governance_decision.enabled:
+                return
+            if not governance_decision.can_trade_live:
+                logger.info(
+                        "[AUTO][GOV] Signal held token=%s strategy=%s confidence=%.2f reasons=%s",
+                        self.instrument_token,
+                        strategy_type,
+                        governance_decision.confidence,
+                        governance_decision.reasons,
+                    )
+                return
+
         if is_chop_regime(self, closed_idx, strategy_type=strategy_type):
             return
 
@@ -566,5 +599,14 @@ class SignalRendererMixin:
             "timestamp": closed_bar_ts,
         }
 
-        QTimer.singleShot(0, lambda p=payload: self.automation_signal.emit(p))
+        if governance_decision is not None:
+            payload.update({
+                "signal_confidence": governance_decision.confidence,
+                "market_regime": governance_decision.regime,
+                "governance_reasons": governance_decision.reasons,
+                "deploy_mode": governance_decision.deploy_mode,
+                "drift_score": governance_decision.drift_score,
+                "health_score": governance_decision.health_score,
+            })
 
+        QTimer.singleShot(0, lambda p=payload: self.automation_signal.emit(p))

@@ -185,6 +185,42 @@ class SetupPanelMixin:
         breakout_form.addRow("ATR Skip Limit", self.atr_skip_limit_input)
         col2.addWidget(breakout_group)
 
+        governance_group, governance_form = _compact_form("Signal Governance")
+
+        self.deploy_mode_combo = QComboBox()
+        self.deploy_mode_combo.setStyleSheet(compact_combo_style)
+        _set_combo_w(self.deploy_mode_combo)
+        self.deploy_mode_combo.addItem("Shadow", "shadow")
+        self.deploy_mode_combo.addItem("Canary", "canary")
+        self.deploy_mode_combo.addItem("Live", "live")
+        self.deploy_mode_combo.setToolTip("Deployment guardrail mode for auto signals.")
+        self.deploy_mode_combo.currentIndexChanged.connect(self._on_governance_settings_changed)
+        governance_form.addRow("Deploy Mode", self.deploy_mode_combo)
+
+        self.min_confidence_input = QDoubleSpinBox()
+        self.min_confidence_input.setRange(0.0, 1.0)
+        self.min_confidence_input.setDecimals(2)
+        self.min_confidence_input.setSingleStep(0.05)
+        self.min_confidence_input.setValue(0.55)
+        self.min_confidence_input.setStyleSheet(compact_spinbox_style)
+        _set_input_w(self.min_confidence_input)
+        self.min_confidence_input.setToolTip("Minimum confidence needed before signal can go live.")
+        self.min_confidence_input.valueChanged.connect(self._on_governance_settings_changed)
+        governance_form.addRow("Min Confidence", self.min_confidence_input)
+
+        self.canary_ratio_input = QDoubleSpinBox()
+        self.canary_ratio_input.setRange(0.0, 1.0)
+        self.canary_ratio_input.setDecimals(2)
+        self.canary_ratio_input.setSingleStep(0.05)
+        self.canary_ratio_input.setValue(0.25)
+        self.canary_ratio_input.setStyleSheet(compact_spinbox_style)
+        _set_input_w(self.canary_ratio_input)
+        self.canary_ratio_input.setToolTip("Fraction of qualified signals allowed live while in canary mode.")
+        self.canary_ratio_input.valueChanged.connect(self._on_governance_settings_changed)
+        governance_form.addRow("Canary Ratio", self.canary_ratio_input)
+
+        col2.addWidget(governance_group)
+
         # ── Chop Filter (per strategy) ────────────────────────────────────────
         chop_group, chop_form = _compact_form("Chop Filter")
 
@@ -653,5 +689,4 @@ class SetupPanelMixin:
             for _, line in pairs:
                 line.setPen(pg.mkPen(color, width=self._confluence_line_width))
                 line.setOpacity(self._confluence_line_opacity)
-
 
