@@ -7,6 +7,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from core.observability import (
+    AnomalyDetector,
+    ExecutionJournal,
+    IncidentResponder,
+    TCAReporter,
+    TelemetryDashboard,
+    TraceContext,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -134,17 +143,43 @@ class FillQualityTracker:
 
 
 class ExecutionStack:
-    def __init__(self, trading_mode: str, base_dir: Path):
+    def __init__(self, trading_mode: str, base_dir: Path, remediation_hooks: Optional[Dict[str, Callable[..., None]]] = None):
         self.router = SmartOrderRouter()
         self.planner = ExecutionAlgoPlanner()
         self.slippage = SlippageModel()
         self.retry = RetryPolicy()
         self.fill_quality = FillQualityTracker(trading_mode=trading_mode, base_dir=base_dir)
+        self.journal = ExecutionJournal(trading_mode=trading_mode, base_dir=base_dir)
+        self.dashboard = TelemetryDashboard(trading_mode=trading_mode, base_dir=base_dir)
+        self.incident_responder = IncidentResponder(journal=self.journal, remediation_hooks=remediation_hooks)
+        self.anomaly_detector = AnomalyDetector(responder=self.incident_responder)
+        self.tca_reporter = TCAReporter(trading_mode=trading_mode, base_dir=base_dir)
 
     def execute(self, request: ExecutionRequest, place_order_fn: Callable[..., str], base_order_args: Dict[str, Any]) -> List[str]:
+        trace = TraceContext.new(tags={
+            "tradingsymbol": request.tradingsymbol,
+            "execution_algo": request.execution_algo,
+            "source": request.metadata.get("source", "unknown"),
+        })
+        signal_id = str(request.metadata.get("signal_id") or request.metadata.get("auto_token") or "")
+        if signal_id:
+            self.anomaly_detector.on_signal(signal_id)
+
         route = self.router.choose_route(request)
         slices = self.planner.plan(request)
         order_ids: List[str] = []
+
+        signal_event = trace.next_span(
+            "signal_received",
+            {
+                "signal_id": signal_id or None,
+                "tradingsymbol": request.tradingsymbol,
+                "quantity": request.quantity,
+                "metadata": request.metadata,
+            },
+        )
+        self.journal.append("signal", signal_event)
+        self.dashboard.observe("signal", signal_event)
 
         for idx, child_qty in enumerate(slices, start=1):
             metrics = self.slippage.estimate(request, child_qty)
@@ -162,9 +197,11 @@ class ExecutionStack:
                 started_at = time.time()
                 try:
                     order_id = place_order_fn(**order_args)
+                    self.anomaly_detector.on_order_submitted(order_id)
                     order_ids.append(order_id)
-                    self.fill_quality.append({
+                    placed_record = {
                         "timestamp": datetime.now().isoformat(),
+                        "trace_id": trace.trace_id,
                         "tradingsymbol": request.tradingsymbol,
                         "child_index": idx,
                         "children": len(slices),
@@ -179,14 +216,21 @@ class ExecutionStack:
                         "route": route.get("route"),
                         "queue_priority": route.get("queue_priority"),
                         "status": "placed",
-                    })
+                        "risk_used": request.metadata.get("risk_used"),
+                        "risk_total": request.metadata.get("risk_total"),
+                    }
+                    self.fill_quality.append(placed_record)
+                    journal_event = trace.next_span("order_placed", placed_record)
+                    self.journal.append("order_placed", journal_event)
+                    self.dashboard.observe("order_placed", placed_record)
                     break
                 except Exception as exc:
                     bucket = self.retry.classify(exc)
                     max_attempts = self.retry.max_attempts(bucket)
                     attempts += 1
-                    self.fill_quality.append({
+                    error_record = {
                         "timestamp": datetime.now().isoformat(),
+                        "trace_id": trace.trace_id,
                         "tradingsymbol": request.tradingsymbol,
                         "child_index": idx,
                         "children": len(slices),
@@ -201,9 +245,44 @@ class ExecutionStack:
                         "error_bucket": bucket,
                         "error": str(exc),
                         "attempt": attempts,
-                    })
+                        "risk_used": request.metadata.get("risk_used"),
+                        "risk_total": request.metadata.get("risk_total"),
+                    }
+                    self.fill_quality.append(error_record)
+                    self.journal.append("order_error", trace.next_span("order_error", error_record))
+                    self.dashboard.observe("order_error", error_record)
                     if attempts >= max_attempts:
                         raise
                     time.sleep(self.retry.sleep_seconds(bucket, attempts))
 
+        self.anomaly_detector.heartbeat()
+        self.tca_reporter.generate(self.journal.path)
         return order_ids
+
+    def record_fill(self, order_id: str, filled_price: float, filled_qty: int):
+        self.anomaly_detector.on_order_closed(order_id)
+        payload = {
+            "order_id": order_id,
+            "filled_price": filled_price,
+            "filled_qty": filled_qty,
+            "status": "filled",
+        }
+        self.journal.append("order_fill", payload)
+        self.dashboard.observe("order_fill", payload)
+
+    def record_exit(self, tradingsymbol: str, outcome: str, pnl: float):
+        payload = {
+            "tradingsymbol": tradingsymbol,
+            "outcome": outcome,
+            "pnl": pnl,
+            "status": "closed",
+        }
+        self.journal.append("position_exit", payload)
+        self.dashboard.observe("position_exit", payload)
+
+    def ingest_tick(self, symbol: str, tick_ts: Optional[float] = None):
+        self.anomaly_detector.on_tick(symbol, tick_ts=tick_ts)
+
+    def heartbeat(self):
+        self.anomaly_detector.heartbeat()
+        self.tca_reporter.generate(self.journal.path)

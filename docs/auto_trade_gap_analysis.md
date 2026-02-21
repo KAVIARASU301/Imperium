@@ -67,6 +67,13 @@ Missing institutional features:
 Current:
 - Logging and local trade ledger; no clear event-sourced execution journal.
 
+Implemented baseline (lightweight):
+- Added an append-only execution journal (`execution_journal_<mode>.jsonl`) and trace context IDs that flow through signal -> order placement/error events.
+- Added a rolling telemetry dashboard snapshot (`telemetry_dashboard_<mode>.json`) with latency, reject-rate, slippage, hit-ratio, and risk-utilization metrics.
+- Added anomaly detection hooks for stuck orders, stale ticks, duplicate signals, and runaway loops.
+- Added incident playbooks with optional auto-remediation hooks (pause strategy, unwind risk, reroute).
+- Added periodic post-trade TCA summary generation (`tca_report_<mode>.json`) from the execution journal.
+
 Missing institutional features:
 - Structured telemetry (trace IDs across signal -> order -> fill -> exit).
 - Real-time dashboards for latency, reject rates, slippage, hit ratios, and risk utilization.
