@@ -1,0 +1,62 @@
+# ==============================
+# IDE
+# ==============================
+.idea/
+.vscode/
+
+# ==============================
+# Python
+# ==============================
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environments
+.venv/
+venv/
+env/
+
+# ==============================
+# Logs
+# ==============================
+logs/
+logging/
+*.log
+
+# ==============================
+# Build / Packaging
+# ==============================
+build/
+dist/
+*.spec
+*.egg-info/
+*.egg
+
+# ==============================
+# OS Files
+# ==============================
+.DS_Store
+Thumbs.db
+
+# ==============================
+# App Runtime Data
+# ==============================
+data/
+user_data/
+
+# ==============================
+# Accidental / Invalid Filenames
+# ==============================
+=
+/=
+# Generated charts
+chart_*.png
+
+# Runtime JSON
+dialogs/pnl_history/*.json
+
+# Documents
+*.odt
+
+# Temporary analysis
+optimization_analysis.md
