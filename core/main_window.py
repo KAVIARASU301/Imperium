@@ -3149,6 +3149,9 @@ class ImperiumMainWindow(QMainWindow):
         group_name = order_params.get('group_name')
         auto_token = order_params.get('auto_token')
 
+        if group_name and contract_to_trade:
+            self.position_manager.set_group_name_hint(contract_to_trade.tradingsymbol, group_name)
+
         if not contract_to_trade or not quantity:
             logger.error("Invalid parameters for single strike order.")
             QMessageBox.critical(self, "Order Error", "Missing contract or quantity for the order.")

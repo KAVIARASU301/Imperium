@@ -38,6 +38,7 @@ class PositionManager(QObject):
         self.last_refresh_time: Optional[datetime] = None
         self._refresh_in_progress = False
         self._exit_in_progress: set[str] = set()
+        self._group_name_hints: Dict[str, str] = {}
 
         mode = 'paper' if isinstance(self.trader, PaperTradingManager) else 'live'
         self.instrument_data: Dict = {}
@@ -115,6 +116,13 @@ class PositionManager(QObject):
 
             existing_pos = self._positions.get(pos.tradingsymbol)
             is_new_position = existing_pos is None
+
+            if is_new_position:
+                hinted_group_name = self._group_name_hints.get(pos.tradingsymbol)
+                if hinted_group_name:
+                    pos.group_name = hinted_group_name
+            else:
+                self._group_name_hints.pop(pos.tradingsymbol, None)
 
             # --------------------------------------------------
             # 🔒 Lifecycle flag (single source of truth)
@@ -355,10 +363,17 @@ class PositionManager(QObject):
 
     def add_position(self, position: Position):
         self._positions[position.tradingsymbol] = position
+        if position.group_name:
+            self._group_name_hints[position.tradingsymbol] = position.group_name
         # if position.stop_loss_price or position.target_price:
         #     self.place_bracket_order(position)
         self.position_added.emit(position)
         self._emit_all()
+
+    def set_group_name_hint(self, tradingsymbol: str, group_name: Optional[str]):
+        if not tradingsymbol or not group_name:
+            return
+        self._group_name_hints[tradingsymbol] = group_name
 
     def exit_position(self, position: Position):
         symbol = position.tradingsymbol
@@ -374,6 +389,7 @@ class PositionManager(QObject):
             # UI already placed the exit order
             exited_pos = self._positions.pop(symbol, None)
             if exited_pos:
+                self._group_name_hints.pop(symbol, None)
                 self.position_removed.emit(symbol)
                 self.positions_updated.emit(self.get_all_positions())
                 self.refresh_completed.emit(True)
@@ -393,6 +409,7 @@ class PositionManager(QObject):
             logger.info(f"Exit order placed for {position.tradingsymbol}")
             exited_pos = self._positions.pop(symbol, None)
             if exited_pos:
+                self._group_name_hints.pop(symbol, None)
                 self.position_removed.emit(symbol)
                 self.positions_updated.emit(self.get_all_positions())
                 self.refresh_completed.emit(True)
@@ -406,6 +423,7 @@ class PositionManager(QObject):
     def remove_position(self, tradingsymbol: str):
         removed_pos = self._positions.pop(tradingsymbol, None)
         if removed_pos:
+            self._group_name_hints.pop(tradingsymbol, None)
             self.position_removed.emit(tradingsymbol)
             self._emit_all()
 
