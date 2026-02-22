@@ -2,17 +2,17 @@
 
 import logging
 from datetime import datetime
-from typing import Dict, List
+from typing import List
 
 import pandas as pd
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QGridLayout, QHBoxLayout,
-    QLabel, QPushButton, QComboBox, QWidget
+    QLabel, QPushButton, QComboBox
 )
 from PySide6.QtCore import Qt, QTimer
 
 from core.cvd.cvd_symbol_sets import CVDSymbolSetManager
-from widgets.cvd_chart_widget import CVDChartWidget
+from core.cvd.cvd_chart_widget import CVDChartWidget
 from dialogs.cvd_multi_chart_dialog import DateNavigator
 from dialogs.cvd_symbol_sets_dialog import ManageCVDSymbolSetsDialog
 

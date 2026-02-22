@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal, QTimer, QEvent
 from PySide6.QtGui import QFont
 
-from widgets.cvd_chart_widget import CVDChartWidget
+from core.cvd.cvd_chart_widget import CVDChartWidget
 
 logger = logging.getLogger(__name__)
 
