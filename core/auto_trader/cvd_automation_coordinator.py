@@ -8,6 +8,7 @@ from typing import Optional
 from PySide6.QtCore import QTimer
 
 from core.execution.paper_trading_manager import PaperTradingManager
+from core.auto_trader.stacker import StackerState
 from utils.data_models import Contract, OptionType, Position
 
 logger = logging.getLogger(__name__)
@@ -22,6 +23,8 @@ class CvdAutomationCoordinator:
         self.positions: dict[int, dict] = {}
         self.market_state: dict[int, dict] = {}
         self.state_file = base_dir / f"cvd_automation_state_{trading_mode}.json"
+        # Stacker: one StackerState per token while an anchor trade is active
+        self._stacker_states: dict[int, StackerState] = {}
 
     def handle_signal(self, payload: dict):
         w = self.main_window
@@ -46,6 +49,7 @@ class CvdAutomationCoordinator:
         if signal_side not in {"long", "short"}:
             return
 
+        is_stack = bool(payload.get("is_stack"))  # stacker pyramid entry flag
         route = payload.get("route") or state.get("route") or "buy_exit_panel"
         active_trade = self.positions.get(token)
 
@@ -63,10 +67,13 @@ class CvdAutomationCoordinator:
                 time_diff_minutes = 0
 
             if active_side == signal_side:
-                if time_diff_minutes < 15:
+                # Stack signals on the same side always pass through — they are
+                # intentional pyramid additions, not duplicates.
+                if not is_stack and time_diff_minutes < 15:
                     logger.info("[AUTO] Skipping same-side signal (%.1f mins since last). Need 15+ mins for stacking.", time_diff_minutes)
                     return
             else:
+                # Opposite-side signal: check priority and exit if higher
                 active_strategy = active_trade.get("strategy_type") or "atr_reversal"
                 incoming_signal_type = payload.get("signal_type") or state.get("signal_filter") or "atr_reversal"
                 incoming_strategy = {
@@ -86,6 +93,9 @@ class CvdAutomationCoordinator:
                     if active_position:
                         self.exit_position_automated(active_position, reason="AUTO_REVERSE")
                 if self.positions.pop(token, None) is not None:
+                    # Reset stacker on reverse
+                    self._stacker_states.pop(token, None)
+                    self._notify_dialog_stacker_reset(token)
                     self.persist_state()
 
         contract = self.get_atm_contract_for_signal(signal_side)
@@ -136,6 +146,26 @@ class CvdAutomationCoordinator:
                 if all_tradingsymbols:
                     tracked_tradingsymbol = all_tradingsymbols[0]
 
+        # ── Stack signals: place order only, do NOT overwrite anchor state ──
+        if is_stack:
+            logger.info(
+                "[STACKER] Placing stack order #%s: token=%s side=%s",
+                payload.get("stack_number", "?"), token, signal_side,
+            )
+            if route == "buy_exit_panel" and w.buy_exit_panel and w.strike_ladder:
+                if order_details and order_details.get('strikes'):
+                    symbol = order_details.get('symbol')
+                    if symbol and symbol in w.instrument_data:
+                        instrument_lot_quantity = w.instrument_data[symbol].get('lot_size', 1)
+                        order_details['total_quantity_per_strike'] = order_details.get('lot_size', 1) * instrument_lot_quantity
+                        order_details['product'] = w.settings.get('default_product', 'MIS')
+                        w._execute_orders(order_details)
+                else:
+                    logger.warning("[STACKER] Failed to build order details from buy_exit_panel for stack")
+            else:
+                w._execute_single_strike_order(order_params)
+            return  # ← do NOT update positions dict for stack entries
+
         self.positions[token] = {
             "tradingsymbol": tracked_tradingsymbol,
             "tradingsymbols": all_tradingsymbols if route == "buy_exit_panel" else [tracked_tradingsymbol],
@@ -161,6 +191,42 @@ class CvdAutomationCoordinator:
             "transaction_type": w.trader.TRANSACTION_TYPE_BUY,
             "group_name": f"CVD_AUTO_{token}",
         }
+
+        # ── Stacker: init state for anchor, or record stack entry ─────────
+        if is_stack:
+            stack_state = self._stacker_states.get(token)
+            if stack_state is not None:
+                stack_num = payload.get("stack_number", len(stack_state.stack_entries) + 1)
+                logger.info(
+                    "[STACKER] Stack #%d confirmed: token=%s side=%s price=%.2f",
+                    stack_num, token, signal_side, entry_underlying,
+                )
+            # Stack signals don't reset the position anchor — just pass through to order
+        else:
+            # Anchor entry: init a fresh StackerState (dialog already emits stack signals,
+            # we track here for logging and reset coordination only)
+            dialog = w.cvd_single_chart_dialogs.get(token)
+            stacker_enabled = (
+                dialog is not None
+                and hasattr(dialog, "stacker_enabled_check")
+                and dialog.stacker_enabled_check.isChecked()
+            )
+            if stacker_enabled:
+                self._stacker_states[token] = StackerState(
+                    anchor_entry_price=entry_underlying,
+                    anchor_bar_idx=0,          # coordinator doesn't track bar idx
+                    signal_side=signal_side,
+                    step_points=float(dialog.stacker_step_input.value()),
+                    max_stacks=int(dialog.stacker_max_input.value()),
+                )
+                logger.info(
+                    "[STACKER] Anchor registered: token=%s side=%s price=%.2f step=%.0f max=%d",
+                    token, signal_side, entry_underlying,
+                    dialog.stacker_step_input.value(), dialog.stacker_max_input.value(),
+                )
+            else:
+                self._stacker_states.pop(token, None)
+
         self.persist_state()
 
         if dialog and hasattr(dialog, "_set_live_trade_state"):
@@ -290,6 +356,9 @@ class CvdAutomationCoordinator:
             for pos in positions:
                 self.exit_position_automated(pos, reason=exit_reason)
             if self.positions.pop(token, None) is not None:
+                # Reset stacker state and notify the dialog
+                self._stacker_states.pop(token, None)
+                self._notify_dialog_stacker_reset(token)
                 self.persist_state()
             return
 
@@ -317,6 +386,8 @@ class CvdAutomationCoordinator:
                     self.exit_position_automated(position, reason=reason)
             w._stop_cvd_pending_retry(token)
             self.positions.pop(token, None)
+            self._stacker_states.pop(token, None)
+            self._notify_dialog_stacker_reset(token)
         self.persist_state()
 
     def persist_state(self):
@@ -382,8 +453,19 @@ class CvdAutomationCoordinator:
         for token in removed_tokens:
             w._stop_cvd_pending_retry(token)
             self.positions.pop(token, None)
+            self._stacker_states.pop(token, None)
+            self._notify_dialog_stacker_reset(token)
         if removed_tokens:
             self.persist_state()
+
+    def _notify_dialog_stacker_reset(self, token: int):
+        """Tell the AutoTraderDialog for this token to clear its live stacker state."""
+        try:
+            dialog = self.main_window.cvd_single_chart_dialogs.get(token)
+            if dialog and hasattr(dialog, "reset_stacker"):
+                dialog.reset_stacker()
+        except Exception as exc:
+            logger.debug("[STACKER] Could not notify dialog reset for token=%s: %s", token, exc)
 
     def get_atm_contract_for_signal(self, signal_side: str) -> Optional[Contract]:
         w = self.main_window

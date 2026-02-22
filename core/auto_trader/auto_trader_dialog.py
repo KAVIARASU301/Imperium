@@ -30,7 +30,7 @@ from core.auto_trader.signal_renderer import SignalRendererMixin
 from core.auto_trader.simulator import SimulatorMixin
 from core.auto_trader.indicators import calculate_ema, calculate_vwap, calculate_atr, compute_adx, build_slope_direction_masks, is_chop_regime
 from core.auto_trader.signal_governance import SignalGovernance
-
+from core.auto_trader.stacker import StackerState
 logger = logging.getLogger(__name__)
 
 
@@ -124,6 +124,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         # Counts ATR reversal signals suppressed while a breakout trade is active (live mode)
         self._live_atr_skip_count: int = 0
         self._live_active_breakout_side: str | None = None  # tracks which side the breakout is on
+        self._live_stacker_state: StackerState | None = None
         self._simulator_results: dict | None = None
         self._chart_line_color = "#26A69A"
         self._price_line_color = "#FFE57F"
@@ -607,6 +608,37 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self.simulator_summary_label = QLabel("Simulator: click Run Simulator")
         self.simulator_summary_label.setStyleSheet("color: #8A9BA8; font-size: 11px; font-weight: 600;")
         ema_bar.addWidget(self.simulator_summary_label)
+        # ── Stacker widgets─
+        self.stacker_enabled_check = QCheckBox("Stacker")
+        self.stacker_enabled_check.setChecked(False)
+        self.stacker_enabled_check.setToolTip(
+            "Pyramid scaling: add a new position every N points of favorable move.\n"
+            "All stacked positions exit together when the anchor trade exits."
+        )
+        self.stacker_enabled_check.toggled.connect(self._on_stacker_settings_changed)
+
+        self.stacker_step_input = QSpinBox()
+        self.stacker_step_input.setRange(5, 500)
+        self.stacker_step_input.setValue(20)
+        self.stacker_step_input.setSingleStep(5)
+        self.stacker_step_input.setSuffix(" pts")
+        self.stacker_step_input.setStyleSheet(compact_spinbox_style)
+        self.stacker_step_input.setToolTip(
+            "Add a new position every this many points of favorable move from the anchor entry.\n"
+            "Example: 20 → stack at +20, +40, +60 points."
+        )
+        self.stacker_step_input.valueChanged.connect(self._on_stacker_settings_changed)
+
+        self.stacker_max_input = QSpinBox()
+        self.stacker_max_input.setRange(1, 5)
+        self.stacker_max_input.setValue(2)
+        self.stacker_max_input.setSpecialValueText("1×")
+        self.stacker_max_input.setStyleSheet(compact_spinbox_style)
+        self.stacker_max_input.setToolTip(
+            "Maximum number of stack entries to add on top of the anchor.\n"
+            "Total positions = anchor + this value. Max 5 for risk safety."
+        )
+        self.stacker_max_input.valueChanged.connect(self._on_stacker_settings_changed)
 
         self._build_setup_dialog(compact_combo_style, compact_spinbox_style)
 
@@ -961,6 +993,9 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self.chop_filter_atr_reversal_check.blockSignals(True)
         self.chop_filter_ema_cross_check.blockSignals(True)
         self.chop_filter_atr_divergence_check.blockSignals(True)
+        self.stacker_enabled_check.setChecked(_read_setting("stacker_enabled", False, bool))
+        self.stacker_step_input.setValue(_read_setting("stacker_step_points", 20, int))
+        self.stacker_max_input.setValue(_read_setting("stacker_max_stacks", 2, int))
         self.breakout_min_consol_input.blockSignals(True)
         self.breakout_min_consol_adx_input.blockSignals(True)
         self.chart_line_width_input.blockSignals(True)
@@ -1187,6 +1222,9 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
             "min_confidence_for_live": float(self.min_confidence_input.value()),
             "canary_live_ratio": float(self.canary_ratio_input.value()),
             "hide_simulator_button": self.hide_simulator_btn_check.isChecked(),
+            "stacker_enabled": self.stacker_enabled_check.isChecked(),
+            "stacker_step_points": int(self.stacker_step_input.value()),
+            "stacker_max_stacks": int(self.stacker_max_input.value()),
             # 🆕 Chop filter per-strategy
             "chop_filter_atr_reversal": self.chop_filter_atr_reversal_check.isChecked(),
             "chop_filter_ema_cross": self.chop_filter_ema_cross_check.isChecked(),
@@ -1207,6 +1245,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
             "window_background_image_path": self._window_bg_image_path,
             "chart_background_image_path": self._chart_bg_image_path,
             "show_vwap": self.vwap_checkbox.isChecked(),
+
         }
 
         for period, cb in self.setup_ema_default_checks.items():
@@ -1222,6 +1261,10 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
     # =========================================================================
     # SECTION 4: SETTINGS CHANGE HANDLERS
     # =========================================================================
+    def _on_stacker_settings_changed(self, *_):
+        """Persist stacker settings and reset any live stacker state."""
+        self._live_stacker_state = None
+        self._persist_setup_values()
 
     def _on_automation_settings_changed(self, *_):
         self._persist_setup_values()
@@ -1235,7 +1278,15 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
             "route": self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL,
             "signal_filter": self._selected_signal_filter(),
         })
+        self._live_stacker_state = None
 
+    def reset_stacker(self):
+        """Called by coordinator when anchor trade fully exits."""
+        self._live_stacker_state = None
+        logger.debug(
+            "[STACKER] State reset after anchor exit for token=%s",
+            self.instrument_token,
+        )
     def _on_signal_filter_changed(self, *_):
         if hasattr(self, "setup_signal_filter_combo"):
             self.setup_signal_filter_combo.blockSignals(True)
@@ -2200,3 +2251,64 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         except Exception:
             pass
         super().closeEvent(event)
+
+    def _check_and_emit_stack_signals(
+            self,
+            side: str,
+            strategy_type: str,
+            current_price: float,
+            current_bar_idx: int,
+            closed_bar_ts: str,
+            x_arr_val: float,
+    ):
+        """
+        Checks if stacking thresholds are crossed and emits additional buy signals.
+        """
+
+        if not getattr(self, "stacker_enabled_check", None):
+            return
+        if not self.stacker_enabled_check.isChecked():
+            return
+
+        state = self._live_stacker_state
+        if state is None:
+            return
+
+        if state.signal_side != side:
+            return
+
+        while state.should_add_stack(current_price):
+            state.add_stack(entry_price=current_price, bar_idx=current_bar_idx)
+            stack_num = len(state.stack_entries)
+
+            stack_ts = f"{closed_bar_ts}_stack{stack_num}"
+
+            payload = {
+                "instrument_token": self.instrument_token,
+                "symbol": self.symbol,
+                "signal_side": side,
+                "signal_type": strategy_type,
+                "signal_x": x_arr_val,
+                "price_close": current_price,
+                "stoploss_points": float(self.automation_stoploss_input.value()),
+                "route": self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL,
+                "timestamp": stack_ts,
+                "is_stack": True,
+                "stack_number": stack_num,
+                "anchor_price": state.anchor_entry_price,
+            }
+
+            logger.info(
+                "[STACKER] Stack #%d fired: token=%s side=%s price=%.2f (anchor=%.2f, step=%.0f)",
+                stack_num,
+                self.instrument_token,
+                side,
+                current_price,
+                state.anchor_entry_price,
+                state.step_points,
+            )
+
+            QTimer.singleShot(0, lambda p=payload: self.automation_signal.emit(p))
+
+            if not state.can_stack_more:
+                break

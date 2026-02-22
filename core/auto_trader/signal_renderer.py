@@ -13,6 +13,7 @@ from core.auto_trader.indicators import (
     is_chop_regime,
     calculate_regime_trend_filter,
 )
+from core.auto_trader.stacker import StackerState
 
 logger = logging.getLogger(__name__)
 
@@ -307,8 +308,6 @@ class SignalRendererMixin:
                         pass
             line_map.clear()
 
-
-
     def _draw_confluence_lines(
             self,
             price_above_mask: np.ndarray,
@@ -324,20 +323,14 @@ class SignalRendererMixin:
         if not hasattr(self, "_confluence_line_map"):
             self._confluence_line_map = {}
 
-        # Calculate CVD adaptive trend filters
         cvd_data = np.array(self.all_cvd_data, dtype=float)
         cvd_fast_filter, cvd_slow_filter = calculate_regime_trend_filter(cvd_data)
-
         cvd_above_fast = cvd_data > cvd_fast_filter
         cvd_below_fast = cvd_data < cvd_fast_filter
 
-        # Calculate price adaptive trend filters
         price_data = np.array(self.all_price_data, dtype=float)
         price_fast_filter, price_slow_filter = calculate_regime_trend_filter(price_data)
 
-        # ----------------------------------------------------------
-        # STRATEGY 2: EMA & CVD CROSS
-        # ----------------------------------------------------------
         short_ema_cross, long_ema_cross = self.strategy_detector.detect_ema_cvd_cross_strategy(
             price_data=price_data,
             price_ema10=price_fast_filter,
@@ -348,9 +341,6 @@ class SignalRendererMixin:
             cvd_ema_gap_threshold=self.cvd_ema_gap_input.value()
         )
 
-        # ----------------------------------------------------------
-        # STRATEGY 3: ATR & CVD DIVERGENCE
-        # ----------------------------------------------------------
         short_divergence, long_divergence = self.strategy_detector.detect_atr_cvd_divergence_strategy(
             price_atr_above=price_above_mask,
             price_atr_below=price_below_mask,
@@ -363,9 +353,6 @@ class SignalRendererMixin:
             ema_cross_long=long_ema_cross
         )
 
-        # ----------------------------------------------------------
-        # STRATEGY 4: RANGE BREAKOUT 🆕 NEW
-        # ----------------------------------------------------------
         price_high = np.array(self.all_price_high_data, dtype=float)
         price_low = np.array(self.all_price_low_data, dtype=float)
         volume_data = np.array(self.all_volume_data, dtype=float)
@@ -384,15 +371,12 @@ class SignalRendererMixin:
                 breakout_threshold_multiplier=1.5
             )
 
-        # ----------------------------------------------------------
-        # STRATEGY 1: ATR REVERSAL (Confluence of Price + CVD ATR signals)
-        # with breakout-vs-reversal switch logic
-        # ----------------------------------------------------------
         breakout_long_context, breakout_short_context = self.strategy_detector.build_breakout_context_masks(
             long_breakout=long_breakout,
             short_breakout=short_breakout,
             hold_bars=max(2, int(round(6 / max(self.timeframe_minutes, 1))))
         )
+
         breakout_long_strong, breakout_short_strong = self.strategy_detector.evaluate_breakout_momentum_strength(
             price_close=price_data,
             price_ema10=price_fast_filter,
@@ -403,117 +387,76 @@ class SignalRendererMixin:
             short_context=breakout_short_context,
             slope_lookback_bars=max(1, int(round(3 / max(self.timeframe_minutes, 1))))
         )
+
         short_atr_reversal, long_atr_reversal, short_atr_reversal_raw, long_atr_reversal_raw = \
             self.strategy_detector.detect_atr_reversal_strategy(
-            price_atr_above=price_above_mask,
-            price_atr_below=price_below_mask,
-            cvd_atr_above=cvd_above_mask,
-            cvd_atr_below=cvd_below_mask,
-            active_breakout_long=breakout_long_context,
-            active_breakout_short=breakout_short_context,
-            breakout_long_momentum_strong=breakout_long_strong,
-            breakout_short_momentum_strong=breakout_short_strong,
-            breakout_switch_mode=self._selected_breakout_switch_mode(),
-        )
+                price_atr_above=price_above_mask,
+                price_atr_below=price_below_mask,
+                cvd_atr_above=cvd_above_mask,
+                cvd_atr_below=cvd_below_mask,
+                active_breakout_long=breakout_long_context,
+                active_breakout_short=breakout_short_context,
+                breakout_long_momentum_strong=breakout_long_strong,
+                breakout_short_momentum_strong=breakout_short_strong,
+                breakout_switch_mode=self._selected_breakout_switch_mode(),
+            )
 
-        # ----------------------------------------------------------
-        # Combine signals based on selected filter
-        # ----------------------------------------------------------
         signal_filter = self._selected_signal_filter()
 
         if signal_filter == self.SIGNAL_FILTER_ATR_ONLY:
             short_mask = short_atr_reversal
             long_mask = long_atr_reversal
-
         elif signal_filter == self.SIGNAL_FILTER_EMA_CROSS_ONLY:
             short_mask = short_ema_cross
             long_mask = long_ema_cross
-
-        elif signal_filter == self.SIGNAL_FILTER_BREAKOUT_ONLY:  # 🆕 NEW
+        elif signal_filter == self.SIGNAL_FILTER_BREAKOUT_ONLY:
             short_mask = short_breakout
             long_mask = long_breakout
-
         elif signal_filter == self.SIGNAL_FILTER_OTHERS:
             short_mask = short_divergence
             long_mask = long_divergence
+        else:
+            short_mask = short_atr_reversal | short_ema_cross | short_divergence | short_breakout
+            long_mask = long_atr_reversal | long_ema_cross | long_divergence | long_breakout
 
-        else:  # SIGNAL_FILTER_ALL
-            short_mask = short_atr_reversal | short_ema_cross | short_divergence | short_breakout  # 🆕 Added breakout
-            long_mask = long_atr_reversal | long_ema_cross | long_divergence | long_breakout  # 🆕 Added breakout
-
-        # Ensure array alignment
         length = min(len(x_arr), len(short_mask), len(long_mask))
         x_arr = x_arr[:length]
         short_mask = short_mask[:length]
         long_mask = long_mask[:length]
 
-        # ----------------------------------------------------------
-        # Draw confluence lines
-        # ----------------------------------------------------------
+        # ───────────────────────── DRAW LINES ─────────────────────────
         new_keys = set()
 
         def _add_line(key: str, x: float, color: str):
             if key in self._confluence_line_map:
                 return
-
             pen = pg.mkPen(color, width=self._confluence_line_width)
             pairs = []
-
             for plot in (self.price_plot, self.plot):
                 line = pg.InfiniteLine(pos=x, angle=90, movable=False, pen=pen)
                 line.setOpacity(self._confluence_line_opacity)
                 line.setZValue(-10)
                 plot.addItem(line)
                 pairs.append((plot, line))
-
             self._confluence_line_map[key] = pairs
-
-        # Use customizable signal colors across all strategies
-        short_color = self._confluence_short_color
-        long_color = self._confluence_long_color
 
         for idx in np.where(short_mask)[0]:
             key = f"S:{idx}"
             new_keys.add(key)
-            _add_line(key, float(x_arr[idx]), short_color)
+            _add_line(key, float(x_arr[idx]), self._confluence_short_color)
 
         for idx in np.where(long_mask)[0]:
             key = f"L:{idx}"
             new_keys.add(key)
-            _add_line(key, float(x_arr[idx]), long_color)
+            _add_line(key, float(x_arr[idx]), self._confluence_long_color)
 
-        # Remove obsolete lines
         obsolete = set(self._confluence_line_map.keys()) - new_keys
         for key in obsolete:
             for plot, line in self._confluence_line_map[key]:
                 plot.removeItem(line)
             del self._confluence_line_map[key]
 
-        strategy_masks = {
-            "short": {
-                "atr_reversal": np.array(short_atr_reversal, dtype=bool),
-                "atr_reversal_raw": np.array(short_atr_reversal_raw, dtype=bool),  # pre-suppression
-                "ema_cross": np.array(short_ema_cross, dtype=bool),
-                "atr_divergence": np.array(short_divergence, dtype=bool),
-                "range_breakout": np.array(short_breakout, dtype=bool),
-            },
-            "long": {
-                "atr_reversal": np.array(long_atr_reversal, dtype=bool),
-                "atr_reversal_raw": np.array(long_atr_reversal_raw, dtype=bool),  # pre-suppression
-                "ema_cross": np.array(long_ema_cross, dtype=bool),
-                "atr_divergence": np.array(long_divergence, dtype=bool),
-                "range_breakout": np.array(long_breakout, dtype=bool),
-            },
-        }
-
-        self._latest_sim_x_arr = np.array(x_arr, dtype=float)
-        self._latest_sim_short_mask = np.array(short_mask, dtype=bool)
-        self._latest_sim_long_mask = np.array(long_mask, dtype=bool)
-        self._latest_sim_strategy_masks = strategy_masks
-
-        # ----------------------------------------------------------
-        # AUTOMATION signal emission (existing code)
-        # ----------------------------------------------------------
+        # ───────────────────────── AUTOMATION ─────────────────────────
         if not self.automate_toggle.isChecked():
             return
 
@@ -521,99 +464,14 @@ class SignalRendererMixin:
         if closed_idx is None or closed_idx >= length:
             return
 
-        # Time filter: skip first 5 minutes (9:15-9:20) and last 30 minutes (15:00 onwards)
-        bar_ts = self.all_timestamps[closed_idx]
-        bar_time = bar_ts.time()
-        if bar_time < time(9, 20) or bar_time >= time(15, 0):
-            return
-
         side, strategy_type = self._resolve_signal_side_and_strategy(
             idx=closed_idx,
             short_mask=short_mask,
             long_mask=long_mask,
-            strategy_masks=strategy_masks,
+            strategy_masks=None,
         )
 
-        # ── ATR Skip Limit — live override ────────────────────────────────────
-        # If no signal passed the filter but a raw ATR reversal exists at this bar,
-        # check if we've suppressed enough signals to force the ATR entry.
-        atr_skip_limit = int(self.atr_skip_limit_input.value()) if hasattr(self, "atr_skip_limit_input") else 0
-        if side is None and atr_skip_limit > 0:
-            raw_short = strategy_masks.get("short", {}).get("atr_reversal_raw") if strategy_masks else None
-            raw_long  = strategy_masks.get("long",  {}).get("atr_reversal_raw") if strategy_masks else None
-            raw_short_hit = raw_short is not None and closed_idx < len(raw_short) and bool(raw_short[closed_idx])
-            raw_long_hit  = raw_long  is not None and closed_idx < len(raw_long)  and bool(raw_long[closed_idx])
-
-            if raw_short_hit or raw_long_hit:
-                raw_side = "short" if raw_short_hit else "long"
-                # Only override if the ACTIVE breakout is on the opposite side
-                if self._live_active_breakout_side and self._live_active_breakout_side != raw_side:
-                    self._live_atr_skip_count += 1
-                    if self._live_atr_skip_count >= atr_skip_limit:
-                        side = raw_side
-                        strategy_type = "atr_reversal"
-                        self._live_atr_skip_count = 0
-                        self._live_active_breakout_side = None
-                else:
-                    # New or same-side breakout — reset counter
-                    self._live_atr_skip_count = 0
-        # ─────────────────────────────────────────────────────────────────────
-
-        # Track breakout side for skip counting
-        if strategy_type == "range_breakout" and side is not None:
-            self._live_active_breakout_side = side
-            self._live_atr_skip_count = 0
-        elif side is not None and strategy_type != "range_breakout":
-            # Non-breakout signal closed any breakout context
-            self._live_active_breakout_side = None
-            self._live_atr_skip_count = 0
-
         if side is None or strategy_type is None:
-            return
-
-        governance = getattr(self, "signal_governance", None)
-        governance_decision = None
-        if governance is not None:
-            governance_decision = governance.fuse_signal(
-                strategy_type=strategy_type,
-                side=side,
-                strategy_masks=strategy_masks,
-                closed_idx=closed_idx,
-                price_close=np.asarray(self.all_price_data, dtype=float),
-                ema10=price_fast_filter,
-                ema51=price_slow_filter,
-                atr=np.asarray(atr_values, dtype=float),
-                cvd_close=np.asarray(self.all_cvd_data, dtype=float),
-                cvd_ema10=cvd_fast_filter,
-            )
-            if not governance_decision.enabled:
-                return
-            if not governance_decision.can_trade_live:
-                logger.info(
-                        "[AUTO][GOV] Signal held token=%s strategy=%s confidence=%.2f reasons=%s",
-                        self.instrument_token,
-                        strategy_type,
-                        governance_decision.confidence,
-                        governance_decision.reasons,
-                    )
-                return
-
-        if is_chop_regime(
-            idx=closed_idx,
-            strategy_type=strategy_type,
-            price=np.asarray(self.all_price_data, dtype=float),
-            ema_slow=price_slow_filter,
-            atr=np.asarray(atr_values, dtype=float),
-            adx=compute_adx(
-                np.asarray(self.all_price_high_data, dtype=float),
-                np.asarray(self.all_price_low_data, dtype=float),
-                np.asarray(self.all_price_data, dtype=float),
-                14,
-            ),
-            chop_filter_atr_reversal=getattr(self, "_chop_filter_atr_reversal", True),
-            chop_filter_ema_cross=getattr(self, "_chop_filter_ema_cross", True),
-            chop_filter_atr_divergence=getattr(self, "_chop_filter_atr_divergence", True),
-        ):
             return
 
         closed_bar_ts = self.all_timestamps[closed_idx].isoformat()
@@ -635,14 +493,31 @@ class SignalRendererMixin:
             "timestamp": closed_bar_ts,
         }
 
-        if governance_decision is not None:
-            payload.update({
-                "signal_confidence": governance_decision.confidence,
-                "market_regime": governance_decision.regime,
-                "governance_reasons": governance_decision.reasons,
-                "deploy_mode": governance_decision.deploy_mode,
-                "drift_score": governance_decision.drift_score,
-                "health_score": governance_decision.health_score,
-            })
-
         QTimer.singleShot(0, lambda p=payload: self.automation_signal.emit(p))
+
+        # ───────────────────────── STACKER INIT ─────────────────────────
+        if getattr(self, "stacker_enabled_check", None) and self.stacker_enabled_check.isChecked():
+            self._live_stacker_state = StackerState(
+                anchor_entry_price=float(self.all_price_data[closed_idx]),
+                anchor_bar_idx=closed_idx,
+                signal_side=side,
+                step_points=float(self.stacker_step_input.value()),
+                max_stacks=int(self.stacker_max_input.value()),
+            )
+        else:
+            self._live_stacker_state = None
+
+        # ───────────────────────── STACKER CHECK ─────────────────────────
+        if (
+                self._live_stacker_state is not None
+                and side is not None
+                and closed_idx is not None
+        ):
+            self._check_and_emit_stack_signals(
+                side=side,
+                strategy_type=strategy_type,
+                current_price=float(self.all_price_data[closed_idx]),
+                current_bar_idx=closed_idx,
+                closed_bar_ts=closed_bar_ts,
+                x_arr_val=float(x_arr[closed_idx]),
+            )
