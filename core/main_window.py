@@ -41,7 +41,6 @@ from core.position_manager import PositionManager
 from widgets.positions_table import PositionsTable
 from core.config import REFRESH_INTERVAL_MS
 from widgets.buy_exit_panel import BuyExitPanel
-from dialogs.order_history_dialog import OrderHistoryDialog
 from utils.trade_logger import TradeLogger
 from dialogs.pnl_history_dialog import PnlHistoryDialog
 from dialogs.pending_orders_dialog import PendingOrdersDialog
@@ -50,7 +49,6 @@ from core.paper_trading_manager import PaperTradingManager
 from dialogs.option_chain_dialog import OptionChainDialog
 from dialogs.strategy_builder_dialog import StrategyBuilderDialog
 from dialogs.order_confirmation_dialog import OrderConfirmationDialog
-from dialogs.market_monitor_dialog import MarketMonitorDialog
 from core.cvd.cvd_engine import CVDEngine
 from core.auto_trader import AutoTraderDialog
 from dialogs.cvd_multi_chart_dialog import CVDMultiChartDialog
@@ -64,10 +62,9 @@ from utils.about import show_about
 from utils.expiry_days import show_expiry_days
 from utils.shortcuts import show_shortcuts
 from dialogs.fii_dii_dialog import FIIDIIDialog
-from dialogs.watchlist_dialog import WatchlistDialog
-from dialogs.journal_dialog import JournalDialog
 from widgets.status_bar import StatusBarWidget
 from utils.network_utils import with_timeout, NetworkError, NetworkMonitor
+from core.main_window_coordinators import RiskController, DialogCoordinator, MarketDataOrchestrator
 import requests
 
 logger = logging.getLogger(__name__)
@@ -181,6 +178,11 @@ class ImperiumMainWindow(QMainWindow):
 
         self._last_subscription_set: set[int] = set()
 
+        # Coordinators extracted from main window for lower complexity
+        self.risk_controller = RiskController(self)
+        self.dialog_coordinator = DialogCoordinator(self)
+        self.market_data_orchestrator = MarketDataOrchestrator(self)
+
         # --- FIX: UI Throttling Implementation ---
         self._latest_market_data = {}
         self._ui_update_needed = False
@@ -229,63 +231,10 @@ class ImperiumMainWindow(QMainWindow):
         self._publish_status("Loading instruments...", 5000, level="action")
 
     def _on_market_data(self, data: list):
-        # 1️⃣ CVD FIRST
-        self.cvd_engine.process_ticks(data)
-
-        # 3️⃣ Existing throttling logic
-        for tick in data:
-            if 'instrument_token' in tick:
-                self._latest_market_data[tick['instrument_token']] = tick
-
-        self._ui_update_needed = True
+        self.market_data_orchestrator.on_market_data(data)
 
     def _update_throttled_ui(self):
-        """
-        Throttled UI update loop.
-        CVD is now processed in _on_market_data (non-throttled).
-        """
-        if not self._ui_update_needed:
-            return
-
-        # Use latest known tick per instrument
-        ticks_to_process = list(self._latest_market_data.values())
-
-        # --- Core market consumers (CVD REMOVED - processed in _on_market_data) ---
-        self.strike_ladder.update_prices(ticks_to_process)
-        self.position_manager.update_pnl_from_market_data(ticks_to_process)
-
-        # --- UI updates ---
-        self._update_account_summary_widget()
-
-        if self.positions_dialog and self.positions_dialog.isVisible():
-            if hasattr(self.positions_dialog, 'update_market_data'):
-                self.positions_dialog.update_market_data(ticks_to_process)
-
-        # --- INDEX PRICE UPDATE ---
-        for tick in ticks_to_process:
-            token = tick.get("instrument_token")
-            if not token:
-                continue
-
-            current_symbol = self.header.get_current_settings().get("symbol")
-            if current_symbol in self.instrument_data:
-                index_token = self.instrument_data[current_symbol].get("instrument_token")
-                if token == index_token:
-                    self.strike_ladder.update_index_price(
-                        tick.get("last_price")
-                    )
-
-        ladder_data = self.strike_ladder.get_ladder_data()
-        if ladder_data:
-            atm_strike = self.strike_ladder.atm_strike
-            interval = self.strike_ladder.get_strike_interval()
-            self.buy_exit_panel.update_strike_ladder(atm_strike, interval, ladder_data)
-
-        if self.performance_dialog and self.performance_dialog.isVisible():
-            self._update_performance()
-
-        # Reset UI throttle flag
-        self._ui_update_needed = False
+        self.market_data_orchestrator.update_throttled_ui()
 
     def _apply_dark_theme(self):
         try:
@@ -593,83 +542,25 @@ class ImperiumMainWindow(QMainWindow):
         menu_actions['fii_dii_data'].triggered.connect(self._show_fii_dii_dialog)
 
     def _show_order_history_dialog(self):
-        if not hasattr(self, 'order_history_dialog') or self.order_history_dialog is None:
-            self.order_history_dialog = OrderHistoryDialog(self)
-
-            # 🔥 Refresh must re-read from TradeLedger
-            self.order_history_dialog.refresh_requested.connect(
-                self._refresh_order_history_from_ledger
-            )
-
-        self._refresh_order_history_from_ledger()
-
-        self.order_history_dialog.show()
-        self.order_history_dialog.activateWindow()
+        self.dialog_coordinator.show_order_history_dialog()
 
     def _show_journal_dialog(self, enforce_read_time: bool = False):
-        if self.journal_dialog is None:
-            self.journal_dialog = JournalDialog(
-                config_manager=self.config_manager,
-                parent=self,
-                enforce_read_time=enforce_read_time
-            )
-            self.journal_dialog.finished.connect(
-                lambda: setattr(self, 'journal_dialog', None)
-            )
-        else:
-            if enforce_read_time:
-                self.journal_dialog._enforce_read_time = True
-        self.journal_dialog.show()
-        self.journal_dialog.activateWindow()
-        self.journal_dialog.raise_()
+        self.dialog_coordinator.show_journal_dialog(enforce_read_time=enforce_read_time)
 
     def _show_startup_journal(self):
         self._show_journal_dialog(enforce_read_time=True)
 
     def _refresh_order_history_from_ledger(self):
-        """
-        Load finalized trades from TradeLedger (single source of truth)
-        """
-        today = date.today().isoformat()
-
-        trades = self.trade_ledger.get_trades_for_date(today)
-
-        # Ledger-based update
-        self.order_history_dialog.update_trades(trades)
+        self.dialog_coordinator.refresh_order_history_from_ledger()
 
     def _show_market_monitor_dialog(self):
-        """Creates and shows a new Market Monitor dialog instance."""
-        try:
-            # FIX: Pass the shared market_data_worker to the dialog
-            dialog = MarketMonitorDialog(
-                real_kite_client=self.real_kite_client,
-                market_data_worker=self.market_data_worker,
-                config_manager=self.config_manager,
-                parent=self
-            )
-
-            self.market_monitor_dialogs.append(dialog)
-            dialog.destroyed.connect(lambda: self._on_market_monitor_closed(dialog))
-            dialog.show()
-        except Exception as e:
-            logger.error(f"Failed to create Market Monitor dialog: {e}", exc_info=True)
-            QMessageBox.critical(self, "Error", f"Could not open Market Monitor:\n{e}")
+        self.dialog_coordinator.show_market_monitor_dialog()
 
     def _show_watchlist_dialog(self):
-        if self.watchlist_dialog is None:
-            symbols = sorted(self.instrument_data.keys()) if self.instrument_data else []
-            self.watchlist_dialog = WatchlistDialog(symbols=symbols, parent=self)
-            self.watchlist_dialog.symbol_selected.connect(self._on_watchlist_symbol_selected)
-            self.watchlist_dialog.finished.connect(lambda: setattr(self, "watchlist_dialog", None))
-        self.watchlist_dialog.show()
-        self.watchlist_dialog.raise_()
-        self.watchlist_dialog.activateWindow()
+        self.dialog_coordinator.show_watchlist_dialog()
 
     def _on_watchlist_symbol_selected(self, symbol: str):
-        if symbol and symbol in self.instrument_data:
-            self.header.set_active_symbol(symbol)
-        else:
-            logger.warning("Watchlist selected symbol not available: %s", symbol)
+        self.dialog_coordinator.on_watchlist_symbol_selected(symbol)
 
     def _show_cvd_chart_dialog(self):
         current_settings = self.header.get_current_settings()
@@ -1550,15 +1441,10 @@ class ImperiumMainWindow(QMainWindow):
         dlg.show()
 
     def _on_cvd_market_monitor_closed(self):
-        self._update_market_subscriptions()
+        self.market_data_orchestrator.on_cvd_market_monitor_closed()
 
     def _on_market_monitor_closed(self, dialog: QDialog):
-        """Removes the market monitor dialog from the list when it's closed."""
-        if dialog in self.market_monitor_dialogs:
-            # FIX: Ensure the dialog unsubscribes from symbols when closed
-            dialog.unsubscribe_all()
-            self.market_monitor_dialogs.remove(dialog)
-            logger.info(f"Closed a Market Monitor window. {len(self.market_monitor_dialogs)} remain open.")
+        self.dialog_coordinator.on_market_monitor_closed(dialog)
 
     def _show_option_chain_dialog(self):
         if not self.instrument_data:
@@ -1921,29 +1807,7 @@ class ImperiumMainWindow(QMainWindow):
         return cached['price']
 
     def _update_market_subscriptions(self):
-
-        required_tokens = set()
-
-        # Visible ladder tokens
-        if hasattr(self.strike_ladder, "get_visible_contract_tokens"):
-            ladder_tokens = self.strike_ladder.get_visible_contract_tokens()
-            required_tokens.update(ladder_tokens)
-
-        # Active CVD tokens
-        required_tokens.update(self.active_cvd_tokens)
-
-        if required_tokens == self._last_subscription_set:
-            logger.debug("Subscription set unchanged. Skipping update.")
-            return
-
-        logger.info(
-            f"Subscription diff detected | Old: {len(self._last_subscription_set)} "
-            f"| New: {len(required_tokens)}"
-        )
-
-        self._last_subscription_set = required_tokens.copy()
-
-        self.market_data_worker.set_instruments(required_tokens)
+        self.market_data_orchestrator.update_market_subscriptions()
 
     @with_timeout(timeout_seconds=5)
     def _periodic_api_health_check(self):
@@ -2319,98 +2183,20 @@ class ImperiumMainWindow(QMainWindow):
         self._reload_risk_limits_from_settings()
 
     def _reload_risk_limits_from_settings(self):
-        self._intraday_drawdown_limit = float(max(0.0, self.settings.get("risk_intraday_drawdown_limit", 0.0)))
-        self._max_portfolio_loss = float(max(0.0, self.settings.get("risk_max_portfolio_loss", 0.0)))
-        self._max_open_positions = int(max(0, self.settings.get("risk_max_open_positions", 0)))
-        self._max_gross_open_quantity = int(max(0, self.settings.get("risk_max_gross_open_quantity", 0)))
+        self.risk_controller.reload_limits_from_settings()
 
     def _activate_global_kill_switch(self, reason: str, user_message: Optional[str] = None,
                                      exit_open_positions: bool = True):
-        if self.global_kill_switch_active:
-            return
-
-        self.global_kill_switch_active = True
-        self.global_kill_switch_reason = reason
-        self.intraday_drawdown_lock_active = True
-
-        logger.critical("🚨 GLOBAL KILL SWITCH ACTIVATED | reason=%s", reason)
-
-        # Disable automation toggles and clear active auto-trade state.
-        for token, state in self._cvd_automation_market_state.items():
-            state["enabled"] = False
-        self._cvd_automation_positions.clear()
-        self._persist_cvd_automation_state()
-
-        if exit_open_positions:
-            positions = [p for p in self.position_manager.get_all_positions() if p.quantity != 0]
-            if positions:
-                self._execute_bulk_exit(positions)
-
-        msg = user_message or f"Global kill switch activated: {reason}."
-        self._publish_status(msg, 6000, level="error")
-        QMessageBox.critical(self, "Risk Lock Active", msg)
+        self.risk_controller.activate_global_kill_switch(reason, user_message, exit_open_positions)
 
     def _evaluate_risk_locks(self):
-        stats = self.trade_ledger.get_daily_trade_stats(trading_day=date.today().isoformat())
-        realized_pnl = float(stats.get("total_pnl") or 0.0)
-        unrealized_pnl = float(self.position_manager.get_total_pnl() or 0.0)
-        total_intraday_pnl = realized_pnl + unrealized_pnl
-
-        if total_intraday_pnl > self._intraday_peak_pnl:
-            self._intraday_peak_pnl = total_intraday_pnl
-
-        if self._max_portfolio_loss > 0 and total_intraday_pnl <= -self._max_portfolio_loss:
-            self._activate_global_kill_switch(
-                reason="MAX_PORTFOLIO_LOSS",
-                user_message=(
-                    f"Max portfolio loss breached: ₹{total_intraday_pnl:,.2f} "
-                    f"(limit ₹{-self._max_portfolio_loss:,.2f}). Exiting all and locking entries."
-                ),
-            )
-            return
-
-        if self._intraday_drawdown_limit > 0:
-            drawdown = self._intraday_peak_pnl - total_intraday_pnl
-            if drawdown >= self._intraday_drawdown_limit:
-                self._activate_global_kill_switch(
-                    reason="INTRADAY_DRAWDOWN_LOCK",
-                    user_message=(
-                        f"Intraday drawdown lock triggered: drawdown ₹{drawdown:,.2f} "
-                        f"from peak ₹{self._intraday_peak_pnl:,.2f}."
-                    ),
-                )
+        self.risk_controller.evaluate_risk_locks()
 
     def _validate_pre_trade_risk(self, transaction_type: str, quantity: int, tradingsymbol: Optional[str]) -> tuple[bool, str]:
-        # Never block exits; only guard potentially opening legs.
-        if transaction_type != self.trader.TRANSACTION_TYPE_BUY:
-            return True, ""
-
-        if self.global_kill_switch_active:
-            return False, f"Global kill switch is active ({self.global_kill_switch_reason or 'risk lock'})."
-
-        if self._max_open_positions > 0:
-            active_symbols = {
-                p.tradingsymbol for p in self.position_manager.get_all_positions()
-                if p.quantity != 0
-            }
-            is_new_symbol = tradingsymbol not in active_symbols
-            if is_new_symbol and len(active_symbols) >= self._max_open_positions:
-                return False, f"Max open positions limit reached ({self._max_open_positions})."
-
-        if self._max_gross_open_quantity > 0:
-            current_gross_qty = sum(abs(int(p.quantity)) for p in self.position_manager.get_all_positions() if p.quantity)
-            if current_gross_qty + abs(int(quantity or 0)) > self._max_gross_open_quantity:
-                return False, (
-                    f"Gross quantity limit breached ({self._max_gross_open_quantity}). "
-                    f"Current {current_gross_qty}, requested +{abs(int(quantity or 0))}."
-                )
-
-        return True, ""
+        return self.risk_controller.validate_pre_trade_risk(transaction_type, quantity, tradingsymbol)
 
     def _reject_order_for_risk(self, reason: str):
-        logger.warning("Order blocked by risk control: %s", reason)
-        self._publish_status(f"Risk block: {reason}", 5000, level="warning")
-        QMessageBox.warning(self, "Risk Control", f"Order blocked by risk controls.\n\n{reason}")
+        self.risk_controller.reject_order_for_risk(reason)
 
     def _on_settings_changed(self, settings: dict):
         """
@@ -4058,13 +3844,7 @@ class ImperiumMainWindow(QMainWindow):
 
     def _on_trading_day_reset(self):
         logger.info("Trading day reset at 07:30 AM")
-
-        # Reset intraday risk locks for the new session.
-        self.global_kill_switch_active = False
-        self.global_kill_switch_reason = ""
-        self.intraday_drawdown_lock_active = False
-        self._intraday_peak_pnl = 0.0
-
+        self.risk_controller.reset_for_new_trading_day()
         self._update_account_summary_widget()
         self._schedule_trading_day_reset()  # schedule next day
 

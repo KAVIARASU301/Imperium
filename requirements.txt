@@ -19,9 +19,5 @@ setuptools~=80.7.1
 
 
 scipy~=1.15.3
-requests~=2.32.3
-beautifulsoup4~=4.11.0
-Flask~=3.1.1
 utils~=1.0.2
-urllib3~=2.4.0
 pyqtgraph~=0.13.7
