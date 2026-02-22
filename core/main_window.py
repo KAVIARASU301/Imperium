@@ -3254,9 +3254,6 @@ class ImperiumMainWindow(QMainWindow):
                 return anchored_sl, anchored_tp, anchored_tsl
 
             def _apply_risk_after_fill():
-                if transaction_type != self.trader.TRANSACTION_TYPE_BUY:
-                    return
-
                 position = self.position_manager.get_position(contract_to_trade.tradingsymbol)
                 if not position:
                     logger.warning(
@@ -3282,13 +3279,10 @@ class ImperiumMainWindow(QMainWindow):
 
             # 🔥 FIX: For paper trading, schedule SL/TP application AFTER position refresh
             if isinstance(self.trader, PaperTradingManager):
-                # Store SL/TP to apply after position is created
-                if transaction_type == self.trader.TRANSACTION_TYPE_BUY:
-                    # Refresh positions first, then apply SL/TP
-                    QTimer.singleShot(500, self._refresh_positions)
-                    QTimer.singleShot(1000, _apply_risk_after_fill)  # Apply SL/TP 1 second after order
-                else:
-                    QTimer.singleShot(500, self._refresh_positions)
+                # Refresh positions first, then apply SL/TP/TSL from fill-anchored cash risk.
+                # This must run for both BUY and SELL entries so trailing SL works consistently.
+                QTimer.singleShot(500, self._refresh_positions)
+                QTimer.singleShot(1000, _apply_risk_after_fill)
 
                 self._play_sound(success=True)
                 return
