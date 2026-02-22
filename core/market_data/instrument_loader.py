@@ -29,6 +29,7 @@ ALLOWED_SYMBOLS = {
     "NIFTY",
     "BANKNIFTY",
     "FINNIFTY",
+    "MIDCPNIFTY",
     # Top NFO stocks (filtered to keep load low)
     "RELIANCE",
     "TCS",

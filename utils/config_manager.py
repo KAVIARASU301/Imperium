@@ -1,4 +1,4 @@
-# core/utils/config_manager.py
+# utils/config_manager.py
 """Configuration management for the application"""
 
 import json

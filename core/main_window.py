@@ -35,7 +35,7 @@ from core.auto_trader.cvd_automation_coordinator import CvdAutomationCoordinator
 from core.cvd.cvd_symbol_sets import CVDSymbolSetManager
 from dialogs.cvd_symbol_set_multi_chart_dialog import CVDSetMultiChartDialog
 from core.execution.trade_ledger import TradeLedger
-from utils.title_bar import TitleBar
+from widgets.title_bar import TitleBar
 from core.ui.main_window_shell import MainWindowShell
 from utils.api_circuit_breaker import APICircuitBreaker
 from utils.about import show_about

@@ -125,7 +125,7 @@ class HeaderToolbar(QFrame):
 
         # Quick access buttons
         self.index_buttons = {}
-        indices = ["BANKNIFTY", "NIFTY", "FINNIFTY", "SENSEX"]
+        indices = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"]
         for symbol in indices:
             btn = AnimatedButton(symbol)
             btn.setCheckable(True)
