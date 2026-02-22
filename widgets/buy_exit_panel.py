@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
     QGroupBox, QRadioButton, QButtonGroup, QFrame, QAbstractSpinBox
 )
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Signal, QSettings
 from PySide6.QtGui import QCursor, QFont
 from kiteconnect import KiteConnect
 
@@ -90,8 +90,11 @@ class BuyExitPanel(QWidget):
         self.strike_ladder_data = []
         self.radio_history = []
         self._margin_effect: Optional[QGraphicsEffect] = None
+        self._settings = QSettings("ImperiumDesk", "BuyExitPanel")
+        self._is_restoring_settings = False
 
         self._setup_ui()
+        self._load_persisted_settings()
         self._apply_styles()
         self._update_ui_for_option_type()
 
@@ -408,6 +411,7 @@ class BuyExitPanel(QWidget):
         self.option_type = OptionType.PUT if self.option_type == OptionType.CALL else OptionType.CALL
         logger.info(f"Toggled panel to {self.option_type.name}")
         self._update_ui_for_option_type()
+        self._persist_settings()
 
     def _update_ui_for_option_type(self):
         self.title_label.setText(self.option_type.name)
@@ -499,6 +503,7 @@ class BuyExitPanel(QWidget):
         #     self._margin_anim.start()
 
         self._last_margin_value = total_premium
+        self._persist_settings()
 
     def update_parameters(self, symbol: str, lot_size: int, lot_quantity: int, expiry: str):
         self.current_symbol = symbol
@@ -525,6 +530,58 @@ class BuyExitPanel(QWidget):
             self._update_margin()
 
         return handler
+
+    def _load_persisted_settings(self):
+        self._is_restoring_settings = True
+        try:
+            option_type_value = str(self._settings.value("option_type", OptionType.CALL.value)).upper()
+            self.option_type = OptionType.PUT if option_type_value == OptionType.PUT.value else OptionType.CALL
+
+            below_value = int(self._settings.value("contracts_below", 0))
+            above_value = int(self._settings.value("contracts_above", 0))
+            self.below_spin.setValue(max(self.below_spin.minimum(), min(self.below_spin.maximum(), below_value)))
+            self.above_spin.setValue(max(self.above_spin.minimum(), min(self.above_spin.maximum(), above_value)))
+
+            selected_radios = self._settings.value("selected_radios", [0])
+            if isinstance(selected_radios, str):
+                selected_indices = [int(part) for part in selected_radios.split(",") if part.strip().isdigit()]
+            elif isinstance(selected_radios, (list, tuple)):
+                selected_indices = [int(i) for i in selected_radios]
+            else:
+                selected_indices = [int(selected_radios)] if selected_radios is not None else [0]
+
+            valid_selected = sorted({i for i in selected_indices if 0 <= i < len(self.radio_buttons)})[:2]
+            if not valid_selected:
+                valid_selected = [0]
+
+            for radio in self.radio_buttons:
+                radio.blockSignals(True)
+                radio.setChecked(False)
+                radio.blockSignals(False)
+
+            self.radio_history = []
+            for idx in valid_selected:
+                self.radio_buttons[idx].blockSignals(True)
+                self.radio_buttons[idx].setChecked(True)
+                self.radio_buttons[idx].blockSignals(False)
+                self.radio_history.append(idx)
+        except Exception as e:
+            logger.warning(f"Failed to load BuyExit panel settings: {e}")
+        finally:
+            self._is_restoring_settings = False
+
+    def _persist_settings(self):
+        if self._is_restoring_settings:
+            return
+        try:
+            self._settings.setValue("option_type", self.option_type.value)
+            self._settings.setValue("contracts_below", self.below_spin.value())
+            self._settings.setValue("contracts_above", self.above_spin.value())
+            selected = [i for i, b in enumerate(self.radio_buttons) if b.isChecked()]
+            self._settings.setValue("selected_radios", selected)
+            self._settings.sync()
+        except Exception as e:
+            logger.warning(f"Failed to persist BuyExit panel settings: {e}")
 
     def _get_skip_strategy(self):
         selected = {i for i, b in enumerate(self.radio_buttons) if b.isChecked()}
