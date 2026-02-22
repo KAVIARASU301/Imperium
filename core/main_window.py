@@ -13,12 +13,11 @@ from uuid import uuid4
 from PySide6.QtWidgets import (QMainWindow, QMessageBox, QDialog, QSplitter, QLabel, QFrame, QVBoxLayout)
 from PySide6.QtCore import Qt, QTimer, QByteArray
 from kiteconnect import KiteConnect
-from PySide6.QtGui import QShortcut, QKeySequence
 
 # Internal imports
 from utils.config_manager import ConfigManager
 from core.market_data.market_data_worker import MarketDataWorker
-from utils.data_models import OptionType, Position, Contract
+from utils.data_models import Position, Contract, OptionType
 from core.market_data.instrument_loader import InstrumentLoader
 from dialogs.settings_dialog import SettingsDialog
 from dialogs.open_positions_dialog import OpenPositionsDialog
@@ -41,7 +40,7 @@ from core.ui.main_window_shell import MainWindowShell
 from utils.api_circuit_breaker import APICircuitBreaker
 from utils.about import show_about
 from utils.expiry_days import show_expiry_days
-from utils.shortcuts import show_shortcuts
+from utils.shortcuts import show_shortcuts, setup_keyboard_shortcuts
 from dialogs.fii_dii_dialog import FIIDIIDialog
 from utils.network_utils import with_timeout, NetworkError, NetworkMonitor
 from core.main_window_coordinators import RiskController, DialogCoordinator, MarketDataOrchestrator
@@ -534,110 +533,8 @@ class ImperiumMainWindow(QMainWindow):
         self.strike_ladder.visible_tokens_changed.connect(self._update_market_subscriptions)
 
     def _setup_keyboard_shortcuts(self):
-        """
-        Global keyboard shortcuts for ultra-fast trading.
-        These are safe because they reuse existing methods.
-        """
-
-        self._shortcuts = []
-
-        def bind(key, callback):
-            sc = QShortcut(QKeySequence(key), self)
-            sc.setContext(Qt.ApplicationShortcut)  # Works even if focus is elsewhere
-            sc.activated.connect(callback)
-            self._shortcuts.append(sc)
-
-        # -------------------------
-        # BUY / SELL (ATM)
-        # -------------------------
-        # BUY (current option type)
-        bind("B", lambda: self.buy_exit_panel._on_buy_clicked())
-
-        # Toggle CALL / PUT
-        bind("T", self.buy_exit_panel.toggle_option_type)
-
-        # -------------------------
-        # EXIT CONTROLS
-        # -------------------------
-        bind("X", self._exit_all_positions)  # Exit ALL
-        bind("Alt+C", lambda: self._exit_option_positions(OptionType.CALL))
-        bind("Alt+P", lambda: self._exit_option_positions(OptionType.PUT))
-
-        # -------------------------
-        # LOT SIZE CONTROL (SAFE)
-        # -------------------------
-
-        # Fine-tuning
-        bind("+", lambda: self._change_lot_size(1))
-        bind("-", lambda: self._change_lot_size(-1))
-
-        # Direct lot jumps (INTENT REQUIRED)
-        bind("Alt+1", lambda: self._set_lot_size(1))
-        bind("Alt+2", lambda: self._set_lot_size(2))
-        bind("Alt+3", lambda: self._set_lot_size(3))
-        bind("Alt+4", lambda: self._set_lot_size(4))
-        bind("Alt+5", lambda: self._set_lot_size(5))
-        bind("Alt+6", lambda: self._set_lot_size(6))
-        bind("Alt+7", lambda: self._set_lot_size(7))
-        bind("Alt+8", lambda: self._set_lot_size(8))
-        bind("Alt+9", lambda: self._set_lot_size(9))
-        bind("Alt+0", lambda: self._set_lot_size(10))
-
-        # -------------------------
-        # EXACT SINGLE STRIKE BUY
-        # -------------------------
-
-        # ATM + exact strike
-        bind("Shift+1", lambda: self._buy_exact_relative_strike(+1))
-        bind("Shift+2", lambda: self._buy_exact_relative_strike(+2))
-        bind("Shift+3", lambda: self._buy_exact_relative_strike(+3))
-        bind("Shift+4", lambda: self._buy_exact_relative_strike(+4))
-        bind("Shift+5", lambda: self._buy_exact_relative_strike(+5))
-        bind("Shift+6", lambda: self._buy_exact_relative_strike(+6))
-        bind("Shift+7", lambda: self._buy_exact_relative_strike(+7))
-        bind("Shift+8", lambda: self._buy_exact_relative_strike(+8))
-        bind("Shift+9", lambda: self._buy_exact_relative_strike(+9))
-        bind("Shift+0", lambda: self._buy_exact_relative_strike(+10))
-
-        # ATM - exact strike
-        bind("Ctrl+1", lambda: self._buy_exact_relative_strike(-1))
-        bind("Ctrl+2", lambda: self._buy_exact_relative_strike(-2))
-        bind("Ctrl+3", lambda: self._buy_exact_relative_strike(-3))
-        bind("Ctrl+4", lambda: self._buy_exact_relative_strike(-4))
-        bind("Ctrl+5", lambda: self._buy_exact_relative_strike(-5))
-        bind("Ctrl+6", lambda: self._buy_exact_relative_strike(-6))
-        bind("Ctrl+7", lambda: self._buy_exact_relative_strike(-7))
-        bind("Ctrl+8", lambda: self._buy_exact_relative_strike(-8))
-        bind("Ctrl+9", lambda: self._buy_exact_relative_strike(-9))
-        bind("Ctrl+0", lambda: self._buy_exact_relative_strike(-10))
-
-        # -------------------------
-        # ATM RELATIVE STRIKE BUY (RANGE / ALL)
-        # -------------------------
-
-        # ATM → +N (ALL strikes in between)
-        bind("Alt+Shift+1", lambda: self._buy_relative_to_atm(above=1))
-        bind("Alt+Shift+2", lambda: self._buy_relative_to_atm(above=2))
-        bind("Alt+Shift+3", lambda: self._buy_relative_to_atm(above=3))
-        bind("Alt+Shift+4", lambda: self._buy_relative_to_atm(above=4))
-        bind("Alt+Shift+5", lambda: self._buy_relative_to_atm(above=5))
-        bind("Alt+Shift+6", lambda: self._buy_relative_to_atm(above=6))
-        bind("Alt+Shift+7", lambda: self._buy_relative_to_atm(above=7))
-        bind("Alt+Shift+8", lambda: self._buy_relative_to_atm(above=8))
-        bind("Alt+Shift+9", lambda: self._buy_relative_to_atm(above=9))
-        bind("Alt+Shift+0", lambda: self._buy_relative_to_atm(above=10))
-
-        # ATM → −N (ALL strikes in between)
-        bind("Alt+Ctrl+1", lambda: self._buy_relative_to_atm(below=1))
-        bind("Alt+Ctrl+2", lambda: self._buy_relative_to_atm(below=2))
-        bind("Alt+Ctrl+3", lambda: self._buy_relative_to_atm(below=3))
-        bind("Alt+Ctrl+4", lambda: self._buy_relative_to_atm(below=4))
-        bind("Alt+Ctrl+5", lambda: self._buy_relative_to_atm(below=5))
-        bind("Alt+Ctrl+6", lambda: self._buy_relative_to_atm(below=6))
-        bind("Alt+Ctrl+7", lambda: self._buy_relative_to_atm(below=7))
-        bind("Alt+Ctrl+8", lambda: self._buy_relative_to_atm(below=8))
-        bind("Alt+Ctrl+9", lambda: self._buy_relative_to_atm(below=9))
-        bind("Alt+Ctrl+0", lambda: self._buy_relative_to_atm(below=10))
+        """Delegate keyboard shortcut wiring to shared shortcuts utility."""
+        setup_keyboard_shortcuts(self)
 
     def _setup_position_manager(self):
         self.position_manager.positions_updated.connect(self._on_positions_updated)

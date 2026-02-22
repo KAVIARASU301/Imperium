@@ -1,4 +1,5 @@
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QDialog,
     QFormLayout,
@@ -11,6 +12,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from utils.data_models import OptionType
 
 SHORTCUTS = (
     {
@@ -195,3 +198,79 @@ class ShortcutsDialog(QDialog):
 def show_shortcuts(parent) -> None:
     dialog = ShortcutsDialog(parent)
     dialog.exec()
+
+
+def setup_keyboard_shortcuts(window) -> None:
+    """Wire global keyboard shortcuts for the main window."""
+    window._shortcuts = []
+
+    def bind(key, callback):
+        sc = QShortcut(QKeySequence(key), window)
+        sc.setContext(Qt.ApplicationShortcut)
+        sc.activated.connect(callback)
+        window._shortcuts.append(sc)
+
+    bind("B", lambda: window.buy_exit_panel._on_buy_clicked())
+    bind("T", window.buy_exit_panel.toggle_option_type)
+
+    bind("X", window._exit_all_positions)
+    bind("Alt+C", lambda: window._exit_option_positions(OptionType.CALL))
+    bind("Alt+P", lambda: window._exit_option_positions(OptionType.PUT))
+
+    bind("+", lambda: window._change_lot_size(1))
+    bind("-", lambda: window._change_lot_size(-1))
+
+    bind("Alt+1", lambda: window._set_lot_size(1))
+    bind("Alt+2", lambda: window._set_lot_size(2))
+    bind("Alt+3", lambda: window._set_lot_size(3))
+    bind("Alt+4", lambda: window._set_lot_size(4))
+    bind("Alt+5", lambda: window._set_lot_size(5))
+    bind("Alt+6", lambda: window._set_lot_size(6))
+    bind("Alt+7", lambda: window._set_lot_size(7))
+    bind("Alt+8", lambda: window._set_lot_size(8))
+    bind("Alt+9", lambda: window._set_lot_size(9))
+    bind("Alt+0", lambda: window._set_lot_size(10))
+
+    bind("Shift+1", lambda: window._buy_exact_relative_strike(+1))
+    bind("Shift+2", lambda: window._buy_exact_relative_strike(+2))
+    bind("Shift+3", lambda: window._buy_exact_relative_strike(+3))
+    bind("Shift+4", lambda: window._buy_exact_relative_strike(+4))
+    bind("Shift+5", lambda: window._buy_exact_relative_strike(+5))
+    bind("Shift+6", lambda: window._buy_exact_relative_strike(+6))
+    bind("Shift+7", lambda: window._buy_exact_relative_strike(+7))
+    bind("Shift+8", lambda: window._buy_exact_relative_strike(+8))
+    bind("Shift+9", lambda: window._buy_exact_relative_strike(+9))
+    bind("Shift+0", lambda: window._buy_exact_relative_strike(+10))
+
+    bind("Ctrl+1", lambda: window._buy_exact_relative_strike(-1))
+    bind("Ctrl+2", lambda: window._buy_exact_relative_strike(-2))
+    bind("Ctrl+3", lambda: window._buy_exact_relative_strike(-3))
+    bind("Ctrl+4", lambda: window._buy_exact_relative_strike(-4))
+    bind("Ctrl+5", lambda: window._buy_exact_relative_strike(-5))
+    bind("Ctrl+6", lambda: window._buy_exact_relative_strike(-6))
+    bind("Ctrl+7", lambda: window._buy_exact_relative_strike(-7))
+    bind("Ctrl+8", lambda: window._buy_exact_relative_strike(-8))
+    bind("Ctrl+9", lambda: window._buy_exact_relative_strike(-9))
+    bind("Ctrl+0", lambda: window._buy_exact_relative_strike(-10))
+
+    bind("Alt+Shift+1", lambda: window._buy_relative_to_atm(above=1))
+    bind("Alt+Shift+2", lambda: window._buy_relative_to_atm(above=2))
+    bind("Alt+Shift+3", lambda: window._buy_relative_to_atm(above=3))
+    bind("Alt+Shift+4", lambda: window._buy_relative_to_atm(above=4))
+    bind("Alt+Shift+5", lambda: window._buy_relative_to_atm(above=5))
+    bind("Alt+Shift+6", lambda: window._buy_relative_to_atm(above=6))
+    bind("Alt+Shift+7", lambda: window._buy_relative_to_atm(above=7))
+    bind("Alt+Shift+8", lambda: window._buy_relative_to_atm(above=8))
+    bind("Alt+Shift+9", lambda: window._buy_relative_to_atm(above=9))
+    bind("Alt+Shift+0", lambda: window._buy_relative_to_atm(above=10))
+
+    bind("Alt+Ctrl+1", lambda: window._buy_relative_to_atm(below=1))
+    bind("Alt+Ctrl+2", lambda: window._buy_relative_to_atm(below=2))
+    bind("Alt+Ctrl+3", lambda: window._buy_relative_to_atm(below=3))
+    bind("Alt+Ctrl+4", lambda: window._buy_relative_to_atm(below=4))
+    bind("Alt+Ctrl+5", lambda: window._buy_relative_to_atm(below=5))
+    bind("Alt+Ctrl+6", lambda: window._buy_relative_to_atm(below=6))
+    bind("Alt+Ctrl+7", lambda: window._buy_relative_to_atm(below=7))
+    bind("Alt+Ctrl+8", lambda: window._buy_relative_to_atm(below=8))
+    bind("Alt+Ctrl+9", lambda: window._buy_relative_to_atm(below=9))
+    bind("Alt+Ctrl+0", lambda: window._buy_relative_to_atm(below=10))
