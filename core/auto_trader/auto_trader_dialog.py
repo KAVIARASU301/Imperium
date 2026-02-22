@@ -76,6 +76,10 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
     BG_TARGET_CHART = "chart"
     BG_TARGET_WINDOW = "window"
 
+    # =========================================================================
+    # SECTION 1: INITIALIZATION
+    # =========================================================================
+
     def __init__(
             self,
             kite: KiteConnect,
@@ -168,45 +172,9 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self._load_and_plot(force=True)
         self._start_refresh_timer()
 
-    def keyPressEvent(self, event):
-        """Keyboard shortcuts for date navigation and simulator execution."""
-        focus_widget = self.focusWidget()
-        if isinstance(focus_widget, (QSpinBox, QDoubleSpinBox, QComboBox)):
-            super().keyPressEvent(event)
-            return
-
-        if event.modifiers() == Qt.NoModifier:
-            if event.key() == Qt.Key_Left:
-                self.navigator.btn_back.click()
-                event.accept()
-                return
-
-            if event.key() == Qt.Key_Right:
-                if self.navigator.btn_forward.isEnabled():
-                    self.navigator.btn_forward.click()
-                event.accept()
-                return
-
-            if event.key() == Qt.Key_Space:
-                if self.simulator_run_btn.isEnabled() and self.simulator_run_btn.isVisible():
-                    self.simulator_run_btn.click()
-                event.accept()
-                return
-
-        super().keyPressEvent(event)
-
-    # ------------------------------------------------------------------
-
-    @staticmethod
-
-
-    def _display_symbol_for_title(symbol: str) -> str:
-        """Hide FUT suffix/token from the window title while keeping internal symbol unchanged."""
-        display_symbol = re.sub(r"[-_ ]?FUT$", "", symbol, flags=re.IGNORECASE)
-        display_symbol = re.sub(r"\bFUT\b", "", display_symbol, flags=re.IGNORECASE)
-        return re.sub(r"\s{2,}", " ", display_symbol).strip() or symbol
-
-
+    # =========================================================================
+    # SECTION 2: UI SETUP
+    # =========================================================================
 
     def _setup_ui(self):
         root = QVBoxLayout(self)
@@ -892,10 +860,6 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
 
         self._apply_visual_settings()
 
-    # ------------------------------------------------------------------
-
-
-
     def _connect_signals(self):
         self.navigator.date_changed.connect(self._on_date_changed)
         # Internal: marshal WebSocket thread ticks to the GUI thread safely.
@@ -907,7 +871,9 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
                 Qt.QueuedConnection
             )
 
-
+    # =========================================================================
+    # SECTION 3: SETTINGS PERSISTENCE
+    # =========================================================================
 
     def _load_persisted_setup_values(self):
         key_prefix = self._settings_key_prefix()
@@ -1114,7 +1080,6 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self._chart_bg_image_path = persisted_chart_bg
         self._update_bg_image_labels()
 
-
         self.automate_toggle.blockSignals(False)
         self.automation_stoploss_input.blockSignals(False)
         self.max_profit_giveback_input.blockSignals(False)
@@ -1160,8 +1125,6 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self._update_atr_reversal_markers()
         self._setup_values_ready = True
         self._on_automation_settings_changed()
-
-
 
     def _persist_setup_values(self):
         if not getattr(self, "_setup_values_ready", False):
@@ -1221,7 +1184,9 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self._settings.sync()
         self._write_setup_json(values_to_persist)
 
-
+    # =========================================================================
+    # SECTION 4: SETTINGS CHANGE HANDLERS
+    # =========================================================================
 
     def _on_automation_settings_changed(self, *_):
         self._persist_setup_values()
@@ -1236,8 +1201,6 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
             "signal_filter": self._selected_signal_filter(),
         })
 
-
-
     def _on_signal_filter_changed(self, *_):
         if hasattr(self, "setup_signal_filter_combo"):
             self.setup_signal_filter_combo.blockSignals(True)
@@ -1246,16 +1209,12 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self._update_atr_reversal_markers()
         self._on_automation_settings_changed()
 
-
-
     def _on_setup_signal_filter_changed(self, *_):
         self.signal_filter_combo.blockSignals(True)
         self.signal_filter_combo.setCurrentIndex(self.setup_signal_filter_combo.currentIndex())
         self.signal_filter_combo.blockSignals(False)
         self._update_atr_reversal_markers()
         self._on_automation_settings_changed()
-
-
 
     def _on_chop_filter_settings_changed(self, *_):
         """Handle chop filter and consolidation settings changes."""
@@ -1268,149 +1227,17 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         if self._breakout_min_consolidation_minutes > 0 or self._breakout_min_consolidation_adx > 0:
             self._load_and_plot(force=True)
 
-
-
     def _on_breakout_settings_changed(self, *_):
         """Handle range breakout settings changes"""
         self._persist_setup_values()
         # Force reload to apply new range lookback
         self._load_and_plot(force=True)
 
-
-
     def _on_governance_settings_changed(self, *_):
         self.signal_governance.deploy_mode = self.deploy_mode_combo.currentData() or "canary"
         self.signal_governance.min_confidence_for_live = float(self.min_confidence_input.value())
         self.signal_governance.canary_live_ratio = float(self.canary_ratio_input.value())
         self._persist_setup_values()
-
-
-
-    def _selected_signal_filter(self) -> str:
-        return self.signal_filter_combo.currentData() or self.SIGNAL_FILTER_ALL
-
-
-
-    def _selected_breakout_switch_mode(self) -> str:
-        return self.breakout_switch_mode_combo.currentData() or self.BREAKOUT_SWITCH_ADAPTIVE
-
-
-
-    @classmethod
-    def _max_giveback_strategy_defaults(cls) -> tuple[str, ...]:
-        return (
-            cls.MAX_GIVEBACK_STRATEGY_ATR_REVERSAL,
-            cls.MAX_GIVEBACK_STRATEGY_EMA_CROSS,
-            cls.MAX_GIVEBACK_STRATEGY_ATR_DIVERGENCE,
-            cls.MAX_GIVEBACK_STRATEGY_RANGE_BREAKOUT,
-        )
-
-
-
-    def _selected_max_giveback_strategies(self) -> list[str]:
-        selected: list[str] = []
-        if self.max_giveback_atr_reversal_check.isChecked():
-            selected.append(self.MAX_GIVEBACK_STRATEGY_ATR_REVERSAL)
-        if self.max_giveback_ema_cross_check.isChecked():
-            selected.append(self.MAX_GIVEBACK_STRATEGY_EMA_CROSS)
-        if self.max_giveback_atr_divergence_check.isChecked():
-            selected.append(self.MAX_GIVEBACK_STRATEGY_ATR_DIVERGENCE)
-        if self.max_giveback_range_breakout_check.isChecked():
-            selected.append(self.MAX_GIVEBACK_STRATEGY_RANGE_BREAKOUT)
-        return selected
-
-
-
-    def _apply_max_giveback_strategy_selection(self, strategies: list[str]):
-        selected = set(strategies or [])
-        self.max_giveback_atr_reversal_check.setChecked(
-            self.MAX_GIVEBACK_STRATEGY_ATR_REVERSAL in selected
-        )
-        self.max_giveback_ema_cross_check.setChecked(
-            self.MAX_GIVEBACK_STRATEGY_EMA_CROSS in selected
-        )
-        self.max_giveback_atr_divergence_check.setChecked(
-            self.MAX_GIVEBACK_STRATEGY_ATR_DIVERGENCE in selected
-        )
-        self.max_giveback_range_breakout_check.setChecked(
-            self.MAX_GIVEBACK_STRATEGY_RANGE_BREAKOUT in selected
-        )
-
-
-    def _on_cvd_tick_update(self, token: int, cvd_value: float, last_price: float):
-        if not self.isVisible():
-            return
-
-        if token != self.instrument_token or not self.live_mode:
-            return
-
-        self._cvd_tick_received.emit(cvd_value, last_price)
-
-
-
-    def _apply_cvd_tick(self, cvd_value: float, last_price: float):
-        """Slot — always called on the GUI thread via queued signal connection."""
-        ts = datetime.now()
-
-        # Freeze live-dot motion outside market hours.
-        # Some feeds keep pushing ticks after 15:30; if we keep updating the
-        # timestamp, the blinking dot drifts right and creates empty chart space.
-        if ts.time() < TRADING_START or ts.time() > TRADING_END:
-            return
-
-        # Align live tick CVD level with historical curve to avoid visual jump.
-        if self._live_cvd_offset is None:
-            if self._current_session_last_cvd_value is not None:
-                self._live_cvd_offset = float(self._current_session_last_cvd_value) - float(cvd_value)
-            else:
-                self._live_cvd_offset = 0.0
-
-        plotted_cvd = float(cvd_value) + float(self._live_cvd_offset)
-        current_price = float(last_price)
-
-        # 🔥 SMART TICK FILTERING - Only append if price/CVD changed meaningfully
-        # This prevents wick-like artifacts from back-and-forth movements
-        should_append = True
-
-        if self._live_tick_points:
-            # Get last recorded values
-            last_ts, last_cvd = self._live_tick_points[-1]
-            last_price_val = self._live_price_points[-1][1] if self._live_price_points else current_price
-
-            # Only append if:
-            # 1. Price changed (to avoid redundant points at same price level)
-            # 2. OR it's been more than 1 second (to ensure minimum sampling)
-            time_since_last = (ts - last_ts).total_seconds()
-            price_changed = abs(current_price - last_price_val) > 0.01
-            cvd_changed = abs(plotted_cvd - last_cvd) > 1.0
-
-            # Append only if there's actual movement or time gap
-            should_append = price_changed or cvd_changed or time_since_last > 1.0
-
-        if should_append:
-            self._live_tick_points.append((ts, plotted_cvd))
-            self._live_price_points.append((ts, current_price))
-        else:
-            # Update the last point in place (no new point, just update current value)
-            # This creates a "moving dot" effect rather than drawing lines
-            if self._live_tick_points:
-                self._live_tick_points[-1] = (ts, plotted_cvd)
-            if self._live_price_points:
-                self._live_price_points[-1] = (ts, current_price)
-
-        # Trim stale points from previous sessions.
-        today = ts.date()
-        while self._live_tick_points and self._live_tick_points[0][0].date() < today:
-            self._live_tick_points.popleft()
-        while self._live_price_points and self._live_price_points[0][0].date() < today:
-            self._live_price_points.popleft()
-
-        if not self._tick_repaint_timer.isActive():
-            self._tick_repaint_timer.start(self.LIVE_TICK_REPAINT_MS)
-
-    # ------------------------------------------------------------------
-
-
 
     def _on_ema_toggled(self, period: int, checked: bool):
         """Toggle EMA visibility"""
@@ -1425,76 +1252,6 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
             self._persist_setup_values()
 
         self._refresh_plot_only()
-
-    def _refresh_plot_only(self):
-        """Refresh chart overlays from in-memory data without reloading sessions or touching trade state."""
-        if not self.all_timestamps or not self.all_cvd_data or not self.all_price_data:
-            return
-
-        focus_mode = not self.btn_focus.isChecked()
-        if focus_mode:
-            x_indices = [self._time_to_session_index(ts) for ts in self.all_timestamps]
-        else:
-            x_indices = list(range(len(self.all_timestamps)))
-
-        self._last_plot_x_indices = list(x_indices)
-        enabled_emas = self._enabled_ema_periods()
-
-        cvd_data_array = np.array(self.all_cvd_data)
-        price_data_array = np.array(self.all_price_data)
-
-        if 10 in enabled_emas:
-            self.cvd_ema10_curve.setData(x_indices, calculate_ema(cvd_data_array, 10))
-        else:
-            self.cvd_ema10_curve.clear()
-
-        if 21 in enabled_emas:
-            self.cvd_ema21_curve.setData(x_indices, calculate_ema(cvd_data_array, 21))
-        else:
-            self.cvd_ema21_curve.clear()
-
-        if 51 in enabled_emas:
-            self.cvd_ema51_curve.setData(x_indices, calculate_ema(cvd_data_array, 51))
-        else:
-            self.cvd_ema51_curve.clear()
-
-        if 10 in enabled_emas:
-            self.price_ema10_curve.setData(x_indices, calculate_ema(price_data_array, 10))
-        else:
-            self.price_ema10_curve.clear()
-
-        if 21 in enabled_emas:
-            self.price_ema21_curve.setData(x_indices, calculate_ema(price_data_array, 21))
-        else:
-            self.price_ema21_curve.clear()
-
-        if 51 in enabled_emas:
-            self.price_ema51_curve.setData(x_indices, calculate_ema(price_data_array, 51))
-        else:
-            self.price_ema51_curve.clear()
-
-        for ema_period, cb in self.ema_checkboxes.items():
-            opacity = self._ema_line_opacity if cb.isChecked() else 0.0
-            if ema_period == 10:
-                self.price_ema10_curve.setOpacity(opacity)
-                self.cvd_ema10_curve.setOpacity(opacity)
-            elif ema_period == 21:
-                self.price_ema21_curve.setOpacity(opacity)
-                self.cvd_ema21_curve.setOpacity(opacity)
-            elif ema_period == 51:
-                self.price_ema51_curve.setOpacity(opacity)
-                self.cvd_ema51_curve.setOpacity(opacity)
-
-        self._update_atr_reversal_markers()
-        self._update_ema_legends()
-
-
-
-    def _update_ema_legends(self):
-        """EMA legends are disabled to keep chart area unobstructed."""
-        return
-
-
 
     def _on_focus_mode_changed(self, enabled: bool):
         self.btn_focus.setText("2D" if enabled else "1D")
@@ -1522,7 +1279,62 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self.all_timestamps.clear()
         self._load_and_plot(force=True)
 
+    def _on_timeframe_combo_changed(self, index: int):
+        minutes = self.timeframe_combo.itemData(index)
+        if minutes is None:
+            return
+        self._on_timeframe_changed(int(minutes))
 
+    def _on_timeframe_changed(self, minutes: int):
+        if self.timeframe_minutes == minutes:
+            return
+
+        self.timeframe_minutes = minutes
+        self.strategy_detector.timeframe_minutes = minutes
+
+        # Clear visuals
+        self.prev_curve.clear()
+        self.today_curve.clear()
+        self.live_dot.clear()
+        self.today_tick_curve.clear()
+        self.price_prev_curve.clear()
+        self.price_today_curve.clear()
+        self.price_today_tick_curve.clear()
+        self.price_live_dot.clear()
+        self.price_atr_above_markers.clear()
+        self.price_atr_below_markers.clear()
+        self.cvd_atr_above_markers.clear()
+        self.cvd_atr_below_markers.clear()
+        self._clear_simulation_markers()
+        self.cvd_ema10_curve.clear()
+        self.cvd_ema21_curve.clear()
+        self.cvd_ema51_curve.clear()
+        self.price_ema10_curve.clear()
+        self.price_ema21_curve.clear()
+        self.price_ema51_curve.clear()
+        self.all_timestamps.clear()
+        self._live_tick_points.clear()
+        self._live_price_points.clear()
+        self._live_cvd_offset = None
+        self._current_session_last_cvd_value = None
+        self._last_plot_x_indices = []
+        self._load_and_plot(force=True)
+
+    def _on_date_changed(self, current_date: datetime, previous_date: datetime):
+        today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+
+        self.current_date = current_date
+        self.previous_date = previous_date
+
+        if current_date >= today:
+            self.live_mode = True
+            if not self.refresh_timer.isActive():
+                self.refresh_timer.start(self.REFRESH_INTERVAL_MS)
+        else:
+            self.live_mode = False
+            self.refresh_timer.stop()
+
+        self._load_and_plot(force=True)
 
     def _on_mouse_moved(self, pos):
         in_price_plot = self.price_plot.sceneBoundingRect().contains(pos)
@@ -1571,25 +1383,62 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self.x_time_label.setPos(x, y_pos_cvd)
         self.x_time_label.show()
 
+    # =========================================================================
+    # SECTION 5: SETTINGS HELPERS & STRATEGY SELECTORS
+    # =========================================================================
 
+    def _selected_signal_filter(self) -> str:
+        return self.signal_filter_combo.currentData() or self.SIGNAL_FILTER_ALL
 
-    def _on_date_changed(self, current_date: datetime, previous_date: datetime):
-        today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    def _selected_breakout_switch_mode(self) -> str:
+        return self.breakout_switch_mode_combo.currentData() or self.BREAKOUT_SWITCH_ADAPTIVE
 
-        self.current_date = current_date
-        self.previous_date = previous_date
+    @classmethod
+    def _max_giveback_strategy_defaults(cls) -> tuple[str, ...]:
+        return (
+            cls.MAX_GIVEBACK_STRATEGY_ATR_REVERSAL,
+            cls.MAX_GIVEBACK_STRATEGY_EMA_CROSS,
+            cls.MAX_GIVEBACK_STRATEGY_ATR_DIVERGENCE,
+            cls.MAX_GIVEBACK_STRATEGY_RANGE_BREAKOUT,
+        )
 
-        if current_date >= today:
-            self.live_mode = True
-            if not self.refresh_timer.isActive():
-                self.refresh_timer.start(self.REFRESH_INTERVAL_MS)
-        else:
-            self.live_mode = False
-            self.refresh_timer.stop()
+    def _selected_max_giveback_strategies(self) -> list[str]:
+        selected: list[str] = []
+        if self.max_giveback_atr_reversal_check.isChecked():
+            selected.append(self.MAX_GIVEBACK_STRATEGY_ATR_REVERSAL)
+        if self.max_giveback_ema_cross_check.isChecked():
+            selected.append(self.MAX_GIVEBACK_STRATEGY_EMA_CROSS)
+        if self.max_giveback_atr_divergence_check.isChecked():
+            selected.append(self.MAX_GIVEBACK_STRATEGY_ATR_DIVERGENCE)
+        if self.max_giveback_range_breakout_check.isChecked():
+            selected.append(self.MAX_GIVEBACK_STRATEGY_RANGE_BREAKOUT)
+        return selected
 
-        self._load_and_plot(force=True)
+    def _apply_max_giveback_strategy_selection(self, strategies: list[str]):
+        selected = set(strategies or [])
+        self.max_giveback_atr_reversal_check.setChecked(
+            self.MAX_GIVEBACK_STRATEGY_ATR_REVERSAL in selected
+        )
+        self.max_giveback_ema_cross_check.setChecked(
+            self.MAX_GIVEBACK_STRATEGY_EMA_CROSS in selected
+        )
+        self.max_giveback_atr_divergence_check.setChecked(
+            self.MAX_GIVEBACK_STRATEGY_ATR_DIVERGENCE in selected
+        )
+        self.max_giveback_range_breakout_check.setChecked(
+            self.MAX_GIVEBACK_STRATEGY_RANGE_BREAKOUT in selected
+        )
 
-    # ------------------------------------------------------------------
+    def _enabled_ema_periods(self) -> set[int]:
+        """Return EMA periods currently enabled via checkboxes"""
+        return {
+            period for period, cb in self.ema_checkboxes.items()
+            if cb.isChecked()
+        }
+
+    # =========================================================================
+    # SECTION 6: DATA LOADING & FETCHING
+    # =========================================================================
 
     def _load_and_plot(self, force: bool = False):
         """
@@ -1645,8 +1494,6 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
 
         self._fetch_thread.start()
 
-
-
     def _on_fetch_result(self, cvd_df, price_df, prev_close):
         self._is_loading = False
         self._plot_data(cvd_df, price_df, prev_close)
@@ -1657,7 +1504,20 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
             # 🔥 Remove live ticks that are now covered by historical data
             self._cleanup_overlapping_ticks()
 
+    def _on_fetch_error(self, msg: str):
+        """Called on the GUI thread when background fetch fails."""
+        if msg not in ("no_data", "empty_df", "no_sessions"):
+            logger.error("Failed to load CVD data: %s", msg)
 
+    def _on_fetch_done(self):
+        worker = getattr(self, "_fetch_worker", None)
+
+        if worker is not None:
+            # Ensure thread fully stopped
+            worker.quit_thread()
+
+        self._fetch_worker = None
+        self._is_loading = False
 
     def _cleanup_overlapping_ticks(self):
         """
@@ -1709,30 +1569,9 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         # This ensures smooth continuation after historical refresh
         self._live_cvd_offset = None
 
-    # ------------------------------------------------------------------
-
-
-
-    def _on_fetch_error(self, msg: str):
-        """Called on the GUI thread when background fetch fails."""
-        if msg not in ("no_data", "empty_df", "no_sessions"):
-            logger.error("Failed to load CVD data: %s", msg)
-
-
-
-    def _on_fetch_done(self):
-        worker = getattr(self, "_fetch_worker", None)
-
-        if worker is not None:
-            # Ensure thread fully stopped
-            worker.quit_thread()
-
-        self._fetch_worker = None
-        self._is_loading = False
-
-    # ------------------------------------------------------------------
-
-
+    # =========================================================================
+    # SECTION 7: CHART RENDERING & PLOTTING
+    # =========================================================================
 
     def _plot_data(self, cvd_df: pd.DataFrame, price_df: pd.DataFrame, prev_close: float):
         focus_mode = not self.btn_focus.isChecked()
@@ -1902,134 +1741,71 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
             self.plot.enableAutoRange(axis=pg.ViewBox.XAxis)
             self.price_plot.enableAutoRange(axis=pg.ViewBox.XAxis)
 
-    # ------------------------------------------------------------------
-
-
-    def _enabled_ema_periods(self) -> set[int]:
-        """Return EMA periods currently enabled via checkboxes"""
-        return {
-            period for period, cb in self.ema_checkboxes.items()
-            if cb.isChecked()
-        }
-
-    # ------------------------------------------------------------------
-    # 🎯  CONFLUENCE SIGNAL LINES
-    # ------------------------------------------------------------------
-
-
-
-    def _blink_dot(self):
-        self._dot_visible = not self._dot_visible
-        alpha = 220 if self._dot_visible else 60
-        self.live_dot.setBrush(pg.mkBrush(38, 166, 154, alpha))
-        self.price_live_dot.setBrush(pg.mkBrush(255, 229, 127, alpha))
-
-    # ------------------------------------------------------------------
-
-
-
-    def _start_refresh_timer(self):
-        self.refresh_timer = QTimer(self)
-        self.refresh_timer.timeout.connect(self._refresh_if_live)
-        self.refresh_timer.start(self.REFRESH_INTERVAL_MS)
-
-
-
-    def _refresh_if_live(self):
-        """
-        In live mode, refresh historical once per completed minute so base curves
-        stay in sync while tick overlays provide intraminute motion.
-        """
-        if not self.live_mode:
+    def _refresh_plot_only(self):
+        """Refresh chart overlays from in-memory data without reloading sessions or touching trade state."""
+        if not self.all_timestamps or not self.all_cvd_data or not self.all_price_data:
             return
 
-        if self._is_loading:
-            return
+        focus_mode = not self.btn_focus.isChecked()
+        if focus_mode:
+            x_indices = [self._time_to_session_index(ts) for ts in self.all_timestamps]
+        else:
+            x_indices = list(range(len(self.all_timestamps)))
 
-        current_minute = datetime.now().replace(second=0, microsecond=0)
-        if self._last_live_refresh_minute is None:
-            self._last_live_refresh_minute = current_minute
-            return
+        self._last_plot_x_indices = list(x_indices)
+        enabled_emas = self._enabled_ema_periods()
 
-        if current_minute <= self._last_live_refresh_minute:
-            return
+        cvd_data_array = np.array(self.all_cvd_data)
+        price_data_array = np.array(self.all_price_data)
 
-        self._load_and_plot(force=True)
+        if 10 in enabled_emas:
+            self.cvd_ema10_curve.setData(x_indices, calculate_ema(cvd_data_array, 10))
+        else:
+            self.cvd_ema10_curve.clear()
 
+        if 21 in enabled_emas:
+            self.cvd_ema21_curve.setData(x_indices, calculate_ema(cvd_data_array, 21))
+        else:
+            self.cvd_ema21_curve.clear()
 
+        if 51 in enabled_emas:
+            self.cvd_ema51_curve.setData(x_indices, calculate_ema(cvd_data_array, 51))
+        else:
+            self.cvd_ema51_curve.clear()
 
-    def _fix_axis_after_show(self):
-        bottom_axis = self.plot.getAxis("bottom")
-        bottom_axis.setHeight(32)
-        bottom_axis.update()
-        self.plot.updateGeometry()
-        self.price_plot.updateGeometry()
+        if 10 in enabled_emas:
+            self.price_ema10_curve.setData(x_indices, calculate_ema(price_data_array, 10))
+        else:
+            self.price_ema10_curve.clear()
 
+        if 21 in enabled_emas:
+            self.price_ema21_curve.setData(x_indices, calculate_ema(price_data_array, 21))
+        else:
+            self.price_ema21_curve.clear()
 
+        if 51 in enabled_emas:
+            self.price_ema51_curve.setData(x_indices, calculate_ema(price_data_array, 51))
+        else:
+            self.price_ema51_curve.clear()
 
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self.plot.update()
-        self.price_plot.update()
+        for ema_period, cb in self.ema_checkboxes.items():
+            opacity = self._ema_line_opacity if cb.isChecked() else 0.0
+            if ema_period == 10:
+                self.price_ema10_curve.setOpacity(opacity)
+                self.cvd_ema10_curve.setOpacity(opacity)
+            elif ema_period == 21:
+                self.price_ema21_curve.setOpacity(opacity)
+                self.cvd_ema21_curve.setOpacity(opacity)
+            elif ema_period == 51:
+                self.price_ema51_curve.setOpacity(opacity)
+                self.cvd_ema51_curve.setOpacity(opacity)
 
+        self._update_atr_reversal_markers()
+        self._update_ema_legends()
 
-
-    def _on_timeframe_combo_changed(self, index: int):
-        minutes = self.timeframe_combo.itemData(index)
-        if minutes is None:
-            return
-        self._on_timeframe_changed(int(minutes))
-
-
-
-    def _on_timeframe_changed(self, minutes: int):
-        if self.timeframe_minutes == minutes:
-            return
-
-        self.timeframe_minutes = minutes
-        self.strategy_detector.timeframe_minutes = minutes
-
-        # Clear visuals
-        self.prev_curve.clear()
-        self.today_curve.clear()
-        self.live_dot.clear()
-        self.today_tick_curve.clear()
-        self.price_prev_curve.clear()
-        self.price_today_curve.clear()
-        self.price_today_tick_curve.clear()
-        self.price_live_dot.clear()
-        self.price_atr_above_markers.clear()
-        self.price_atr_below_markers.clear()
-        self.cvd_atr_above_markers.clear()
-        self.cvd_atr_below_markers.clear()
-        self._clear_simulation_markers()
-        self.cvd_ema10_curve.clear()
-        self.cvd_ema21_curve.clear()
-        self.cvd_ema51_curve.clear()
-        self.price_ema10_curve.clear()
-        self.price_ema21_curve.clear()
-        self.price_ema51_curve.clear()
-        self.all_timestamps.clear()
-        self._live_tick_points.clear()
-        self._live_price_points.clear()
-        self._live_cvd_offset = None
-        self._current_session_last_cvd_value = None
-        self._last_plot_x_indices = []
-        self._load_and_plot(force=True)
-
-
-
-    def _time_to_session_index(self, ts: datetime) -> int:
-        """
-        Converts a timestamp to a fixed session index (0–374)
-        """
-        session_start = ts.replace(
-            hour=9, minute=15, second=0, microsecond=0
-        )
-        delta_minutes = int((ts - session_start).total_seconds() / 60)
-        return max(0, min(delta_minutes, MINUTES_PER_SESSION - 1))
-
-
+    def _update_ema_legends(self):
+        """EMA legends are disabled to keep chart area unobstructed."""
+        return
 
     def _plot_live_ticks_only(self):
         """Plot tick-level CVD overlay on top of minute candles."""
@@ -2140,30 +1916,139 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
             last_valid_idx = np.where(valid_price_mask)[0][-1]
             self.price_live_dot.setData([x_arr[last_valid_idx]], [price_arr[last_valid_idx]])
 
-    # ------------------------------------------------------------------
+    # =========================================================================
+    # SECTION 8: LIVE CVD TICK PROCESSING
+    # =========================================================================
 
+    def _on_cvd_tick_update(self, token: int, cvd_value: float, last_price: float):
+        if not self.isVisible():
+            return
 
-    def showEvent(self, event):
-        super().showEvent(event)
-        QTimer.singleShot(0, self._fix_axis_after_show)
+        if token != self.instrument_token or not self.live_mode:
+            return
 
+        self._cvd_tick_received.emit(cvd_value, last_price)
 
+    def _apply_cvd_tick(self, cvd_value: float, last_price: float):
+        """Slot — always called on the GUI thread via queued signal connection."""
+        ts = datetime.now()
 
-    def closeEvent(self, event):
-        self._persist_setup_values()
-        try:
-            if hasattr(self, "_fetch_thread") and self._fetch_thread.isRunning():
-                self._fetch_thread.quit()
-                self._fetch_thread.wait(2000)
-        except Exception:
-            pass
-        super().closeEvent(event)
+        # Freeze live-dot motion outside market hours.
+        # Some feeds keep pushing ticks after 15:30; if we keep updating the
+        # timestamp, the blinking dot drifts right and creates empty chart space.
+        if ts.time() < TRADING_START or ts.time() > TRADING_END:
+            return
 
-    # ------------------------------------------------------------------
-    # REGIME / CHOP DETECTION
-    # ------------------------------------------------------------------
+        # Align live tick CVD level with historical curve to avoid visual jump.
+        if self._live_cvd_offset is None:
+            if self._current_session_last_cvd_value is not None:
+                self._live_cvd_offset = float(self._current_session_last_cvd_value) - float(cvd_value)
+            else:
+                self._live_cvd_offset = 0.0
 
+        plotted_cvd = float(cvd_value) + float(self._live_cvd_offset)
+        current_price = float(last_price)
 
+        # 🔥 SMART TICK FILTERING - Only append if price/CVD changed meaningfully
+        # This prevents wick-like artifacts from back-and-forth movements
+        should_append = True
+
+        if self._live_tick_points:
+            # Get last recorded values
+            last_ts, last_cvd = self._live_tick_points[-1]
+            last_price_val = self._live_price_points[-1][1] if self._live_price_points else current_price
+
+            # Only append if:
+            # 1. Price changed (to avoid redundant points at same price level)
+            # 2. OR it's been more than 1 second (to ensure minimum sampling)
+            time_since_last = (ts - last_ts).total_seconds()
+            price_changed = abs(current_price - last_price_val) > 0.01
+            cvd_changed = abs(plotted_cvd - last_cvd) > 1.0
+
+            # Append only if there's actual movement or time gap
+            should_append = price_changed or cvd_changed or time_since_last > 1.0
+
+        if should_append:
+            self._live_tick_points.append((ts, plotted_cvd))
+            self._live_price_points.append((ts, current_price))
+        else:
+            # Update the last point in place (no new point, just update current value)
+            # This creates a "moving dot" effect rather than drawing lines
+            if self._live_tick_points:
+                self._live_tick_points[-1] = (ts, plotted_cvd)
+            if self._live_price_points:
+                self._live_price_points[-1] = (ts, current_price)
+
+        # Trim stale points from previous sessions.
+        today = ts.date()
+        while self._live_tick_points and self._live_tick_points[0][0].date() < today:
+            self._live_tick_points.popleft()
+        while self._live_price_points and self._live_price_points[0][0].date() < today:
+            self._live_price_points.popleft()
+
+        if not self._tick_repaint_timer.isActive():
+            self._tick_repaint_timer.start(self.LIVE_TICK_REPAINT_MS)
+
+    # =========================================================================
+    # SECTION 9: LIVE REFRESH TIMER & DOT BLINK
+    # =========================================================================
+
+    def _start_refresh_timer(self):
+        self.refresh_timer = QTimer(self)
+        self.refresh_timer.timeout.connect(self._refresh_if_live)
+        self.refresh_timer.start(self.REFRESH_INTERVAL_MS)
+
+    def _refresh_if_live(self):
+        """
+        In live mode, refresh historical once per completed minute so base curves
+        stay in sync while tick overlays provide intraminute motion.
+        """
+        if not self.live_mode:
+            return
+
+        if self._is_loading:
+            return
+
+        current_minute = datetime.now().replace(second=0, microsecond=0)
+        if self._last_live_refresh_minute is None:
+            self._last_live_refresh_minute = current_minute
+            return
+
+        if current_minute <= self._last_live_refresh_minute:
+            return
+
+        self._load_and_plot(force=True)
+
+    def _blink_dot(self):
+        self._dot_visible = not self._dot_visible
+        alpha = 220 if self._dot_visible else 60
+        self.live_dot.setBrush(pg.mkBrush(38, 166, 154, alpha))
+        self.price_live_dot.setBrush(pg.mkBrush(255, 229, 127, alpha))
+
+    # =========================================================================
+    # SECTION 10: COORDINATE & AXIS HELPERS
+    # =========================================================================
+
+    def _time_to_session_index(self, ts: datetime) -> int:
+        """
+        Converts a timestamp to a fixed session index (0–374)
+        """
+        session_start = ts.replace(
+            hour=9, minute=15, second=0, microsecond=0
+        )
+        delta_minutes = int((ts - session_start).total_seconds() / 60)
+        return max(0, min(delta_minutes, MINUTES_PER_SESSION - 1))
+
+    def _fix_axis_after_show(self):
+        bottom_axis = self.plot.getAxis("bottom")
+        bottom_axis.setHeight(32)
+        bottom_axis.update()
+        self.plot.updateGeometry()
+        self.price_plot.updateGeometry()
+
+    # =========================================================================
+    # SECTION 11: EXPORT & UTILITIES
+    # =========================================================================
 
     def _export_chart_image(self):
         """Export current chart view as PNG image"""
@@ -2201,7 +2086,52 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         except Exception as e:
             logger.error(f"Failed to export chart: {e}")
 
+    @staticmethod
+    def _display_symbol_for_title(symbol: str) -> str:
+        """Hide FUT suffix/token from the window title while keeping internal symbol unchanged."""
+        display_symbol = re.sub(r"[-_ ]?FUT$", "", symbol, flags=re.IGNORECASE)
+        display_symbol = re.sub(r"\bFUT\b", "", display_symbol, flags=re.IGNORECASE)
+        return re.sub(r"\s{2,}", " ", display_symbol).strip() or symbol
 
+    # =========================================================================
+    # SECTION 12: QT EVENT OVERRIDES
+    # =========================================================================
+
+    def keyPressEvent(self, event):
+        """Keyboard shortcuts for date navigation and simulator execution."""
+        focus_widget = self.focusWidget()
+        if isinstance(focus_widget, (QSpinBox, QDoubleSpinBox, QComboBox)):
+            super().keyPressEvent(event)
+            return
+
+        if event.modifiers() == Qt.NoModifier:
+            if event.key() == Qt.Key_Left:
+                self.navigator.btn_back.click()
+                event.accept()
+                return
+
+            if event.key() == Qt.Key_Right:
+                if self.navigator.btn_forward.isEnabled():
+                    self.navigator.btn_forward.click()
+                event.accept()
+                return
+
+            if event.key() == Qt.Key_Space:
+                if self.simulator_run_btn.isEnabled() and self.simulator_run_btn.isVisible():
+                    self.simulator_run_btn.click()
+                event.accept()
+                return
+
+        super().keyPressEvent(event)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        QTimer.singleShot(0, self._fix_axis_after_show)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.plot.update()
+        self.price_plot.update()
 
     def changeEvent(self, event):
         # Intentionally NOT stopping/starting the refresh_timer on activation changes.
@@ -2209,3 +2139,13 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         # timer here caused a racing condition where _load_and_plot was re-entered
         # before _is_loading could be set, crashing the app within seconds.
         super().changeEvent(event)
+
+    def closeEvent(self, event):
+        self._persist_setup_values()
+        try:
+            if hasattr(self, "_fetch_thread") and self._fetch_thread.isRunning():
+                self._fetch_thread.quit()
+                self._fetch_thread.wait(2000)
+        except Exception:
+            pass
+        super().closeEvent(event)
