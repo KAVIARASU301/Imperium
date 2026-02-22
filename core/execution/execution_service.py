@@ -1,11 +1,13 @@
+from core.execution.exit_execution_methods import ExitExecutionMethods
 from core.execution.order_execution_methods import OrderExecutionMethods
 
 
 class ExecutionService:
-    """Unified execution surface for main window order flows."""
+    """Unified execution surface for main window order and exit flows."""
 
     def __init__(self, window):
         self.order_methods = OrderExecutionMethods(window)
+        self.exit_methods = ExitExecutionMethods(window)
 
     def execute_orders(self, confirmed_order_details: dict):
         self.order_methods.execute_orders(confirmed_order_details)
@@ -33,3 +35,21 @@ class ExecutionService:
 
     def execute_strategy_orders(self, order_params_list, strategy_name=None):
         self.order_methods.execute_strategy_orders(order_params_list, strategy_name)
+
+    def exit_all_positions(self):
+        self.exit_methods.exit_all_positions()
+
+    def execute_bulk_exit(self, positions_list):
+        self.exit_methods.execute_bulk_exit(positions_list)
+
+    def finalize_bulk_exit_result(self):
+        self.exit_methods.finalize_bulk_exit_result()
+
+    def exit_position(self, position_data_to_exit: dict):
+        self.exit_methods.exit_position(position_data_to_exit)
+
+    def exit_position_from_dialog(self, symbol_or_pos_data):
+        self.exit_methods.exit_position_from_dialog(symbol_or_pos_data)
+
+    def exit_option_positions(self, option_type):
+        self.exit_methods.exit_option_positions(option_type)
