@@ -161,7 +161,8 @@ class PaperTradingManager(QObject):
             "status": "OPEN",
             "order_timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             "average_price": 0.0,
-            "filled_quantity": 0
+            "filled_quantity": 0,
+            "group_name": kwargs.get("group_name"),
         }
 
         instrument_token = self.tradingsymbol_to_token.get(tradingsymbol)
@@ -401,7 +402,8 @@ class PaperTradingManager(QObject):
                         "unrealized_pnl": 0.0,
                         "product": order["product"],
                         "exchange": order["exchange"],
-                        "timestamp": order["exchange_timestamp"]
+                        "timestamp": order["exchange_timestamp"],
+                        "group_name": order.get("group_name"),
                     }
                 else:
                     total_qty = position["quantity"] + qty
@@ -410,6 +412,8 @@ class PaperTradingManager(QObject):
                             / total_qty
                     )
                     position["quantity"] = total_qty
+                    if order.get("group_name"):
+                        position["group_name"] = order.get("group_name")
 
         else:  # SELL
             if position and position["quantity"] > 0:
@@ -443,7 +447,8 @@ class PaperTradingManager(QObject):
                         "unrealized_pnl": 0.0,
                         "product": order["product"],
                         "exchange": order["exchange"],
-                        "timestamp": order["exchange_timestamp"]
+                        "timestamp": order["exchange_timestamp"],
+                        "group_name": order.get("group_name"),
                     }
                 else:
                     total_qty = abs(position["quantity"]) + qty
@@ -452,6 +457,8 @@ class PaperTradingManager(QObject):
                             / total_qty
                     )
                     position["quantity"] = -total_qty
+                    if order.get("group_name"):
+                        position["group_name"] = order.get("group_name")
 
         if exit_qty > 0:
             order["realized_pnl"] = realized

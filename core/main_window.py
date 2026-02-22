@@ -3173,6 +3173,8 @@ class ImperiumMainWindow(QMainWindow):
                 'product': product,
                 'order_type': order_type,
             }
+            if isinstance(self.trader, PaperTradingManager):
+                order_args['group_name'] = group_name
             if order_type == self.trader.ORDER_TYPE_LIMIT and price is not None:
                 order_args['price'] = price
 
