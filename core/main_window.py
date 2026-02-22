@@ -2722,6 +2722,9 @@ class ImperiumMainWindow(QMainWindow):
         )
 
         self._play_sound(success=False)
+        # Keep positions table in sync after partial exits so users don't need
+        # to manually trigger refresh.
+        self._refresh_positions()
         logger.warning(
             f"Bulk exit incomplete — remaining positions: {symbols}"
         )

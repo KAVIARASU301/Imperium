@@ -196,6 +196,10 @@ class StrategyBuilderDialog(QDialog):
         self.refresh_prices_btn.clicked.connect(self._refresh_leg_prices)
         footer_layout.addWidget(self.refresh_prices_btn)
 
+        self.footer_clear_btn = QPushButton("Clear Legs")
+        self.footer_clear_btn.clicked.connect(self._clear_legs)
+        footer_layout.addWidget(self.footer_clear_btn)
+
         self.execute_btn = QPushButton("Execute Strategy")
         self.execute_btn.clicked.connect(self._execute_strategy)
         self.execute_btn.setObjectName("executeStrategyButton")
@@ -375,6 +379,7 @@ class StrategyBuilderDialog(QDialog):
         self.legs_table.setRowCount(0)
         total_lots = 0
         net_premium = 0.0
+        lot_size = self._get_lot_size()
         for idx, leg in enumerate(self.legs):
             self.legs_table.insertRow(idx)
             self.legs_table.setItem(idx, 0, QTableWidgetItem(leg.side))
@@ -392,7 +397,7 @@ class StrategyBuilderDialog(QDialog):
             total_lots += leg.lots
             if ltp:
                 leg_sign = 1 if leg.side == "BUY" else -1
-                net_premium += leg_sign * ltp * leg.lots
+                net_premium += leg_sign * ltp * leg.lots * lot_size
 
         if total_lots == 0:
             self.summary_label.setText("Net Premium: — | Total Lots: 0")
@@ -413,9 +418,7 @@ class StrategyBuilderDialog(QDialog):
             QMessageBox.warning(self, "No Legs", "Add at least one leg before executing.")
             return
 
-        lot_size = self.instrument_data.get(self.symbol, {}).get("lot_size", 1)
-        if lot_size <= 0:
-            lot_size = 1
+        lot_size = self._get_lot_size()
 
         order_params_list: List[dict] = []
         for leg in self.legs:
@@ -441,3 +444,7 @@ class StrategyBuilderDialog(QDialog):
             strategy_name = self.template_combo.currentText()
         self.on_execute(order_params_list, strategy_name)
         self.accept()
+
+    def _get_lot_size(self) -> int:
+        lot_size = self.instrument_data.get(self.symbol, {}).get("lot_size", 1)
+        return lot_size if lot_size > 0 else 1
