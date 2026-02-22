@@ -13,33 +13,22 @@ from datetime import datetime, timedelta, time, date
 from core.cvd.cvd_mode import CVDMode
 from utils.time_utils import TRADING_DAY_START
 from uuid import uuid4
-from PySide6.QtWidgets import (QMainWindow, QApplication, QWidget, QVBoxLayout,
-                               QMessageBox, QDialog, QSplitter, QLabel, QFrame)
+from PySide6.QtWidgets import (QMainWindow, QMessageBox, QDialog, QSplitter, QLabel, QFrame)
 from PySide6.QtCore import Qt, QTimer, QUrl, QByteArray
 from PySide6.QtMultimedia import QSoundEffect
 from kiteconnect import KiteConnect
-from PySide6.QtGui import QPalette, QColor, QShortcut, QKeySequence, QPixmap
-import ctypes
-from PySide6.QtGui import QPixmap, QPainter, QColor
-from PySide6.QtCore import QPropertyAnimation, QEasingCurve
-from PySide6.QtWidgets import QGraphicsOpacityEffect
+from PySide6.QtGui import QShortcut, QKeySequence
 
 # Internal imports
 from utils.config_manager import ConfigManager
 from core.market_data_worker import MarketDataWorker
 from utils.data_models import OptionType, Position, Contract
 from core.instrument_loader import InstrumentLoader
-from widgets.strike_ladder import StrikeLadderWidget
-from widgets.header_toolbar import HeaderToolbar
-from widgets.menu_bar import create_menu_bar
-from widgets.account_summary import AccountSummaryWidget
 from dialogs.settings_dialog import SettingsDialog
 from dialogs.open_positions_dialog import OpenPositionsDialog
 from dialogs.quick_order_dialog import QuickOrderDialog, QuickOrderMode
 from core.position_manager import PositionManager
-from widgets.positions_table import PositionsTable
 from core.config import REFRESH_INTERVAL_MS
-from widgets.buy_exit_panel import BuyExitPanel
 from utils.trade_logger import TradeLogger
 from core.paper_trading_manager import PaperTradingManager
 from dialogs.option_chain_dialog import OptionChainDialog
@@ -47,24 +36,22 @@ from dialogs.strategy_builder_dialog import StrategyBuilderDialog
 from dialogs.order_confirmation_dialog import OrderConfirmationDialog
 from core.cvd.cvd_engine import CVDEngine
 from core.auto_trader import AutoTraderDialog
-from dialogs.cvd_multi_chart_dialog import CVDMultiChartDialog
 from core.cvd.cvd_symbol_sets import CVDSymbolSetManager
 from dialogs.cvd_symbol_set_multi_chart_dialog import CVDSetMultiChartDialog
 from core.trade_ledger import TradeLedger
 from core.execution_stack import ExecutionRequest, ExecutionStack
 from utils.title_bar import TitleBar
+from ui.main_window_shell import MainWindowShell
 from utils.api_circuit_breaker import APICircuitBreaker
 from utils.about import show_about
 from utils.expiry_days import show_expiry_days
 from utils.shortcuts import show_shortcuts
 from dialogs.fii_dii_dialog import FIIDIIDialog
-from widgets.status_bar import StatusBarWidget
 from utils.network_utils import with_timeout, NetworkError, NetworkMonitor
 from core.main_window_coordinators import RiskController, DialogCoordinator, MarketDataOrchestrator
 from core.market_data import MarketSubscriptionPolicy
 from core.account import AccountHealthService
 from core.presentation import OrderDialogService, AnalyticsDialogService, MonitorDialogService
-import requests
 
 logger = logging.getLogger(__name__)
 
@@ -251,69 +238,7 @@ class ImperiumMainWindow(QMainWindow):
         self.market_data_orchestrator.update_throttled_ui()
 
     def _apply_dark_theme(self):
-        try:
-            ctypes.windll.dwmapi.DwmSetWindowAttribute(
-                int(self.winId()), 20, ctypes.byref(ctypes.c_int(1)), ctypes.sizeof(ctypes.c_int)
-            )
-        except:
-            pass
-
-        app = QApplication.instance()
-        palette = QPalette()
-        dark_bg = QColor(22, 26, 37)
-        light_text = QColor(224, 224, 224)
-
-        palette.setColor(QPalette.Window, dark_bg)
-        palette.setColor(QPalette.Base, dark_bg)
-        palette.setColor(QPalette.AlternateBase, dark_bg)
-        palette.setColor(QPalette.Button, dark_bg)
-        palette.setColor(QPalette.WindowText, light_text)
-        palette.setColor(QPalette.Text, light_text)
-        palette.setColor(QPalette.ButtonText, light_text)
-        palette.setColor(QPalette.BrightText, light_text)
-        palette.setColor(QPalette.Dark, dark_bg)
-        palette.setColor(QPalette.Shadow, dark_bg)
-
-        app.setPalette(palette)
-        app.setStyle('Fusion')
-
-        self.setStyleSheet("""
-            QMainWindow { background-image: url("assets/textures/main_window_bg.png");background-color: #0f0f0f !important; color: #ffffff; border: 1px solid #333; }
-            QWidget { margin: 0px; padding: 0px; }
-            QMessageBox { background-image: url("assets/textures/Qmessage_texture.png");background-color: #161A25 !important; color: #E0E0E0 !important; border: 1px solid #3A4458; border-radius: 8px; min-width: 460px; min-height: 260px; }
-            QMessageBox { border: none; margin: 0px; }
-            QMessageBox::title, QMessageBox QWidget, QMessageBox * { background-image: url("assets/textures/Qmessage_texture.png"); background-color: #161A25 !important; color: #E0E0E0 !important; }
-            QMessageBox QLabel { color: #E0E0E0 !important; background-color: #161A25 !important; font-size: 13px; min-height: 120px; }
-            QMessageBox QPushButton { background-color: #212635 !important; color: #E0E0E0 !important; border: 1px solid #3A4458; border-radius: 5px; padding: 8px 16px; font-weight: 500; min-width: 70px; }
-            QMessageBox QPushButton:hover { background-color: #29C7C9 !important; color: #04b3bd !important; border-color: #29C7C9; }
-            QMessageBox QPushButton:pressed { background-color: #1f8a8c !important; }
-            QDialog { background-color: #161A25; color: #E0E0E0; }
-            QStatusBar {
-                background-image: url("assets/textures/status_bar_texture.png");
-                background-color: #141A27;
-                color: #8F9CB2;
-                border-top: 1px solid #242C3B;
-                padding: 1px 8px;
-                font-size: 11px;
-            }
-            QStatusBar::item { border: none; }
-            #footerModeChip, #footerStatusChip, #footerClockChip {
-                color: #8390A7;
-                background: transparent;
-                border: none;
-                padding: 0px;
-                margin: 0px 2px;
-                font-weight: 400;
-            }
-            #footerSeparator {
-                color: #202736;
-                background-color: #202736;
-                max-width: 1px;
-                margin: 0 4px;
-            }
-            QDockWidget { background-color: #1a1a1a; color: #fff; border: 1px solid #333; }
-            QDockWidget::title { background-color: #2a2a2a; padding: 5px; border-bottom: 1px solid #333; }
-        """)
+        MainWindowShell.apply_dark_theme(self)
 
     def _init_background_workers(self):
 
@@ -417,143 +342,30 @@ class ImperiumMainWindow(QMainWindow):
             self._refresh_positions()
 
     def _setup_ui(self):
-        main_container = QWidget()
-        self.setCentralWidget(main_container)
-
-        container_layout = QVBoxLayout(main_container)
-        container_layout.setContentsMargins(0, 0, 0, 0)
-        container_layout.setSpacing(0)
-
-        container_layout.addWidget(self.title_bar)
-
-        content_widget = QWidget()
-        container_layout.addWidget(content_widget)
-        content_layout = QVBoxLayout(content_widget)
-        content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(0)
-
-        self.header = HeaderToolbar()
-        content_layout.addWidget(self.header)
-
-        main_content_widget = QWidget()
-        content_layout.addWidget(main_content_widget)
-        main_content_layout = QVBoxLayout(main_content_widget)
-        main_content_layout.setContentsMargins(0, 0, 0, 0)
-        main_content_layout.setSpacing(0)
-
-        self._create_main_widgets()
-
-        self.main_splitter = QSplitter(Qt.Horizontal)
-        self.main_splitter.setHandleWidth(1)
-        self.main_splitter.setStyleSheet("""
-            QSplitter::handle { 
-                background-color: #2A3140; 
-                border: none;
-            } 
-            QSplitter::handle:hover { 
-                background-color: #3A4458; 
-            }
-        """)
-        left_splitter = self._create_left_column()
-        self.main_splitter.addWidget(left_splitter)
-
-        center_column = self._create_center_column()
-        center_widget = QWidget()
-        center_widget.setLayout(center_column)
-        self.main_splitter.addWidget(center_widget)
-
-        fourth_column = self._create_fourth_column()
-        fourth_widget = QWidget()
-        fourth_widget.setLayout(fourth_column)
-        self.main_splitter.addWidget(fourth_widget)
-
-        self.main_splitter.setSizes([250, 600, 350])
-        main_content_layout.addWidget(self.main_splitter)
-
-        self._setup_menu_bar()
-        self._setup_status_footer()
-
-        QTimer.singleShot(3000, self._update_account_info)
+        MainWindowShell.setup_ui(self)
 
     def _setup_status_footer(self):
         """Initialize status bar widget"""
-        self.status_bar_widget = StatusBarWidget(self.statusBar(), self.trading_mode)
+        MainWindowShell.setup_status_footer(self)
 
     def _publish_status(self, message: str, timeout_ms: int = 4000, level: str = "info"):
         """Publish status message through StatusBarWidget"""
-        self.status_bar_widget.publish_message(message, timeout_ms, level)
+        MainWindowShell.publish_status(self, message, timeout_ms, level)
 
     def _create_main_widgets(self):
-        self.buy_exit_panel = BuyExitPanel(self.trader)
-        self.buy_exit_panel.setMinimumSize(200, 300)
-        self.account_summary = AccountSummaryWidget()
-        self.account_summary.setMinimumHeight(220)
-        self.account_summary.setContentsMargins(3, 0, 3, 0)  # 🔥 IMPORTANT
-        self.strike_ladder = StrikeLadderWidget(self.real_kite_client)
-        self.strike_ladder.setMinimumWidth(500)
-        if hasattr(self.strike_ladder, 'setMaximumWidth'):
-            self.strike_ladder.setMaximumWidth(800)
-            self.strike_ladder.setMaximumHeight(700)
-        self.inline_positions_table = PositionsTable(config_manager=self.config_manager)
-        self.inline_positions_table.setMinimumWidth(300)
-        self.inline_positions_table.setMinimumHeight(200)
+        MainWindowShell.create_main_widgets(self)
 
     def _create_left_column(self) -> QSplitter:
-        splitter = QSplitter(Qt.Orientation.Vertical)
-        splitter.setHandleWidth(1)
-        splitter.setContentsMargins(0, 0, 0, 0)  # 🔥 IMPORTANT
+        return MainWindowShell.create_left_column(self)
 
-        splitter.setStyleSheet("""
-            QSplitter::handle { 
-                background-color: #2A3140; 
-                border: none;
-            } 
-            QSplitter::handle:hover { 
-                background-color: #3A4458; 
-            }
-        """)
-        splitter.addWidget(self.buy_exit_panel)
-        splitter.addWidget(self.account_summary)
-        splitter.setSizes([400, 200])
-        return splitter
+    def _create_center_column(self):
+        return MainWindowShell.create_center_column(self)
 
-    def _create_center_column(self) -> QVBoxLayout:
-        layout = QVBoxLayout()
-        layout.setSpacing(0)
-        layout.setContentsMargins(3, 3, 3, 3)  # 🔥 IMPORTANT
-        layout.addWidget(self.strike_ladder, 1)
-        return layout
-
-    def _create_fourth_column(self) -> QVBoxLayout:
-        layout = QVBoxLayout()
-        layout.setContentsMargins(3, 3, 0, 3)  # 🔥 IMPORTANT
-        layout.setSpacing(0)
-        layout.addWidget(self.inline_positions_table, 1)
-        return layout
+    def _create_fourth_column(self):
+        return MainWindowShell.create_fourth_column(self)
 
     def _setup_menu_bar(self):
-        menubar, menu_actions = create_menu_bar(self)
-        self.title_bar.set_menu_bar(menubar)
-        menu_actions['refresh'].triggered.connect(self._refresh_data)
-        menu_actions['exit'].triggered.connect(self.close)
-        menu_actions['positions'].triggered.connect(self._show_positions_dialog)
-        menu_actions['pnl_history'].triggered.connect(self._show_pnl_history_dialog)
-        menu_actions['pending_orders'].triggered.connect(self._show_pending_orders_dialog)
-        menu_actions['orders'].triggered.connect(self._show_order_history_dialog)
-        menu_actions['performance'].triggered.connect(self._show_performance_dialog)
-        menu_actions['watchlist'].triggered.connect(self._show_watchlist_dialog)
-        menu_actions['settings'].triggered.connect(self._show_settings)
-        menu_actions['option_chain'].triggered.connect(self._show_option_chain_dialog)
-        menu_actions['strategy_builder'].triggered.connect(self._show_strategy_builder_dialog)
-        menu_actions['refresh_positions'].triggered.connect(self._refresh_positions)
-        menu_actions['shortcuts'].triggered.connect(self._show_shortcuts)
-        menu_actions['expiry_days'].triggered.connect(self._show_expiry_days)
-        menu_actions['about'].triggered.connect(self._show_about)
-        menu_actions['market_monitor'].triggered.connect(self._show_market_monitor_dialog)
-        menu_actions['cvd_chart'].triggered.connect(self._show_cvd_chart_dialog)
-        menu_actions['cvd_market_monitor'].triggered.connect(self._show_cvd_market_monitor_dialog)
-        menu_actions['cvd_symbol_sets'].triggered.connect(self._show_cvd_symbol_set_dialog)
-        menu_actions['fii_dii_data'].triggered.connect(self._show_fii_dii_dialog)
+        MainWindowShell.setup_menu_bar(self)
 
     def _show_order_history_dialog(self):
         self.order_dialog_service.show_order_history_dialog()
