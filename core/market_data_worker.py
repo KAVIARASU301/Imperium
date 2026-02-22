@@ -49,6 +49,8 @@ class MarketDataWorker(QObject):
         self.network_check_failed_count = 0  # Track consecutive network failures
         self._http_probe_cooldown_sec = 60
         self._last_http_probe_monotonic = 0.0
+        self._kite_ticker_logger = logging.getLogger("kiteconnect.ticker")
+        self._kite_ticker_log_level_before_stop: Optional[int] = None
 
         # Ensure websocket callback handling runs on the worker's thread.
         self._ticks_received.connect(self._handle_ticks, Qt.QueuedConnection)
@@ -154,6 +156,10 @@ class MarketDataWorker(QObject):
 
         logger.info("MarketDataWorker starting...")
         self.is_intentional_stop = False  # Reset flag
+
+        if self._kite_ticker_log_level_before_stop is not None:
+            self._kite_ticker_logger.setLevel(self._kite_ticker_log_level_before_stop)
+            self._kite_ticker_log_level_before_stop = None
 
         # 🔥 NETWORK CHECK: Verify connectivity before attempting connection
         is_connected, error_msg = self._check_network_connectivity(force_http_probe=True)
@@ -275,6 +281,12 @@ class MarketDataWorker(QObject):
 
     def _handle_close(self, code, reason):
         """Callback on connection close."""
+        if self.is_intentional_stop:
+            logger.info(f"WebSocket closed during intentional shutdown. Code: {code}, Reason: {reason}")
+            self.is_running = False
+            self.heartbeat_timer.stop()
+            return
+
         logger.warning(f"WebSocket connection closed. Code: {code}, Reason: {reason}")
         self.is_running = False
         self.heartbeat_timer.stop()
@@ -295,6 +307,10 @@ class MarketDataWorker(QObject):
 
     def _handle_error(self, code, reason):
         """Callback for WebSocket errors."""
+        if self.is_intentional_stop:
+            logger.info(f"Ignoring WebSocket error during intentional shutdown. Code: {code}, Reason: {reason}")
+            return
+
         logger.error(f"WebSocket error. Code: {code}, Reason: {reason}")
         self.connection_status_changed.emit(f"Error: {reason}")
         self.connection_error.emit(str(reason))
@@ -429,6 +445,9 @@ class MarketDataWorker(QObject):
         if self.kws:
             try:
                 if self.is_running:
+                    if self._kite_ticker_log_level_before_stop is None:
+                        self._kite_ticker_log_level_before_stop = self._kite_ticker_logger.level
+                    self._kite_ticker_logger.setLevel(logging.CRITICAL)
                     self.kws.stop()
                     logger.info("KiteTicker stopped successfully")
             except Exception as e:
