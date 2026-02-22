@@ -310,6 +310,7 @@ class StrategyBuilderDialog(QDialog):
             QMessageBox.warning(self, "No Strikes", "Strike ladder data is not ready yet.")
             return
         template = self.template_combo.currentText()
+        self.strategy_name_input.setText(template)
         call_offset = self.call_offset_spin.value()
         put_offset = self.put_offset_spin.value()
         wing_width = self.wing_width_spin.value()
