@@ -38,7 +38,6 @@ from core.auto_trader.cvd_automation_coordinator import CvdAutomationCoordinator
 from core.cvd.cvd_symbol_sets import CVDSymbolSetManager
 from dialogs.cvd_symbol_set_multi_chart_dialog import CVDSetMultiChartDialog
 from core.execution.trade_ledger import TradeLedger
-from core.execution.execution_stack import ExecutionRequest, ExecutionStack
 from utils.title_bar import TitleBar
 from core.ui.main_window_shell import MainWindowShell
 from utils.api_circuit_breaker import APICircuitBreaker
@@ -52,7 +51,7 @@ from core.market_data import MarketSubscriptionPolicy
 from core.account import AccountHealthService
 from core.presentation import OrderDialogService, AnalyticsDialogService, MonitorDialogService
 from core.positions import PositionSyncAdapter
-from core.execution import ExecutionFacade
+from core.execution import ExecutionFacade, ExecutionService, ExecutionStack
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +156,7 @@ class ImperiumMainWindow(QMainWindow):
         self.header_linked_cvd_token: Optional[int] = None
         self.trade_ledger = TradeLedger(mode=self.trading_mode)
         self.execution_stack = ExecutionStack(trading_mode=self.trading_mode, base_dir=Path.home() / ".imperium_desk")
+        self.execution_service = ExecutionService(self)
         self.cvd_automation_coordinator = CvdAutomationCoordinator(
             main_window=self,
             trading_mode=self.trading_mode,
@@ -1559,152 +1559,10 @@ class ImperiumMainWindow(QMainWindow):
                 'tradingsymbol': contract_obj.tradingsymbol if contract_obj else None}
 
     def _execute_orders(self, confirmed_order_details: dict):
-        successful_orders_info = []
-        failed_orders_info = []
-        order_product = confirmed_order_details.get('product', self.trader.PRODUCT_MIS)
-        total_quantity_per_strike = confirmed_order_details.get('total_quantity_per_strike', 0)
-
-        if total_quantity_per_strike == 0:
-            logger.error("Total quantity per strike is zero in confirmed_order_details.")
-            QMessageBox.critical(self, "Order Error", "Order quantity is zero. Cannot place order.")
-            return
-
-        for strike_detail in confirmed_order_details.get('strikes', []):
-            contract = strike_detail.get('contract')
-            ok, reason = self._validate_pre_trade_risk(
-                transaction_type=self.trader.TRANSACTION_TYPE_BUY,
-                quantity=total_quantity_per_strike,
-                tradingsymbol=getattr(contract, 'tradingsymbol', None),
-            )
-            if not ok:
-                self._reject_order_for_risk(reason)
-                return
-
-        self._publish_status("Placing orders...", 2000, level="action")
-        for strike_detail in confirmed_order_details.get('strikes', []):
-            contract_to_trade: Optional[Contract] = strike_detail.get('contract')
-            if not contract_to_trade or not contract_to_trade.tradingsymbol:
-                logger.warning(f"Missing contract or tradingsymbol for strike {strike_detail.get('strike')}. Skipping.")
-                failed_orders_info.append(
-                    {'symbol': f"Strike {strike_detail.get('strike')}", 'error': "Missing contract data"})
-                continue
-            try:
-                order_args = {
-                    'variety': self.trader.VARIETY_REGULAR,
-                    'exchange': self.trader.EXCHANGE_NFO,
-                    'tradingsymbol': contract_to_trade.tradingsymbol,
-                    'transaction_type': self.trader.TRANSACTION_TYPE_BUY,
-                    'quantity': total_quantity_per_strike,
-                    'product': order_product,
-                    'order_type': self.trader.ORDER_TYPE_MARKET,
-                }
-                execution_request = ExecutionRequest(
-                    tradingsymbol=contract_to_trade.tradingsymbol,
-                    transaction_type=self.trader.TRANSACTION_TYPE_BUY,
-                    quantity=int(total_quantity_per_strike),
-                    order_type=self.trader.ORDER_TYPE_MARKET,
-                    product=order_product,
-                    ltp=float(getattr(contract_to_trade, 'ltp', 0.0) or 0.0),
-                    bid=float(getattr(contract_to_trade, 'bid', 0.0) or 0.0),
-                    ask=float(getattr(contract_to_trade, 'ask', 0.0) or 0.0),
-                    limit_price=None,
-                    urgency=str(confirmed_order_details.get('execution_urgency') or 'normal'),
-                    participation_rate=float(confirmed_order_details.get('participation_rate') or 0.15),
-                    execution_algo=str(confirmed_order_details.get('execution_algo') or 'IMMEDIATE'),
-                    max_child_orders=int(confirmed_order_details.get('max_child_orders') or 1),
-                    randomize_slices=bool(confirmed_order_details.get('randomize_slices', True)),
-                    metadata={'source': 'buy_exit_panel'},
-                )
-                placed_order_ids = self.execution_stack.execute(
-                    request=execution_request,
-                    place_order_fn=self.trader.place_order,
-                    base_order_args=order_args,
-                )
-
-                logger.info(
-                    "Execution stack placed %s child order(s) for panel order %s, Qty: %s",
-                    len(placed_order_ids),
-                    contract_to_trade.tradingsymbol,
-                    total_quantity_per_strike,
-                )
-                if isinstance(self.trader, PaperTradingManager):
-                    successful_orders_info.append(
-                        {'order_id': placed_order_ids[-1], 'symbol': contract_to_trade.tradingsymbol,
-                         'quantity': total_quantity_per_strike,
-                         'price': contract_to_trade.ltp})
-                    continue
-
-                for order_id in placed_order_ids:
-                    time.sleep(0.5)
-                    confirmed_order_api_data = self._confirm_order_success(order_id)
-                    if confirmed_order_api_data:
-                        order_status = confirmed_order_api_data.get('status')
-                        if order_status in ['OPEN', 'TRIGGER PENDING', 'AMO REQ RECEIVED']:
-                            logger.info(f"Order {order_id} is pending with status: {order_status}. Triggering refresh.")
-                            self._refresh_positions()
-                            continue
-
-                        if order_status == 'COMPLETE':
-                            avg_price_from_order = confirmed_order_api_data.get('average_price', contract_to_trade.ltp)
-                            tsl = confirmed_order_details.get("trailing_stop_loss") or 0
-                            new_position = Position(
-                                symbol=f"{contract_to_trade.symbol}{contract_to_trade.strike}{contract_to_trade.option_type}",
-                                tradingsymbol=contract_to_trade.tradingsymbol,
-                                quantity=confirmed_order_api_data.get('filled_quantity', total_quantity_per_strike),
-                                average_price=avg_price_from_order,
-                                ltp=avg_price_from_order,
-                                pnl=0,
-                                contract=contract_to_trade,
-                                order_id=order_id,
-                                exchange=self.trader.EXCHANGE_NFO,
-                                product=order_product,
-                                stop_loss_price=confirmed_order_details.get("stop_loss_price"),
-                                target_price=confirmed_order_details.get("target_price"),
-                                trailing_stop_loss=tsl if tsl > 0 else None
-                            )
-
-                            self.position_manager.add_position(new_position)
-                            self.trade_logger.log_trade(confirmed_order_api_data)
-                            successful_orders_info.append(
-                                {'order_id': order_id, 'symbol': contract_to_trade.tradingsymbol,
-                                 'quantity': confirmed_order_api_data.get('filled_quantity', total_quantity_per_strike),
-                                 'price': avg_price_from_order})
-                            logger.info(
-                                f"Order {order_id} for {contract_to_trade.tradingsymbol} successful and position added.")
-                    else:
-                        logger.warning(
-                            f"Order {order_id} for {contract_to_trade.tradingsymbol} failed or not confirmed.")
-                        failed_orders_info.append(
-                            {'symbol': contract_to_trade.tradingsymbol,
-                             'error': "Order rejected or status not confirmed"})
-            except Exception as e:
-                logger.error(f"Order placement failed for {contract_to_trade.tradingsymbol}: {e}", exc_info=True)
-                failed_orders_info.append({'symbol': contract_to_trade.tradingsymbol, 'error': str(e)})
-
-        self._refresh_positions()
-        self._play_sound(success=not failed_orders_info)
-        self._show_order_results(successful_orders_info, failed_orders_info)
-        self._publish_status("Order placement flow completed.", 3000, level="info")
+        self.execution_service.execute_orders(confirmed_order_details)
 
     def _show_order_results(self, successful_list: List[Dict], failed_list: List[Dict]):
-        if not failed_list:
-            logger.info(f"Successfully placed {len(successful_list)} orders. No prompt shown.")
-            return
-
-        msg = f"Order Placement Summary:\n\n"
-        msg += f"  - Successful: {len(successful_list)} orders\n"
-        msg += f"  - Failed: {len(failed_list)} orders\n\n"
-        msg += "Failure Details:\n"
-
-        for f_info in failed_list[:5]:
-            symbol = f_info.get('symbol', 'N/A')
-            error = f_info.get('error', 'Unknown error')
-            msg += f"  • {symbol}: {error}\n"
-
-        if len(failed_list) > 5:
-            msg += f"  ... and {len(failed_list) - 5} more failures.\n"
-
-        QMessageBox.warning(self, "Order Placement Issue", msg)
+        self.execution_service.show_order_results(successful_list, failed_list)
 
     def _on_single_strike_selected(self, contract: Contract):
         if not contract:
@@ -1741,185 +1599,7 @@ class ImperiumMainWindow(QMainWindow):
                 self._publish_status("Order cancelled.", 4000, level="info")
 
     def _execute_single_strike_order(self, order_params: dict):
-        contract_to_trade: Contract = order_params.get('contract')
-        quantity = order_params.get('quantity')
-        price = order_params.get('price')
-        order_type = order_params.get('order_type', self.trader.ORDER_TYPE_MARKET)
-        product = order_params.get('product', self.settings.get('default_product', self.trader.PRODUCT_MIS))
-        transaction_type = order_params.get('transaction_type', self.trader.TRANSACTION_TYPE_BUY)
-        stop_loss_price = order_params.get('stop_loss_price')
-        target_price = order_params.get('target_price')
-        trailing_stop_loss = order_params.get('trailing_stop_loss')
-        stop_loss_amount = float(order_params.get('stop_loss_amount') or 0)
-        target_amount = float(order_params.get('target_amount') or 0)
-        trailing_stop_loss_amount = float(order_params.get('trailing_stop_loss_amount') or 0)
-        group_name = order_params.get('group_name')
-        auto_token = order_params.get('auto_token')
-
-        if group_name and contract_to_trade:
-            self.position_manager.set_group_name_hint(contract_to_trade.tradingsymbol, group_name)
-
-        if not contract_to_trade or not quantity:
-            logger.error("Invalid parameters for single strike order.")
-            QMessageBox.critical(self, "Order Error", "Missing contract or quantity for the order.")
-            return
-
-        ok, reason = self._validate_pre_trade_risk(
-            transaction_type=transaction_type,
-            quantity=quantity,
-            tradingsymbol=getattr(contract_to_trade, 'tradingsymbol', None),
-        )
-        if not ok:
-            self._reject_order_for_risk(reason)
-            return
-
-        try:
-            order_args = {
-                'variety': self.trader.VARIETY_REGULAR,
-                'exchange': self.trader.EXCHANGE_NFO,
-                'tradingsymbol': contract_to_trade.tradingsymbol,
-                'transaction_type': transaction_type,
-                'quantity': quantity,
-                'product': product,
-                'order_type': order_type,
-            }
-            if isinstance(self.trader, PaperTradingManager):
-                order_args['group_name'] = group_name
-            if order_type == self.trader.ORDER_TYPE_LIMIT and price is not None:
-                order_args['price'] = price
-
-            execution_request = ExecutionRequest(
-                tradingsymbol=contract_to_trade.tradingsymbol,
-                transaction_type=transaction_type,
-                quantity=int(quantity),
-                order_type=order_type,
-                product=product,
-                ltp=float(getattr(contract_to_trade, 'ltp', 0.0) or 0.0),
-                bid=float(getattr(contract_to_trade, 'bid', 0.0) or 0.0),
-                ask=float(getattr(contract_to_trade, 'ask', 0.0) or 0.0),
-                limit_price=float(price) if price is not None else None,
-                urgency=str(order_params.get('execution_urgency') or 'normal'),
-                participation_rate=float(order_params.get('participation_rate') or 0.15),
-                execution_algo=str(order_params.get('execution_algo') or 'IMMEDIATE'),
-                max_child_orders=int(order_params.get('max_child_orders') or 1),
-                randomize_slices=bool(order_params.get('randomize_slices', True)),
-                metadata={
-                    'auto_token': auto_token,
-                    'group_name': group_name,
-                },
-            )
-            placed_order_ids = self.execution_stack.execute(
-                request=execution_request,
-                place_order_fn=self.trader.place_order,
-                base_order_args=order_args,
-            )
-            order_id = placed_order_ids[-1]
-            logger.info(
-                "Execution stack placed %s child order(s) for %s. Last order id: %s",
-                len(placed_order_ids),
-                contract_to_trade.tradingsymbol,
-                order_id,
-            )
-
-            # Re-anchor SL/TP from actual average fill, so entry behaves like MODIFY flow.
-            def _build_fill_anchored_risk_values(position):
-                qty = abs(position.quantity)
-                if qty <= 0:
-                    return None, None, None
-
-                is_buy_position = position.quantity > 0
-                avg_fill_price = float(position.average_price or 0)
-                if avg_fill_price <= 0:
-                    return None, None, None
-
-                anchored_sl = None
-                anchored_tp = None
-                anchored_tsl = None
-
-                if stop_loss_amount > 0:
-                    sl_per_unit = stop_loss_amount / qty
-                    anchored_sl = (
-                        avg_fill_price - sl_per_unit
-                        if is_buy_position
-                        else avg_fill_price + sl_per_unit
-                    )
-
-                if target_amount > 0:
-                    tp_per_unit = target_amount / qty
-                    anchored_tp = (
-                        avg_fill_price + tp_per_unit
-                        if is_buy_position
-                        else avg_fill_price - tp_per_unit
-                    )
-
-                if trailing_stop_loss_amount > 0:
-                    anchored_tsl = trailing_stop_loss_amount / qty
-
-                return anchored_sl, anchored_tp, anchored_tsl
-
-            def _apply_risk_after_fill():
-                position = self.position_manager.get_position(contract_to_trade.tradingsymbol)
-                if not position:
-                    logger.warning(
-                        "Position not yet available for risk application: %s",
-                        contract_to_trade.tradingsymbol,
-                    )
-                    return
-
-                anchored_sl, anchored_tp, anchored_tsl = _build_fill_anchored_risk_values(position)
-                self.position_manager.update_sl_tp_for_position(
-                    contract_to_trade.tradingsymbol,
-                    anchored_sl,
-                    anchored_tp,
-                    anchored_tsl,
-                )
-                logger.info(
-                    "✅ Applied fill-anchored SL/TP for %s | SL=%s TP=%s TSL=%s",
-                    contract_to_trade.tradingsymbol,
-                    anchored_sl,
-                    anchored_tp,
-                    anchored_tsl,
-                )
-
-            # 🔥 FIX: For paper trading, schedule SL/TP application AFTER position refresh
-            if isinstance(self.trader, PaperTradingManager):
-                # Refresh positions first, then apply SL/TP/TSL from fill-anchored cash risk.
-                # This must run for both BUY and SELL entries so trailing SL works consistently.
-                QTimer.singleShot(500, self._refresh_positions)
-                QTimer.singleShot(1000, _apply_risk_after_fill)
-
-                self._play_sound(success=True)
-                return
-
-            # LIVE TRADING PATH
-            # CRITICAL: Never call time.sleep() on the GUI thread — it freezes the event
-            # loop, stacks up pending timer callbacks and crashes the app under automation.
-            # Use QTimer.singleShot to do the confirmation check asynchronously instead.
-            if not isinstance(self.trader, PaperTradingManager):
-                child_count = max(1, len(placed_order_ids))
-                child_qty = max(1, int(quantity / child_count))
-                for index, child_order_id in enumerate(placed_order_ids):
-                    delay_ms = 500 + (index * 250)
-                    QTimer.singleShot(
-                        delay_ms,
-                        lambda oid=child_order_id, c=contract_to_trade, qty=child_qty,
-                               p=price, tt=transaction_type, prod=product,
-                               sl=stop_loss_price, tp=target_price,
-                               tsl=trailing_stop_loss,
-                               sl_amt=stop_loss_amount, tp_amt=target_amount,
-                               tsl_amt=trailing_stop_loss_amount, gn=group_name,
-                               at=auto_token:
-                        self._confirm_and_finalize_order(oid, c, qty, p, tt, prod, sl, tp, tsl,
-                                                         sl_amt, tp_amt, tsl_amt, gn, at)
-                    )
-                return
-
-        except Exception as e:
-            self._play_sound(success=False)
-            logger.error(f"Single strike order execution failed for {contract_to_trade.tradingsymbol}: {e}",
-                         exc_info=True)
-            self._handle_order_error(e, order_params)
-            self._show_order_results([], [{'symbol': contract_to_trade.tradingsymbol, 'error': str(e)}])
+        self.execution_service.execute_single_strike_order(order_params)
 
     def _confirm_and_finalize_order(
             self, order_id, contract_to_trade, quantity, price,
@@ -1927,217 +1607,26 @@ class ImperiumMainWindow(QMainWindow):
             trailing_stop_loss, stop_loss_amount, target_amount,
             trailing_stop_loss_amount, group_name, auto_token=None
     ):
-        """
-        Async callback (called via QTimer.singleShot) that replaces the old
-        blocking time.sleep(0.5) + _confirm_order_success() pattern.
-
-        This runs on the GUI thread AFTER yielding to the event loop, so all
-        pending Qt callbacks (timers, signals) drain normally first.
-        """
-        self._refresh_positions()
-        confirmed_order_api_data = self._confirm_order_success(order_id)
-        if confirmed_order_api_data:
-            order_status = confirmed_order_api_data.get('status')
-            if order_status in ['OPEN', 'TRIGGER PENDING', 'AMO REQ RECEIVED']:
-                if auto_token is not None:
-                    self._start_cvd_pending_retry(auto_token)
-                self._play_sound(success=True)
-                return
-
-            if order_status == 'COMPLETE':
-                avg_price_from_order = confirmed_order_api_data.get(
-                    'average_price', price if price else contract_to_trade.ltp)
-                filled_quantity = confirmed_order_api_data.get('filled_quantity', quantity)
-
-                if transaction_type == self.trader.TRANSACTION_TYPE_BUY:
-                    avg_fill_price = avg_price_from_order
-                    risk_qty = abs(filled_quantity)
-
-                    if stop_loss_amount and stop_loss_amount > 0 and risk_qty > 0:
-                        sl_per_unit = stop_loss_amount / risk_qty
-                        stop_loss_price = avg_fill_price - sl_per_unit
-
-                    if target_amount and target_amount > 0 and risk_qty > 0:
-                        tp_per_unit = target_amount / risk_qty
-                        target_price = avg_fill_price + tp_per_unit
-
-                    if trailing_stop_loss_amount and trailing_stop_loss_amount > 0 and risk_qty > 0:
-                        trailing_stop_loss = trailing_stop_loss_amount / risk_qty
-
-                    new_position = Position(
-                        symbol=f"{contract_to_trade.symbol}{contract_to_trade.strike}{contract_to_trade.option_type}",
-                        tradingsymbol=contract_to_trade.tradingsymbol,
-                        quantity=filled_quantity,
-                        average_price=avg_price_from_order,
-                        ltp=avg_price_from_order,
-                        pnl=0,
-                        contract=contract_to_trade,
-                        order_id=order_id,
-                        exchange=self.trader.EXCHANGE_NFO,
-                        product=product,
-                        stop_loss_price=stop_loss_price,
-                        target_price=target_price,
-                        trailing_stop_loss=trailing_stop_loss if trailing_stop_loss and trailing_stop_loss > 0 else None,
-                        group_name=group_name
-                    )
-                    self.position_manager.add_position(new_position)
-                    self.trade_logger.log_trade(confirmed_order_api_data)
-                    action_msg = "bought"
-                else:
-                    action_msg = "sold"
-
-                self._play_sound(success=True)
-                if auto_token is not None:
-                    self._stop_cvd_pending_retry(auto_token)
-                self._publish_status(
-                    f"Order {order_id} {action_msg} {filled_quantity} {contract_to_trade.tradingsymbol} @ {avg_price_from_order:.2f}.",
-                    5000,
-                    level="success")
-                self._show_order_results(
-                    [{'order_id': order_id, 'symbol': contract_to_trade.tradingsymbol}], [])
-        else:
-            self._play_sound(success=False)
-            if auto_token is not None:
-                self._start_cvd_pending_retry(auto_token)
-            logger.warning(
-                f"Single strike order {order_id} for {contract_to_trade.tradingsymbol} "
-                "failed or not confirmed.")
-            self._show_order_results(
-                [], [{'symbol': contract_to_trade.tradingsymbol,
-                      'error': "Order rejected or status not confirmed"}])
+        self.execution_service.confirm_and_finalize_order(
+            order_id, contract_to_trade, quantity, price, transaction_type, product,
+            stop_loss_price, target_price, trailing_stop_loss, stop_loss_amount,
+            target_amount, trailing_stop_loss_amount, group_name, auto_token,
+        )
 
     def _has_pending_order_for_symbol(self, tradingsymbol: str | None) -> bool:
-        if not tradingsymbol:
-            return False
-
-        pending_orders = self.position_manager.get_pending_orders() or []
-        return any(
-            order.get("tradingsymbol") == tradingsymbol
-            and order.get("status") in {'OPEN', 'TRIGGER PENDING', 'AMO REQ RECEIVED'}
-            for order in pending_orders
-        )
+        return self.execution_service.has_pending_order_for_symbol(tradingsymbol)
 
     def _start_cvd_pending_retry(self, token: int):
-        if isinstance(self.trader, PaperTradingManager):
-            return
-
-        if token not in self._cvd_automation_positions:
-            self._stop_cvd_pending_retry(token)
-            return
-
-        timer = self._cvd_pending_retry_timers.get(token)
-        if timer and timer.isActive():
-            return
-
-        if timer is None:
-            timer = QTimer(self)
-            timer.setInterval(10_000)
-            timer.timeout.connect(lambda t=token: self._retry_cvd_pending_order(t))
-            self._cvd_pending_retry_timers[token] = timer
-
-        logger.info("[AUTO] Started 10s pending-order retry for token=%s", token)
-        timer.start()
+        self.execution_service.start_cvd_pending_retry(token)
 
     def _stop_cvd_pending_retry(self, token: int):
-        timer = self._cvd_pending_retry_timers.pop(token, None)
-        if timer:
-            timer.stop()
-            timer.deleteLater()
-            logger.info("[AUTO] Stopped pending-order retry for token=%s", token)
+        self.execution_service.stop_cvd_pending_retry(token)
 
     def _retry_cvd_pending_order(self, token: int):
-        active_trade = self._cvd_automation_positions.get(token)
-        if not active_trade:
-            self._stop_cvd_pending_retry(token)
-            return
-
-        tradingsymbol = active_trade.get("tradingsymbol")
-        if not tradingsymbol:
-            self._stop_cvd_pending_retry(token)
-            return
-
-        if self.position_manager.get_position(tradingsymbol):
-            self._stop_cvd_pending_retry(token)
-            return
-
-        self._refresh_positions()
-
-        pending_candidates = [
-            order for order in (self.position_manager.get_pending_orders() or [])
-            if order.get("tradingsymbol") == tradingsymbol
-               and order.get("status") in {'OPEN', 'TRIGGER PENDING', 'AMO REQ RECEIVED'}
-        ]
-        if not pending_candidates:
-            logger.info("[AUTO] No pending order left for %s during retry tick", tradingsymbol)
-            return
-
-        pending_order = pending_candidates[-1]
-        pending_order_id = pending_order.get("order_id")
-
-        try:
-            if pending_order_id:
-                self.trader.cancel_order(self.trader.VARIETY_REGULAR, pending_order_id)
-                logger.info("[AUTO] Cancelled pending order %s for retry", pending_order_id)
-        except Exception as exc:
-            logger.warning("[AUTO] Could not cancel pending order %s: %s", pending_order_id, exc)
-            return
-
-        latest_contract = self._get_latest_contract_from_ladder(tradingsymbol)
-        if not latest_contract:
-            logger.warning("[AUTO] Latest contract unavailable for retry: %s", tradingsymbol)
-            return
-
-        retry_price = self._calculate_smart_limit_price(latest_contract)
-        retry_qty = int(
-            pending_order.get("pending_quantity")
-            or pending_order.get("quantity")
-            or active_trade.get("quantity")
-            or 0
-        )
-        if retry_qty <= 0:
-            logger.warning("[AUTO] Invalid retry quantity for %s", tradingsymbol)
-            return
-
-        retry_params = {
-            "contract": latest_contract,
-            "quantity": retry_qty,
-            "order_type": self.trader.ORDER_TYPE_LIMIT,
-            "price": retry_price,
-            "product": pending_order.get("product") or active_trade.get("product") or self.trader.PRODUCT_MIS,
-            "transaction_type": pending_order.get("transaction_type") or active_trade.get(
-                "transaction_type") or self.trader.TRANSACTION_TYPE_BUY,
-            "group_name": active_trade.get("group_name") or f"CVD_AUTO_{token}",
-            "auto_token": token,
-        }
-        logger.info(
-            "[AUTO] Replacing pending order for %s every 10s with refreshed LTP %.2f",
-            tradingsymbol,
-            retry_price,
-        )
-        self._execute_single_strike_order(retry_params)
+        self.execution_service.retry_cvd_pending_order(token)
 
     def _execute_strategy_orders(self, order_params_list: List[dict], strategy_name: Optional[str] = None):
-        if not order_params_list:
-            return
-
-        for order_params in order_params_list:
-            side = order_params.get("side", "BUY")
-            transaction_type = (
-                self.trader.TRANSACTION_TYPE_BUY
-                if side.upper() == "BUY"
-                else self.trader.TRANSACTION_TYPE_SELL
-            )
-            mapped_params = {
-                **order_params,
-                "transaction_type": transaction_type,
-                "order_type": self.trader.ORDER_TYPE_MARKET,
-                "product": order_params.get("product", self.settings.get("default_product", self.trader.PRODUCT_MIS)),
-                "group_name": strategy_name or order_params.get("group_name"),
-            }
-            self._execute_single_strike_order(mapped_params)
-        # Only refresh for live trading, paper trading already scheduled refresh above
-        if not isinstance(self.trader, PaperTradingManager):
-            self._refresh_positions()
+        self.execution_service.execute_strategy_orders(order_params_list, strategy_name)
 
     def _record_completed_exit_trade(
             self,
