@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, time, date
 from core.cvd.cvd_mode import CVDMode
 from utils.time_utils import TRADING_DAY_START
 from uuid import uuid4
-from PySide6.QtWidgets import (QMainWindow, QMessageBox, QDialog, QSplitter, QLabel, QFrame)
+from PySide6.QtWidgets import (QMainWindow, QMessageBox, QDialog, QSplitter, QLabel, QFrame, QVBoxLayout)
 from PySide6.QtCore import Qt, QTimer, QUrl, QByteArray
 from PySide6.QtMultimedia import QSoundEffect
 from kiteconnect import KiteConnect
@@ -52,6 +52,7 @@ from core.main_window_coordinators import RiskController, DialogCoordinator, Mar
 from core.market_data import MarketSubscriptionPolicy
 from core.account import AccountHealthService
 from core.presentation import OrderDialogService, AnalyticsDialogService, MonitorDialogService
+from core.positions import PositionSyncAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +120,16 @@ class ImperiumMainWindow(QMainWindow):
             publish_status=lambda message, timeout_ms, level: self._publish_status(message, timeout_ms, level=level),
             update_header_account_info=lambda user_id, balance: self.header.update_account_info(user_id, balance)
             if hasattr(self, "header") else None,
+        )
+        self.position_sync_adapter = PositionSyncAdapter(
+            get_positions_dialog=lambda: self.positions_dialog,
+            get_inline_positions_table=lambda: self.inline_positions_table,
+            get_all_positions=self.position_manager.get_all_positions,
+            position_to_dict=self._position_to_dict,
+            update_performance=self._update_performance,
+            update_market_subscriptions=self._update_market_subscriptions,
+            reconcile_cvd_automation_positions=self._reconcile_cvd_automation_positions,
+            publish_status=lambda message, timeout_ms, level: self._publish_status(message, timeout_ms, level=level),
         )
 
         self.active_quick_order_dialog: Optional[QuickOrderDialog] = None
@@ -1488,27 +1499,10 @@ class ImperiumMainWindow(QMainWindow):
         self.rms_failures = self.account_health_service.rms_failures
 
     def _on_positions_updated(self, positions: List[Position]):
-        logger.debug(f"Received {len(positions)} positions from PositionManager for UI update.")
-
-        if self.positions_dialog and self.positions_dialog.isVisible():
-            self.positions_dialog.update_positions(positions)
-
-        if self.inline_positions_table:
-            positions_as_dicts = [self._position_to_dict(p) for p in positions]
-            self.inline_positions_table.update_positions(positions_as_dicts)
-
-        self._update_performance()
-        self._update_market_subscriptions()
+        self.position_sync_adapter.on_positions_updated(positions)
 
     def _on_position_added(self, position: Position):
-        logger.debug(f"Position added: {position.tradingsymbol}, forwarding to UI.")
-        if self.positions_dialog and self.positions_dialog.isVisible():
-            if hasattr(self.positions_dialog, 'positions_table') and hasattr(self.positions_dialog.positions_table,
-                                                                             'add_position'):
-                self.positions_dialog.positions_table.add_position(position)
-            else:
-                self._sync_positions_to_dialog()
-        self._update_performance()
+        self.position_sync_adapter.on_position_added(position)
 
     def _on_paper_order_rejected(self, data: dict):
         reason = data.get("reason", "Order rejected by RMS")
@@ -1530,23 +1524,10 @@ class ImperiumMainWindow(QMainWindow):
         logger.warning(f"Paper RMS rejection shown to user: {reason}")
 
     def _on_position_removed(self, symbol: str):
-        logger.debug(f"Position removed: {symbol}, forwarding to UI.")
-        if self.positions_dialog and self.positions_dialog.isVisible():
-            if hasattr(self.positions_dialog, 'positions_table') and hasattr(self.positions_dialog.positions_table,
-                                                                             'remove_position'):
-                self.positions_dialog.positions_table.remove_position(symbol)
-            else:
-                self._sync_positions_to_dialog()
-        self._update_performance()
+        self.position_sync_adapter.on_position_removed(symbol)
 
     def _on_refresh_completed(self, success: bool):
-        if success:
-            self._reconcile_cvd_automation_positions()
-            self._publish_status("Positions refreshed successfully.", 2500, level="success")
-            logger.info("Position refresh completed successfully via PositionManager.")
-        else:
-            self._publish_status("Position refresh failed. Check logs.", 3500, level="warning")
-            logger.warning("Position refresh failed via PositionManager.")
+        self.position_sync_adapter.on_refresh_completed(success)
 
     def _on_api_error(self, error_message: str):
         logger.error(f"PositionManager reported API error: {error_message}")
@@ -1620,21 +1601,7 @@ class ImperiumMainWindow(QMainWindow):
         self.order_dialog_service.show_pending_orders_dialog()
 
     def _sync_positions_to_dialog(self):
-        if not self.positions_dialog or not self.positions_dialog.isVisible():
-            return
-        positions_list = self.position_manager.get_all_positions()
-        if hasattr(self.positions_dialog, 'positions_table'):
-            table_widget = self.positions_dialog.positions_table
-            if hasattr(table_widget, 'update_positions'):
-                table_widget.update_positions(positions_list)
-            elif hasattr(table_widget, 'clear_all_positions') and hasattr(table_widget, 'add_position'):
-                table_widget.clear_all_positions()
-                for position in positions_list:
-                    table_widget.add_position(position)
-            else:
-                logger.warning("OpenPositionsDialog's table does not have suitable methods for syncing.")
-        else:
-            logger.warning("OpenPositionsDialog does not have 'positions_table' attribute for syncing.")
+        self.position_sync_adapter.sync_positions_to_dialog()
 
     def _show_pnl_history_dialog(self):
         self.analytics_dialog_service.show_pnl_history_dialog()
