@@ -68,6 +68,11 @@ class WebSocketState(Enum):
 
 
 class ImperiumMainWindow(QMainWindow):
+
+    # =========================================================================
+    # SECTION 1: INITIALIZATION
+    # =========================================================================
+
     def __init__(self, trader: Union[KiteConnect, PaperTradingManager], real_kite_client: KiteConnect, api_key: str,
                  access_token: str):
         super().__init__()
@@ -257,55 +262,12 @@ class ImperiumMainWindow(QMainWindow):
         self.restore_window_state()
         self._publish_status("Loading instruments...", 5000, level="action")
 
-    def _on_market_data(self, data: list):
-        self.market_data_orchestrator.on_market_data(data)
-
-    def _update_throttled_ui(self):
-        self.market_data_orchestrator.update_throttled_ui()
+    # =========================================================================
+    # SECTION 2: UI SETUP
+    # =========================================================================
 
     def _apply_dark_theme(self):
         MainWindowShell.apply_dark_theme(self)
-
-    def _init_background_workers(self):
-
-        self.instrument_loader = InstrumentLoader(self.real_kite_client)
-        self.instrument_loader.instruments_loaded.connect(self._on_instruments_loaded)
-        self.instrument_loader.error_occurred.connect(self._on_api_error)
-        self.instrument_loader.start()
-
-        self.market_data_worker = MarketDataWorker(self.api_key, self.access_token)
-        self.market_data_worker.data_received.connect(self._on_market_data, Qt.QueuedConnection)
-        self.market_data_worker.connection_status_changed.connect(self._on_network_status_changed)
-        # self.market_data_worker.state_changed.connect(self._on_websocket_state_changed)
-
-        self.market_data_worker.start()
-
-        self.update_timer = QTimer(self)
-        self.update_timer.timeout.connect(self._update_ui)
-        self.update_timer.start(REFRESH_INTERVAL_MS)
-
-    def _place_order(self, order_details_from_panel: dict):
-        """Handles the buy signal from the panel by showing a confirmation dialog."""
-        auto_confirm = bool(self._auto_confirm_next_panel_order)
-        # Consume one-shot auto-confirm intent so manual clicks are never affected.
-        self._auto_confirm_next_panel_order = False
-        self.execution_facade.place_order(
-            order_details_from_panel=order_details_from_panel,
-            auto_confirm=auto_confirm,
-        )
-
-        dialog = self.active_order_confirmation_dialog
-        if dialog:
-            dialog.refresh_requested.connect(self._on_order_confirmation_refresh_request)
-            dialog.finished.connect(lambda: setattr(self, 'active_order_confirmation_dialog', None))
-
-    def _on_paper_trade_update(self, order_data: dict):
-        """Logs completed paper trades and triggers an immediate UI refresh."""
-        self._processed_paper_exit_orders = getattr(self, "_processed_paper_exit_orders", set())
-        self.execution_facade.on_paper_trade_update(
-            order_data=order_data,
-            processed_order_ids=self._processed_paper_exit_orders,
-        )
 
     def _setup_ui(self):
         MainWindowShell.setup_ui(self)
@@ -313,10 +275,6 @@ class ImperiumMainWindow(QMainWindow):
     def _setup_status_footer(self):
         """Initialize status bar widget"""
         MainWindowShell.setup_status_footer(self)
-
-    def _publish_status(self, message: str, timeout_ms: int = 4000, level: str = "info"):
-        """Publish status message through StatusBarWidget"""
-        MainWindowShell.publish_status(self, message, timeout_ms, level)
 
     def _create_main_widgets(self):
         MainWindowShell.create_main_widgets(self)
@@ -333,185 +291,13 @@ class ImperiumMainWindow(QMainWindow):
     def _setup_menu_bar(self):
         MainWindowShell.setup_menu_bar(self)
 
-    def _show_order_history_dialog(self):
-        self.order_dialog_service.show_order_history_dialog()
+    def _publish_status(self, message: str, timeout_ms: int = 4000, level: str = "info"):
+        """Publish status message through StatusBarWidget"""
+        MainWindowShell.publish_status(self, message, timeout_ms, level)
 
-    def _show_journal_dialog(self, enforce_read_time: bool = False):
-        self.dialog_coordinator.show_journal_dialog(enforce_read_time=enforce_read_time)
-
-    def _show_startup_journal(self):
-        self._show_journal_dialog(enforce_read_time=True)
-
-    def _refresh_order_history_from_ledger(self):
-        self.order_dialog_service.refresh_order_history_from_ledger()
-
-    def _show_market_monitor_dialog(self):
-        self.monitor_dialog_service.show_market_monitor_dialog()
-
-    def _show_watchlist_dialog(self):
-        self.monitor_dialog_service.show_watchlist_dialog()
-
-    def _on_watchlist_symbol_selected(self, symbol: str):
-        self.dialog_coordinator.on_watchlist_symbol_selected(symbol)
-
-    def _show_cvd_chart_dialog(self):
-        self.monitor_dialog_service.show_cvd_chart_dialog()
-
-    def _open_cvd_chart_after_subscription(
-            self,
-            cvd_token: int,
-            symbol: str,
-            suffix: str = "",
-            link_to_header: bool = False
-    ):
-        self.monitor_dialog_service.open_cvd_chart_after_subscription(cvd_token, symbol, suffix, link_to_header)
-
-    def _log_active_subscriptions(self):
-        self.subscription_policy.log_active_subscriptions()
-
-    def _on_cvd_dialog_closed(self, token):
-        QTimer.singleShot(0, self._update_market_subscriptions)
-
-    def _on_cvd_single_chart_closed(self, token):
-        """Handle CVD single chart dialog close."""
-        if token in self.cvd_single_chart_dialogs:
-            del self.cvd_single_chart_dialogs[token]
-        self._stop_cvd_pending_retry(token)
-        if self._cvd_automation_positions.pop(token, None) is not None:
-            self._persist_cvd_automation_state()
-        self._cvd_automation_market_state.pop(token, None)
-        if self.header_linked_cvd_token == token:
-            self.header_linked_cvd_token = None
-        QTimer.singleShot(0, self._update_market_subscriptions)
-
-    def _on_cvd_automation_signal(self, payload: dict):
-        self.cvd_automation_coordinator.handle_signal(payload)
-
-    def _on_cvd_automation_market_state(self, payload: dict):
-        self.cvd_automation_coordinator.handle_market_state(payload)
-
-    def _is_cvd_auto_cutoff_reached(self) -> bool:
-        return self.cvd_automation_coordinator.is_cutoff_reached()
-
-    def _enforce_cvd_auto_cutoff_exit(self, reason: str = "AUTO_3PM_CUTOFF"):
-        self.cvd_automation_coordinator.enforce_cutoff_exit(reason=reason)
-
-    def _persist_cvd_automation_state(self):
-        self.cvd_automation_coordinator.persist_state()
-
-    def _load_cvd_automation_state(self):
-        self.cvd_automation_coordinator.load_state()
-
-    def _reconcile_failed_auto_entry(self, token: int, tradingsymbol: str, signal_timestamp: str | None):
-        self.cvd_automation_coordinator.reconcile_failed_entry(token, tradingsymbol, signal_timestamp)
-
-    def _reconcile_cvd_automation_positions(self):
-        self.cvd_automation_coordinator.reconcile_positions()
-
-    def _get_atm_contract_for_signal(self, signal_side: str) -> Optional[Contract]:
-        return self.cvd_automation_coordinator.get_atm_contract_for_signal(signal_side)
-
-    def _exit_position_automated(self, position: Position, reason: str = "AUTO"):
-        self.cvd_automation_coordinator.exit_position_automated(position, reason=reason)
-
-    def _update_cvd_chart_symbol(self, symbol: str, cvd_token: int, suffix: str = ""):
-        self.subscription_policy.update_cvd_chart_symbol(symbol, cvd_token, suffix)
-
-    def _retarget_cvd_dialog(
-            self,
-            dialog: AutoTraderDialog,
-            old_token: int,
-            new_token: int,
-            symbol: str,
-            suffix: str = ""
-    ):
-        self.monitor_dialog_service.retarget_cvd_dialog(dialog, old_token, new_token, symbol, suffix)
-
-    def _show_cvd_market_monitor_dialog(self):
-        self.monitor_dialog_service.show_cvd_market_monitor_dialog()
-
-    def _show_cvd_symbol_set_dialog(self):
-        def resolve_cvd_token_for_sets(symbol: str):
-            """Wrapper for CVD symbol sets - returns just the token."""
-            cvd_token, is_equity, suffix = self._get_cvd_token(symbol)
-            return cvd_token
-
-        dlg = CVDSetMultiChartDialog(
-            kite=self.real_kite_client,
-            symbol_set_manager=self.cvd_symbol_set_manager,
-            resolve_fut_token_fn=resolve_cvd_token_for_sets,
-            register_token_fn=lambda t: (
-                self.cvd_engine.register_token(t),
-                self.active_cvd_tokens.add(t),
-                self._update_market_subscriptions()
-            ),
-            unregister_tokens_fn=lambda tokens: (
-                self.active_cvd_tokens.difference_update(tokens),
-                self._update_market_subscriptions()
-            ),
-            parent=self
-        )
-        dlg.show()
-
-    def _on_cvd_market_monitor_closed(self):
-        self.market_data_orchestrator.on_cvd_market_monitor_closed()
-
-    def _on_market_monitor_closed(self, dialog: QDialog):
-        self.dialog_coordinator.on_market_monitor_closed(dialog)
-
-    def _show_option_chain_dialog(self):
-        if not self.instrument_data:
-            QMessageBox.warning(self, "Data Not Ready",
-                                "Instrument data is still loading. Please try again in a moment.")
-            return
-
-        if self.option_chain_dialog is None:
-            self.option_chain_dialog = OptionChainDialog(
-                self.real_kite_client,
-                self.instrument_data,
-                parent=None
-            )
-            self.option_chain_dialog.finished.connect(lambda: setattr(self, 'option_chain_dialog', None))
-
-        self.option_chain_dialog.show()
-        self.option_chain_dialog.activateWindow()
-        self.option_chain_dialog.raise_()
-
-    def _show_strategy_builder_dialog(self):
-        if not self.instrument_data:
-            QMessageBox.warning(self, "Data Not Ready",
-                                "Instrument data is still loading. Please try again in a moment.")
-            return
-
-        current_settings = self.header.get_current_settings()
-        symbol = current_settings.get("symbol")
-        expiry = current_settings.get("expiry")
-        default_lots = current_settings.get("lot_size", 1)
-
-        if not symbol:
-            QMessageBox.warning(self, "Symbol Missing", "Select a symbol before opening the strategy builder.")
-            return
-
-        if self.strategy_builder_dialog is not None:
-            self.strategy_builder_dialog.close()
-
-        self.strategy_builder_dialog = StrategyBuilderDialog(
-            instrument_data=self.instrument_data,
-            strike_ladder=self.strike_ladder,
-            symbol=symbol,
-            expiry=expiry,
-            default_lots=default_lots,
-            product=self.settings.get("default_product", self.trader.PRODUCT_MIS),
-            on_execute=self._execute_strategy_orders,
-            parent=None,
-        )
-        self.strategy_builder_dialog.finished.connect(
-            lambda: setattr(self, 'strategy_builder_dialog', None)
-        )
-
-        self.strategy_builder_dialog.show()
-        self.strategy_builder_dialog.activateWindow()
-        self.strategy_builder_dialog.raise_()
+    def _setup_keyboard_shortcuts(self):
+        """Delegate keyboard shortcut wiring to shared shortcuts utility."""
+        setup_keyboard_shortcuts(self)
 
     def _connect_signals(self):
         self.header.settings_changed.connect(self._on_settings_changed)
@@ -532,10 +318,6 @@ class ImperiumMainWindow(QMainWindow):
         self.strike_ladder.chart_requested.connect(self._on_strike_chart_requested)
         self.strike_ladder.visible_tokens_changed.connect(self._update_market_subscriptions)
 
-    def _setup_keyboard_shortcuts(self):
-        """Delegate keyboard shortcut wiring to shared shortcuts utility."""
-        setup_keyboard_shortcuts(self)
-
     def _setup_position_manager(self):
         self.position_manager.positions_updated.connect(self._on_positions_updated)
         self.position_manager.position_added.connect(self._on_position_added)
@@ -543,6 +325,39 @@ class ImperiumMainWindow(QMainWindow):
         self.position_manager.refresh_completed.connect(self._on_refresh_completed)
         self.position_manager.api_error_occurred.connect(self._on_api_error)
         self.position_manager.portfolio_exit_triggered.connect(self._on_portfolio_exit_triggered)
+
+    # =========================================================================
+    # SECTION 3: BACKGROUND WORKERS & MARKET DATA
+    # =========================================================================
+
+    def _init_background_workers(self):
+        self.instrument_loader = InstrumentLoader(self.real_kite_client)
+        self.instrument_loader.instruments_loaded.connect(self._on_instruments_loaded)
+        self.instrument_loader.error_occurred.connect(self._on_api_error)
+        self.instrument_loader.start()
+
+        self.market_data_worker = MarketDataWorker(self.api_key, self.access_token)
+        self.market_data_worker.data_received.connect(self._on_market_data, Qt.QueuedConnection)
+        self.market_data_worker.connection_status_changed.connect(self._on_network_status_changed)
+        # self.market_data_worker.state_changed.connect(self._on_websocket_state_changed)
+
+        self.market_data_worker.start()
+
+        self.update_timer = QTimer(self)
+        self.update_timer.timeout.connect(self._update_ui)
+        self.update_timer.start(REFRESH_INTERVAL_MS)
+
+    def _on_market_data(self, data: list):
+        self.market_data_orchestrator.on_market_data(data)
+
+    def _update_throttled_ui(self):
+        self.market_data_orchestrator.update_throttled_ui()
+
+    def _update_market_subscriptions(self):
+        self.market_data_orchestrator.update_market_subscriptions()
+
+    def _log_active_subscriptions(self):
+        self.subscription_policy.log_active_subscriptions()
 
     def _on_instruments_loaded(self, data: dict):
         self.instrument_data = data
@@ -579,146 +394,201 @@ class ImperiumMainWindow(QMainWindow):
         logger.error(f"Instrument loading failed: {error}")
         QMessageBox.critical(self, "Error", f"Failed to load instruments:\n{error}")
 
-    @with_timeout(timeout_seconds=5)
-    @with_timeout(timeout_seconds=5)
-    def _fetch_ltp_safe(self, instrument: str):
-        """Helper method to fetch LTP with timeout"""
-        return self.real_kite_client.ltp(instrument)
+    # =========================================================================
+    # SECTION 4: WEBSOCKET & NETWORK
+    # =========================================================================
 
-    def _get_current_price(self, symbol: str, max_retries: int = 3) -> Optional[float]:
+    def _on_websocket_state_changed(self, new_state: str):
         """
-        Get current price with circuit breaker protection and retry logic
+        Handle WebSocket state changes with proper subscription management
 
-        Args:
-            symbol: Index symbol (NIFTY, BANKNIFTY, etc.)
-            max_retries: Maximum retry attempts with exponential backoff
-
-        Returns:
-            Current price or None if all attempts fail
+        Called by market_data_worker when connection state changes
         """
-        if not symbol:
-            return None
+        if new_state == "connected":
+            self.ws_state = WebSocketState.CONNECTED
+            self.ws_connection_time = datetime.now()
+            self.ws_ready_event_fired = True
 
-        # Check circuit breaker first
-        if not self.profile_circuit_breaker.can_execute():
-            logger.warning(
-                f"Circuit breaker {self.profile_circuit_breaker.get_state()} - "
-                f"using cached price for {symbol}"
-            )
-            # Try to use cached price from market data worker
-            cached_price = self._get_cached_index_price(symbol)
-            if cached_price:
-                return cached_price
-            # If no cache, we have to wait for circuit to recover
-            return None
+            logger.info("WebSocket connected - processing subscription queue")
 
-        # Index mapping
-        index_map = {
-            "NIFTY": ("NSE", "NIFTY 50"),
-            "BANKNIFTY": ("NSE", "NIFTY BANK"),
-            "FINNIFTY": ("NSE", "NIFTY FIN SERVICE"),
-            "MIDCPNIFTY": ("NSE", "NIFTY MID SELECT"),
-            "SENSEX": ("BSE", "SENSEX"),
-            "BANKEX": ("BSE", "BANKEX"),
-        }
+            # 🔥 Subscribe ALL required tokens cleanly
+            self._update_market_subscriptions()
 
-        exchange, name = index_map.get(symbol.upper(), ("NSE", symbol.upper()))
-        instrument = f"{exchange}:{name}"
+            self._process_subscription_queue()
 
-        # Retry with exponential backoff
-        for attempt in range(max_retries):
-            try:
-                ltp_data = self._fetch_ltp_safe(instrument)
+            self._publish_status("✓ Market data connected", 3000, level="success")
 
-                if ltp_data and instrument in ltp_data:
-                    price = ltp_data[instrument]["last_price"]
-                    self.profile_circuit_breaker.record_success()
-                    self.network_monitor.record_success()  # ✅ Network success
+        elif new_state == "connecting":
+            self.ws_state = WebSocketState.CONNECTING
+            self._publish_status("Connecting to market data...", 5000, level="action")
 
-                    # Cache the price
-                    self._cache_index_price(symbol, price)
+        elif new_state == "disconnected":
+            old_state = self.ws_state
+            self.ws_state = WebSocketState.DISCONNECTED
+            self.ws_ready_event_fired = False
 
-                    if attempt > 0:
-                        logger.info(f"✓ Retrieved price for {symbol}: {price} (attempt {attempt + 1})")
+            if old_state == WebSocketState.CONNECTED:
+                logger.warning("WebSocket disconnected - will queue subscriptions")
+                self._publish_status("⚠ Market data disconnected - reconnecting...", 0, level="warning")
 
-                    return price
+        elif new_state == "reconnecting":
+            self.ws_state = WebSocketState.RECONNECTING
+            self._publish_status("Reconnecting to market data...", 5000, level="action")
 
-                logger.warning(f"LTP data not found for {instrument}. Response: {ltp_data}")
-
-            except NetworkError as e:
-                self.profile_circuit_breaker.record_failure()
-                self.network_monitor.record_failure()  # ❌ Network failure
-
-                if attempt < max_retries - 1:
-                    # Exponential backoff: 0.5s, 1s, 2s
-                    sleep_time = 0.5 * (2 ** attempt)
-                    logger.warning(
-                        f"Network error attempt {attempt + 1}/{max_retries} for {symbol}: {e}. "
-                        f"Retrying in {sleep_time}s..."
-                    )
-                    time.sleep(sleep_time)
-                else:
-                    logger.error(
-                        f"Network timeout for {symbol} after {max_retries} attempts: {e}"
-                    )
-                    api_logger.error(f"PRICE_FETCH_TIMEOUT symbol={symbol} error={str(e)[:100]}")
-
-            except Exception as e:
-                self.profile_circuit_breaker.record_failure()
-
-                if attempt < max_retries - 1:
-                    # Exponential backoff: 0.5s, 1s, 2s
-                    sleep_time = 0.5 * (2 ** attempt)
-                    logger.warning(
-                        f"Attempt {attempt + 1}/{max_retries} failed for {symbol}: {e}. "
-                        f"Retrying in {sleep_time}s..."
-                    )
-                    time.sleep(sleep_time)
-                else:
-                    logger.error(
-                        f"Failed to get current price for {symbol} after {max_retries} attempts: {e}"
-                    )
-                    api_logger.error(f"PRICE_FETCH_FAILED symbol={symbol} error={str(e)[:100]}")
-
-        # All retries failed - try cache as last resort
-        cached_price = self._get_cached_index_price(symbol)
-        if cached_price:
-            logger.warning(f"Using cached price for {symbol}: {cached_price}")
-            return cached_price
-
-        return None
-
-    def _cache_index_price(self, symbol: str, price: float):
-        """Cache index price for fallback use"""
-        if not hasattr(self, '_cached_index_prices'):
-            self._cached_index_prices = {}
-
-        self._cached_index_prices[symbol] = {
-            'price': price,
-            'timestamp': datetime.now()
-        }
-
-    def _get_cached_index_price(self, symbol: str) -> Optional[float]:
+    def _process_subscription_queue(self):
         """
-        Get cached index price if available and fresh (< 5 minutes old)
+        Process all queued subscriptions when WebSocket becomes ready
         """
-        if not hasattr(self, '_cached_index_prices'):
-            return None
+        if not self.subscription_queue:
+            logger.debug("Subscription queue is empty")
+            return
 
-        cached = self._cached_index_prices.get(symbol)
-        if not cached:
-            return None
+        logger.info(f"Processing {len(self.subscription_queue)} queued subscriptions")
 
-        # Check if cache is stale (> 5 minutes)
-        age = (datetime.now() - cached['timestamp']).total_seconds()
-        if age > 300:  # 5 minutes
-            logger.debug(f"Cached price for {symbol} is stale ({age:.0f}s old)")
-            return None
+        # Merge all queued token sets
+        all_tokens = set()
+        while self.subscription_queue:
+            tokens = self.subscription_queue.popleft()
+            all_tokens.update(tokens)
 
-        return cached['price']
+        self.pending_subscriptions.clear()
 
-    def _update_market_subscriptions(self):
-        self.market_data_orchestrator.update_market_subscriptions()
+        if all_tokens:
+            logger.info(f"Subscribing to {len(all_tokens)} tokens from queue")
+            self.market_data_worker.set_instruments(all_tokens)
+
+    def _on_network_status_changed(self, status):
+        """
+        Normalize and handle network status changes.
+        Handles decorated strings like:
+        'Connected (Post-Market)'
+        'Connected (Pre-Market)'
+        """
+
+        if isinstance(status, dict):
+            raw_state = str(status.get("state", "")).strip().lower()
+            message = status.get("message", "")
+        else:
+            raw_state = str(status).strip().lower()
+            message = ""
+
+        # 🔥 FIX: Use prefix matching instead of exact match
+        if raw_state.startswith("connected"):
+            normalized = "connected"
+        elif raw_state.startswith("connecting") or raw_state.startswith("reconnecting"):
+            normalized = "connecting"
+        elif raw_state.startswith("disconnected") or raw_state.startswith("error"):
+            normalized = "disconnected"
+        else:
+            normalized = "initializing"
+
+        self.network_status = raw_state
+        self.status_bar_widget.update_network_status(status)
+
+        # 🔥 CRITICAL
+        self._on_websocket_state_changed(normalized)
+
+        if message:
+            logger.info(f"Network status: {normalized} - {message}")
+
+    def _on_connection_lost(self):
+        """Called when network connection is lost (detected by failed API calls)"""
+        logger.warning("🔴 Network connection lost - showing error banner")
+        self._show_connection_error_banner("No internet connection detected")
+
+        # Update status bar with persistent warning
+        self._publish_status(
+            "⚠️ Internet connection lost - retrying...",
+            duration=0,  # Persistent until resolved
+            level="error"
+        )
+
+    def _on_connection_restored(self):
+        """Called when network connection is restored"""
+        logger.info("✅ Network connection restored")
+
+        # Clear error banner
+        if self._network_error_notification:
+            self._network_error_notification.close()
+            self._network_error_notification = None
+
+        # Update status bar with success message
+        self._publish_status(
+            "✅ Internet connection restored",
+            duration=3000,
+            level="success"
+        )
+
+        # Refresh data after reconnection
+        self._periodic_api_health_check()
+        self._update_market_subscriptions()
+
+    def _show_connection_error_banner(self, message: str):
+        """Show persistent connection error banner at top of window"""
+        # Don't spam notifications
+        if self._network_error_notification:
+            return
+
+        banner = QFrame(self)
+        banner.setStyleSheet("""
+            QFrame {
+                background-color: #ff4444;
+                border: 2px solid #cc0000;
+                border-radius: 4px;
+                padding: 8px;
+            }
+        """)
+
+        layout = QVBoxLayout(banner)
+        label = QLabel(f"⚠️ {message}\nRetrying automatically...")
+        label.setStyleSheet("color: white; font-weight: bold; font-size: 12px;")
+        layout.addWidget(label)
+
+        # Position at top of window
+        banner.setParent(self)
+        banner.setGeometry(10, 60, self.width() - 20, 50)  # Below title bar
+        banner.show()
+        banner.raise_()
+
+        self._network_error_notification = banner
+        logger.debug("Connection error banner shown")
+
+    def _show_network_error_notification(self, symbol: str):
+        """Show user-friendly network error with retry option"""
+        # Only show once per session to avoid spam
+        if hasattr(self, '_network_error_shown') and self._network_error_shown:
+            return
+
+        self._network_error_shown = True
+
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Warning)
+        msg.setWindowTitle("Network Issue")
+        msg.setText(
+            f"Unable to fetch current price for {symbol}.\n\n"
+            "This may be due to:\n"
+            "• Network connectivity issues\n"
+            "• Kite API temporarily unavailable\n"
+            "• DNS resolution failure\n\n"
+            "The app will continue with cached data where possible."
+        )
+        msg.setStandardButtons(QMessageBox.Retry | QMessageBox.Ignore)
+
+        # Show status in status bar
+        self._publish_status(
+            f"⚠ Network issue detected - using cached data for {symbol}",
+            duration=10000,
+            level="warning"
+        )
+
+        if msg.exec() == QMessageBox.Retry:
+            # Clear circuit breaker and retry
+            self.profile_circuit_breaker.reset()
+            self._network_error_shown = False
+
+    # =========================================================================
+    # SECTION 5: ACCOUNT & API HEALTH
+    # =========================================================================
 
     @with_timeout(timeout_seconds=5)
     def _periodic_api_health_check(self):
@@ -746,118 +616,9 @@ class ImperiumMainWindow(QMainWindow):
         self.last_successful_margins = self.account_health_service.last_successful_margins
         self.rms_failures = self.account_health_service.rms_failures
 
-    def _on_positions_updated(self, positions: List[Position]):
-        self.position_sync_adapter.on_positions_updated(positions)
-
-    def _on_position_added(self, position: Position):
-        self.position_sync_adapter.on_position_added(position)
-
-    def _on_paper_order_rejected(self, data: dict):
-        self.execution_facade.on_paper_order_rejected(
-            data=data,
-            show_modal=lambda title, message: QMessageBox.warning(self, title, message),
-        )
-
-    def _on_position_removed(self, symbol: str):
-        self.position_sync_adapter.on_position_removed(symbol)
-
-    def _on_refresh_completed(self, success: bool):
-        self.position_sync_adapter.on_refresh_completed(success)
-
-    def _on_api_error(self, error_message: str):
-        logger.error(f"PositionManager reported API error: {error_message}")
-        self._publish_status(f"API Error: {error_message}", 5000, level="error")
-
-    def _on_portfolio_exit_triggered(self, reason: str, pnl: float):
-        logger.info(
-            f"Portfolio exit handled by UI | Reason={reason}, PnL={pnl:.2f}"
-        )
-
-        self._activate_global_kill_switch(
-            reason=f"PORTFOLIO_{reason}",
-            user_message=f"Portfolio {reason.replace('_', ' ').title()} hit at ₹{pnl:,.2f}. Exiting all and locking entries.",
-            exit_open_positions=True,
-        )
-
-        # SUCCESS sound for TARGET, FAIL sound for SL
-        if reason == "TARGET":
-            self._play_sound(success=True)
-        else:
-            self._play_sound(success=False)
-
-    def _show_positions_dialog(self):
-        if self.positions_dialog is None:
-            self.positions_dialog = OpenPositionsDialog(self)
-            self.position_manager.positions_updated.connect(self.positions_dialog.update_positions)
-            self.positions_dialog.refresh_requested.connect(self._refresh_positions)
-            self.positions_dialog.position_exit_requested.connect(self._exit_position_from_dialog)
-            self.positions_dialog.modify_sl_tp_requested.connect(self._show_modify_sl_tp_dialog)
-            self.position_manager.refresh_completed.connect(self.positions_dialog.on_refresh_completed)
-
-        initial_positions = self.position_manager.get_all_positions()
-        self.positions_dialog.update_positions(initial_positions)
-        self.positions_dialog.show()
-        self.positions_dialog.raise_()
-        self.positions_dialog.activateWindow()
-
-    def _show_modify_sl_tp_dialog(self, symbol: str):
-        position = self.position_manager.get_position(symbol)
-        if not position:
-            QMessageBox.warning(self, "Error", "Position not found.")
-            return
-
-        lots = abs(position.quantity) / position.contract.lot_size if position.contract.lot_size > 0 else 1
-        dialog = QuickOrderDialog(
-            self,
-            position.contract,
-            lots,
-            mode=QuickOrderMode.MODIFY_RISK
-        )
-        dialog.populate_from_order(position)
-        dialog.risk_confirmed.connect(self._modify_sl_tp_for_position)
-
-    def _modify_sl_tp_for_position(self, order_params: dict):
-        contract = order_params.get('contract')
-        if not contract:
-            logger.error("Modify SL/TP failed: Contract object missing from order params.")
-            return
-
-        tradingsymbol = contract.tradingsymbol
-        sl_price = order_params.get('stop_loss_price')
-        tp_price = order_params.get('target_price')
-        tsl_value = order_params.get('trailing_stop_loss')
-
-        # Delegate the entire logic to the PositionManager
-        self.position_manager.update_sl_tp_for_position(
-            tradingsymbol, sl_price, tp_price, tsl_value
-        )
-
-    def _show_pending_orders_dialog(self):
-        self.order_dialog_service.show_pending_orders_dialog()
-
-    def _sync_positions_to_dialog(self):
-        self.position_sync_adapter.sync_positions_to_dialog()
-
-    def _show_pnl_history_dialog(self):
-        self.analytics_dialog_service.show_pnl_history_dialog()
-
-    def _show_performance_dialog(self):
-        self.analytics_dialog_service.show_performance_dialog()
-
-    def _update_pending_order_widgets(self, pending_orders: List[Dict]):
-        self.order_dialog_service.update_pending_order_widgets(pending_orders)
-
-    def _cancel_order_by_id(self, order_id: str):
-        self.order_dialog_service.cancel_order_by_id(order_id)
-
-    def _show_about(self):
-        show_about(self)
-
-    def _show_shortcuts(self):
-        show_shortcuts(self)
-
-    def _show_expiry_days(self):
-        show_expiry_days(self)
+    # =========================================================================
+    # SECTION 6: SETTINGS & CONFIGURATION
+    # =========================================================================
 
     def _show_settings(self):
         """
@@ -897,21 +658,36 @@ class ImperiumMainWindow(QMainWindow):
         self._on_settings_changed(self.header.get_current_settings())
         self._reload_risk_limits_from_settings()
 
-    def _reload_risk_limits_from_settings(self):
-        self.risk_controller.reload_limits_from_settings()
-
-    def _activate_global_kill_switch(self, reason: str, user_message: Optional[str] = None,
-                                     exit_open_positions: bool = True):
-        self.risk_controller.activate_global_kill_switch(reason, user_message, exit_open_positions)
-
-    def _evaluate_risk_locks(self):
-        self.risk_controller.evaluate_risk_locks()
-
-    def _validate_pre_trade_risk(self, transaction_type: str, quantity: int, tradingsymbol: Optional[str]) -> tuple[bool, str]:
-        return self.risk_controller.validate_pre_trade_risk(transaction_type, quantity, tradingsymbol)
-
-    def _reject_order_for_risk(self, reason: str):
-        self.risk_controller.reject_order_for_risk(reason)
+    def _apply_settings(self, new_settings: dict):
+        self.settings.update(new_settings)
+        logger.info(f"Applying new settings: {new_settings}")
+        auto_refresh_enabled = self.settings.get('auto_refresh_ui', True)
+        ui_refresh_interval_sec = self.settings.get('ui_refresh_interval_seconds', 1)
+        if hasattr(self, 'update_timer'):
+            if auto_refresh_enabled:
+                self.update_timer.setInterval(ui_refresh_interval_sec * 1000)
+                if not self.update_timer.isActive(): self.update_timer.start()
+                logger.info(f"UI refresh timer interval set to {ui_refresh_interval_sec}s and started.")
+            else:
+                self.update_timer.stop()
+                logger.info("UI refresh timer stopped by settings.")
+        if hasattr(self, 'strike_ladder'):
+            auto_adjust_ladder = self.settings.get('auto_adjust_ladder', True)
+            if hasattr(self.strike_ladder, 'set_auto_adjust'):
+                self.strike_ladder.set_auto_adjust(auto_adjust_ladder)
+        if hasattr(self, 'header'):
+            default_lots_setting = self.settings.get('default_lots', 1)
+            self.header.lot_size_spin.setValue(default_lots_setting)
+        self._on_settings_changed(self._get_current_settings())
+        try:
+            # from src.utils.config_manager import ConfigManager
+            config_manager = ConfigManager()
+            config_manager.save_settings(self.settings)
+            logger.info("Settings saved to configuration file.")
+        except ImportError:
+            logger.warning("ConfigManager not found. Cannot save settings to file.")
+        except Exception as e:
+            logger.error(f"Failed to save settings: {e}")
 
     def _on_settings_changed(self, settings: dict):
         """
@@ -975,130 +751,195 @@ class ImperiumMainWindow(QMainWindow):
         finally:
             self._settings_changing = False
 
-    def _apply_settings(self, new_settings: dict):
-        self.settings.update(new_settings)
-        logger.info(f"Applying new settings: {new_settings}")
-        auto_refresh_enabled = self.settings.get('auto_refresh_ui', True)
-        ui_refresh_interval_sec = self.settings.get('ui_refresh_interval_seconds', 1)
-        if hasattr(self, 'update_timer'):
-            if auto_refresh_enabled:
-                self.update_timer.setInterval(ui_refresh_interval_sec * 1000)
-                if not self.update_timer.isActive(): self.update_timer.start()
-                logger.info(f"UI refresh timer interval set to {ui_refresh_interval_sec}s and started.")
-            else:
-                self.update_timer.stop()
-                logger.info("UI refresh timer stopped by settings.")
-        if hasattr(self, 'strike_ladder'):
-            auto_adjust_ladder = self.settings.get('auto_adjust_ladder', True)
-            if hasattr(self.strike_ladder, 'set_auto_adjust'):
-                self.strike_ladder.set_auto_adjust(auto_adjust_ladder)
-        if hasattr(self, 'header'):
-            default_lots_setting = self.settings.get('default_lots', 1)
-            self.header.lot_size_spin.setValue(default_lots_setting)
-        self._on_settings_changed(self._get_current_settings())
-        try:
-            # from src.utils.config_manager import ConfigManager
-            config_manager = ConfigManager()
-            config_manager.save_settings(self.settings)
-            logger.info("Settings saved to configuration file.")
-        except ImportError:
-            logger.warning("ConfigManager not found. Cannot save settings to file.")
-        except Exception as e:
-            logger.error(f"Failed to save settings: {e}")
-
-    def closeEvent(self, event):
-        if getattr(self, '_close_in_progress', False):
-            event.ignore()
+    def _on_lot_size_changed(self, num_lots: int):
+        if self._settings_changing or not self.instrument_data:
             return
-        self._close_in_progress = True
-        logger.info("Close event triggered.")
 
-        # Stop timers first
-        if hasattr(self, 'api_health_check_timer'):
-            self.api_health_check_timer.stop()
-        if hasattr(self, 'update_timer'):
-            self.update_timer.stop()
-        if hasattr(self, 'pending_order_refresh_timer'):
-            self.pending_order_refresh_timer.stop()
-        for token in list(getattr(self, '_cvd_pending_retry_timers', {}).keys()):
-            self._stop_cvd_pending_retry(token)
+        symbol = self.header.symbol_button.text()
+        expiry_str = self.header.expiry_combo.currentText()
 
-        # Background workers
-        if hasattr(self, 'market_data_worker') and self.market_data_worker.is_running:
-            logger.info("Stopping market data worker...")
-            self.market_data_worker.stop()
+        if not symbol:
+            return
 
-        if hasattr(self, 'instrument_loader') and self.instrument_loader.isRunning():
-            logger.info("Stopping instrument loader...")
-            self.instrument_loader.requestInterruption()
-            self.instrument_loader.quit()
-            if not self.instrument_loader.wait(2000):
-                logger.warning("Instrument loader did not stop gracefully.")
-            else:
-                logger.info("Instrument loader stopped.")
+        lot_quantity = self.instrument_data.get(symbol, {}).get('lot_size', 1)
 
-        # ---- CLEAR EXIT CONFIRMATION ----
-        if self.position_manager.has_positions():
-            reply = QMessageBox.warning(
-                self,
-                "Exit Application",
-                (
-                    "You have open positions.\n\n"
-                    "Closing the application will NOT exit or square off your positions.\n"
-                    "They will remain open in your trading account.\n\n"
-                    "Do you still want to close the application?"
-                ),
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No
-            )
+        self.buy_exit_panel.update_parameters(symbol, num_lots, lot_quantity, expiry_str)
+        logger.debug(f"Lot size updated to {num_lots} without refreshing ladder.")
 
-            if reply == QMessageBox.StandardButton.No:
-                event.ignore()
+    def _get_current_settings(self) -> dict:
+        strike_step = 50.0
+        if hasattr(self, 'strike_ladder') and hasattr(self.strike_ladder, 'user_strike_interval'):
+            strike_step = self.strike_ladder.user_strike_interval
+        return {'symbol': self.header.symbol_button.text(), 'strike_step': strike_step,
+                'expiry': self.header.expiry_combo.currentText(), 'lot_size': self.header.lot_size_spin.value()}
 
-                # Restart timers if exit cancelled
-                if hasattr(self, 'api_health_check_timer'):
-                    self.api_health_check_timer.start()
-                if hasattr(self, 'update_timer'):
-                    self.update_timer.start()
+    # =========================================================================
+    # SECTION 7: RISK MANAGEMENT
+    # =========================================================================
 
-                return
+    def _reload_risk_limits_from_settings(self):
+        self.risk_controller.reload_limits_from_settings()
 
-        logger.info("Proceeding with application shutdown.")
-        self.save_window_state()
-        event.accept()
+    def _activate_global_kill_switch(self, reason: str, user_message: Optional[str] = None,
+                                     exit_open_positions: bool = True):
+        self.risk_controller.activate_global_kill_switch(reason, user_message, exit_open_positions)
 
-    def save_window_state(self):
+    def _evaluate_risk_locks(self):
+        self.risk_controller.evaluate_risk_locks()
+
+    def _validate_pre_trade_risk(self, transaction_type: str, quantity: int, tradingsymbol: Optional[str]) -> tuple[bool, str]:
+        return self.risk_controller.validate_pre_trade_risk(transaction_type, quantity, tradingsymbol)
+
+    def _reject_order_for_risk(self, reason: str):
+        self.risk_controller.reject_order_for_risk(reason)
+
+    # =========================================================================
+    # SECTION 8: POSITION MANAGEMENT
+    # =========================================================================
+
+    def _on_positions_updated(self, positions: List[Position]):
+        self.position_sync_adapter.on_positions_updated(positions)
+
+    def _on_position_added(self, position: Position):
+        self.position_sync_adapter.on_position_added(position)
+
+    def _on_position_removed(self, symbol: str):
+        self.position_sync_adapter.on_position_removed(symbol)
+
+    def _on_refresh_completed(self, success: bool):
+        self.position_sync_adapter.on_refresh_completed(success)
+
+    def _on_api_error(self, error_message: str):
+        logger.error(f"PositionManager reported API error: {error_message}")
+        self._publish_status(f"API Error: {error_message}", 5000, level="error")
+
+    def _on_portfolio_exit_triggered(self, reason: str, pnl: float):
+        logger.info(
+            f"Portfolio exit handled by UI | Reason={reason}, PnL={pnl:.2f}"
+        )
+
+        self._activate_global_kill_switch(
+            reason=f"PORTFOLIO_{reason}",
+            user_message=f"Portfolio {reason.replace('_', ' ').title()} hit at ₹{pnl:,.2f}. Exiting all and locking entries.",
+            exit_open_positions=True,
+        )
+
+        # SUCCESS sound for TARGET, FAIL sound for SL
+        if reason == "TARGET":
+            self._play_sound(success=True)
+        else:
+            self._play_sound(success=False)
+
+    def _sync_positions_to_dialog(self):
+        self.position_sync_adapter.sync_positions_to_dialog()
+
+    def _refresh_positions(self):
+        if not self.trader:
+            logger.warning("Kite client not available for position refresh.")
+            self._publish_status("API client not set. Cannot refresh positions.", 3500, level="error")
+            return
+        logger.debug("Attempting to refresh positions from API via PositionManager.")
+        self.position_manager.refresh_from_api()
+
+    def _refresh_orders(self):
+        if not self.trader:
+            logger.warning("Kite client not available for order refresh.")
+            return
         try:
-            from utils.config_manager import ConfigManager
-            config_manager = ConfigManager()
-            state = {
-                'geometry': self.saveGeometry().toBase64().data().decode('utf-8'),
-                'state': self.saveState().toBase64().data().decode('utf-8'),
-                'splitter': self.main_splitter.saveState().toBase64().data().decode('utf-8')
-            }
-            config_manager.save_window_state(state)
-            logger.info("Window state saved.")
+            orders = self.trader.orders()
+            logger.info(f"Fetched {len(orders)} orders.")
         except Exception as e:
-            logger.error(f"Failed to save window state: {e}")
+            logger.error(f"Failed to fetch orders: {e}")
+            self._publish_status(f"Failed to fetch orders: {e}", 3500, level="warning")
 
-    def restore_window_state(self):
-        try:
-            from utils.config_manager import ConfigManager
-            config_manager = ConfigManager()
-            state = config_manager.load_window_state()
-            if state:
-                if state.get('geometry'):
-                    self.restoreGeometry(QByteArray.fromBase64(state['geometry'].encode('utf-8')))
-                if state.get('state'):
-                    self.restoreState(QByteArray.fromBase64(state['state'].encode('utf-8')))
-                if state.get('splitter'):
-                    self.main_splitter.restoreState(QByteArray.fromBase64(state['splitter'].encode('utf-8')))
-                logger.info("Window state restored.")
-            else:
-                self.setWindowState(Qt.WindowMaximized)
-        except Exception as e:
-            logger.error(f"Failed to restore window state: {e}")
-            self.setWindowState(Qt.WindowMaximized)
+    def _refresh_data(self):
+        self._publish_status("Refreshing data...", 3000, level="action")
+        self._refresh_positions()
+        self._refresh_orders()
+        self._update_account_info()
+        self._publish_status("Data refreshed.", 3000, level="success")
+
+    def _get_cached_positions(self) -> List[Position]:
+        return self.position_manager.get_all_positions()
+
+    @staticmethod
+    def _position_to_dict(position: Position) -> dict:
+        return {
+            'tradingsymbol': position.tradingsymbol,
+            'symbol': position.symbol,
+            'quantity': position.quantity,
+            'average_price': position.average_price,
+            'last_price': position.ltp,
+            'pnl': position.pnl,
+            'exchange': position.exchange,
+            'product': position.product,
+            'strike': position.contract.strike,
+            'option_type': position.contract.option_type,
+            'stop_loss_price': position.stop_loss_price,
+            'target_price': position.target_price,
+            'trailing_stop_loss': position.trailing_stop_loss,
+            'group_name': position.group_name
+        }
+
+    # =========================================================================
+    # SECTION 9: ORDER EXECUTION
+    # =========================================================================
+
+    def _place_order(self, order_details_from_panel: dict):
+        """Handles the buy signal from the panel by showing a confirmation dialog."""
+        auto_confirm = bool(self._auto_confirm_next_panel_order)
+        # Consume one-shot auto-confirm intent so manual clicks are never affected.
+        self._auto_confirm_next_panel_order = False
+        self.execution_facade.place_order(
+            order_details_from_panel=order_details_from_panel,
+            auto_confirm=auto_confirm,
+        )
+
+        dialog = self.active_order_confirmation_dialog
+        if dialog:
+            dialog.refresh_requested.connect(self._on_order_confirmation_refresh_request)
+            dialog.finished.connect(lambda: setattr(self, 'active_order_confirmation_dialog', None))
+
+    def _on_paper_trade_update(self, order_data: dict):
+        """Logs completed paper trades and triggers an immediate UI refresh."""
+        self._processed_paper_exit_orders = getattr(self, "_processed_paper_exit_orders", set())
+        self.execution_facade.on_paper_trade_update(
+            order_data=order_data,
+            processed_order_ids=self._processed_paper_exit_orders,
+        )
+
+    def _on_paper_order_rejected(self, data: dict):
+        self.execution_facade.on_paper_order_rejected(
+            data=data,
+            show_modal=lambda title, message: QMessageBox.warning(self, title, message),
+        )
+
+    def _execute_orders(self, confirmed_order_details: dict):
+        self.execution_service.execute_orders(confirmed_order_details)
+
+    def _execute_single_strike_order(self, order_params: dict):
+        self.execution_service.execute_single_strike_order(order_params)
+
+    def _execute_strategy_orders(self, order_params_list: List[dict], strategy_name: Optional[str] = None):
+        self.execution_service.execute_strategy_orders(order_params_list, strategy_name)
+
+    def _confirm_and_finalize_order(
+            self, order_id, contract_to_trade, quantity, price,
+            transaction_type, product, stop_loss_price, target_price,
+            trailing_stop_loss, stop_loss_amount, target_amount,
+            trailing_stop_loss_amount, group_name, auto_token=None
+    ):
+        self.execution_service.confirm_and_finalize_order(
+            order_id, contract_to_trade, quantity, price, transaction_type, product,
+            stop_loss_price, target_price, trailing_stop_loss, stop_loss_amount,
+            target_amount, trailing_stop_loss_amount, group_name, auto_token,
+        )
+
+    def _has_pending_order_for_symbol(self, tradingsymbol: str | None) -> bool:
+        return self.execution_service.has_pending_order_for_symbol(tradingsymbol)
+
+    def _show_order_results(self, successful_list: List[Dict], failed_list: List[Dict]):
+        self.execution_service.show_order_results(successful_list, failed_list)
 
     def _exit_all_positions(self):
         self.execution_service.exit_all_positions()
@@ -1118,115 +959,66 @@ class ImperiumMainWindow(QMainWindow):
     def _exit_option_positions(self, option_type: OptionType):
         self.execution_service.exit_option_positions(option_type)
 
-    def _build_strikes_list(self, option_type: OptionType, contracts_above: int, contracts_below: int,
-                            atm_strike: Optional[float], strike_step: Optional[float]) -> List[Dict]:
-        strikes_info_list = []
-        if atm_strike is None or strike_step is None or strike_step == 0:
-            logger.warning("ATM strike or strike step is invalid. Cannot build strikes list.")
-            return strikes_info_list
-
-        for i in range(contracts_below, 0, -1):
-            strike_price = atm_strike - (i * strike_step)
-            contract = self._get_contract_from_ladder(strike_price, option_type)
-            if contract:
-                strikes_info_list.append(
-                    self._create_strike_info_for_order(strike_price, option_type, contract, is_atm=False))
-
-        atm_contract = self._get_contract_from_ladder(atm_strike, option_type)
-        if atm_contract:
-            strikes_info_list.append(
-                self._create_strike_info_for_order(atm_strike, option_type, atm_contract, is_atm=True))
-
-        for i in range(1, contracts_above + 1):
-            strike_price = atm_strike + (i * strike_step)
-            contract = self._get_contract_from_ladder(strike_price, option_type)
-            if contract:
-                strikes_info_list.append(
-                    self._create_strike_info_for_order(strike_price, option_type, contract, is_atm=False))
-        return strikes_info_list
-
-    def _get_contract_from_ladder(self, strike: float, option_type: OptionType) -> Optional[Contract]:
-        if strike in self.strike_ladder.contracts:
-            ladder_key = self._option_type_to_ladder_key(option_type)
-            return self.strike_ladder.contracts[strike].get(ladder_key)
-        return None
-
-    @staticmethod
-    def _create_strike_info_for_order(strike: float, option_type: OptionType, contract_obj: Contract,
-                                      is_atm: bool) -> Dict:
-        return {'strike': strike, 'type': option_type.value, 'ltp': contract_obj.ltp if contract_obj else 0.0,
-                'contract': contract_obj, 'is_atm': is_atm,
-                'tradingsymbol': contract_obj.tradingsymbol if contract_obj else None}
-
-    def _execute_orders(self, confirmed_order_details: dict):
-        self.execution_service.execute_orders(confirmed_order_details)
-
-    def _show_order_results(self, successful_list: List[Dict], failed_list: List[Dict]):
-        self.execution_service.show_order_results(successful_list, failed_list)
-
-    def _on_single_strike_selected(self, contract: Contract):
-        if not contract:
-            logger.warning("Single strike selected but contract data is missing.")
+    def _check_live_completed_orders(self):
+        if self.trading_mode != "live":
             return
 
-        if self.active_quick_order_dialog:
-            self.active_quick_order_dialog.reject()
+        try:
+            orders = self.real_kite_client.orders()
+        except Exception as e:
+            logger.debug(f"Live order fetch failed: {e}")
+            return
 
-        default_lots = self.header.lot_size_spin.value()
+        for order in orders:
+            if order.get("status") != "COMPLETE":
+                continue
 
-        # Check if position already exists for this symbol
-        position_exists = self.position_manager.get_position(contract.tradingsymbol) is not None
+            if order.get("transaction_type") != "SELL":
+                continue
 
-        dialog = QuickOrderDialog(
-            parent=self,
-            contract=contract,
-            default_lots=default_lots,
-            position_exists=position_exists
-        )
-        self.active_quick_order_dialog = dialog
+            order_id = order.get("order_id")
+            if not order_id:
+                continue
 
-        dialog.order_placed.connect(self._execute_single_strike_order)
-        dialog.refresh_requested.connect(self._on_quick_order_refresh_request)
-        dialog.finished.connect(lambda: setattr(self, 'active_quick_order_dialog', None))
+            # 🔒 Prevent duplicate ledger writes
+            if order_id in self._processed_live_exit_orders:
+                continue
 
-    def _on_prefilled_modify_dialog_finished(self, result: int, pending_order_id: str | None):
-        self.active_quick_order_dialog = None
+            tradingsymbol = order.get("tradingsymbol")
 
-        if result == QDialog.DialogCode.Rejected:
-            if pending_order_id:
-                self._publish_status(f"Order {pending_order_id} cancelled.", 4000, level="info")
-            else:
-                self._publish_status("Order cancelled.", 4000, level="info")
+            # NOTE:
+            # We intentionally snapshot the CURRENT Position object at exit time.
+            # For LIVE trading, each completed SELL order is treated as an independent exit trade.
+            # This design correctly supports partial exits and scaling out.
+            # Do NOT replace this with cached entry data or dict snapshots.
 
-    def _execute_single_strike_order(self, order_params: dict):
-        self.execution_service.execute_single_strike_order(order_params)
+            # 🔥 FIX: Try cached snapshot first, then current position
+            # The position may already be removed from API after order completion
+            original_position = self._position_snapshots_for_exit.get(tradingsymbol)
 
-    def _confirm_and_finalize_order(
-            self, order_id, contract_to_trade, quantity, price,
-            transaction_type, product, stop_loss_price, target_price,
-            trailing_stop_loss, stop_loss_amount, target_amount,
-            trailing_stop_loss_amount, group_name, auto_token=None
-    ):
-        self.execution_service.confirm_and_finalize_order(
-            order_id, contract_to_trade, quantity, price, transaction_type, product,
-            stop_loss_price, target_price, trailing_stop_loss, stop_loss_amount,
-            target_amount, trailing_stop_loss_amount, group_name, auto_token,
-        )
+            if not original_position:
+                # Fallback: Try getting current position (may still exist for partial exits)
+                original_position = self.position_manager.get_position(tradingsymbol)
 
-    def _has_pending_order_for_symbol(self, tradingsymbol: str | None) -> bool:
-        return self.execution_service.has_pending_order_for_symbol(tradingsymbol)
+            if not original_position:
+                logger.warning(
+                    f"[LIVE] Cannot record exit trade for {tradingsymbol} - "
+                    f"no position snapshot or current position found (order_id: {order_id})"
+                )
+                continue
 
-    def _start_cvd_pending_retry(self, token: int):
-        self.execution_service.start_cvd_pending_retry(token)
+            self._record_completed_exit_trade(
+                confirmed_order=order,
+                original_position=original_position,
+                trading_mode="LIVE"
+            )
 
-    def _stop_cvd_pending_retry(self, token: int):
-        self.execution_service.stop_cvd_pending_retry(token)
+            self._processed_live_exit_orders.add(order_id)
 
-    def _retry_cvd_pending_order(self, token: int):
-        self.execution_service.retry_cvd_pending_order(token)
-
-    def _execute_strategy_orders(self, order_params_list: List[dict], strategy_name: Optional[str] = None):
-        self.execution_service.execute_strategy_orders(order_params_list, strategy_name)
+            # 🔥 FIX: Clean up snapshot after successful recording
+            if tradingsymbol in self._position_snapshots_for_exit:
+                del self._position_snapshots_for_exit[tradingsymbol]
+                logger.debug(f"Removed position snapshot for {tradingsymbol}")
 
     def _record_completed_exit_trade(
             self,
@@ -1370,389 +1162,111 @@ class ImperiumMainWindow(QMainWindow):
         logger.error(f"Order {order_id} confirmation failed after {retries} retries.")
         return None
 
-    def _play_sound(self, success: bool = True):
-        self.sound_service.play_notification(success=success)
+    # =========================================================================
+    # SECTION 10: STRIKE LADDER & INSTRUMENT HELPERS
+    # =========================================================================
 
-    @staticmethod
-    def _calculate_smart_limit_price(contract: Contract) -> float:
-        base_price = contract.ltp
-        bid_price = contract.bid if hasattr(contract, 'bid') else 0.0
-        ask_price = contract.ask if hasattr(contract, 'ask') else 0.0
-        tick_size = 0.05
-        if base_price <= 0:
-            if ask_price > 0: return round(ask_price / tick_size) * tick_size
-            return tick_size
-        if not (0 < bid_price < ask_price):
-            return ImperiumMainWindow._calculate_ltp_based_price(base_price, tick_size)
-        spread_info = ImperiumMainWindow._analyze_bid_ask_spread(bid_price, ask_price, base_price, tick_size)
-        if spread_info['has_valid_spread']:
-            return ImperiumMainWindow._calculate_spread_based_price(base_price, bid_price, ask_price, spread_info)
-        else:
-            return ImperiumMainWindow._calculate_ltp_based_price(base_price, tick_size)
+    def _update_strike_ladder_with_fallback(self, symbol: str, expiry_date):
+        """
+        Update strike ladder with graceful degradation on price fetch failure
+        """
+        current_price = self._get_current_price(symbol)
 
-    @staticmethod
-    def _analyze_bid_ask_spread(bid_price: float, ask_price: float, ltp: float, tick_size: float) -> dict:
-        has_valid_spread = 0 < bid_price < ask_price
-        result = {'has_valid_spread': has_valid_spread, 'spread_points': 0, 'mid_price': ltp, 'tick_size': tick_size}
-        if has_valid_spread:
-            result['spread_points'] = ask_price - bid_price
-            result['mid_price'] = (bid_price + ask_price) / 2
-        return result
+        if current_price is None:
+            # CRITICAL: Don't abort - use fallback strategies
+            logger.warning(f"Could not get current price for {symbol}. Trying fallback strategies...")
 
-    @staticmethod
-    def _calculate_spread_based_price(ltp: float, bid: float, ask: float, spread_info: dict) -> float:
-        tick_size = spread_info.get('tick_size', 0.05)
-        if spread_info['spread_points'] <= 2 * tick_size:
-            target_price = ask
-        else:
-            if bid < ltp < ask:
-                target_price = ltp + tick_size
-            else:
-                target_price = (spread_info['mid_price'] + ask) / 2
-                if target_price <= bid:
-                    target_price = bid + tick_size
-        final_price = max(target_price, bid + tick_size)
-        final_price = min(final_price, ask + 5 * tick_size)
-        return round(final_price / tick_size) * tick_size
+            # Strategy 1: Use last known index price from market data
+            if hasattr(self.strike_ladder, 'last_index_price') and self.strike_ladder.last_index_price:
+                current_price = self.strike_ladder.last_index_price
+                logger.info(f"Using last known index price: {current_price}")
 
-    @staticmethod
-    def _calculate_ltp_based_price(base_price: float, tick_size: float) -> float:
-        if base_price < 1:
-            buffer = tick_size * 2
-        elif base_price < 10:
-            buffer = tick_size * 3
-        elif base_price < 50:
-            buffer = max(tick_size * 4, base_price * 0.01)
-        else:
-            buffer = max(tick_size * 5, base_price * 0.005)
-        limit_price = base_price + buffer
-        return round(limit_price / tick_size) * tick_size
+            # Strategy 2: Use position-based price estimate
+            elif self.position_manager.get_all_positions():
+                estimated_price = self._estimate_underlying_from_positions(symbol)
+                if estimated_price:
+                    current_price = estimated_price
+                    logger.info(f"Using position-based price estimate: {current_price}")
 
-    def _get_current_settings(self) -> dict:
-        strike_step = 50.0
-        if hasattr(self, 'strike_ladder') and hasattr(self.strike_ladder, 'user_strike_interval'):
-            strike_step = self.strike_ladder.user_strike_interval
-        return {'symbol': self.header.symbol_button.text(), 'strike_step': strike_step,
-                'expiry': self.header.expiry_combo.currentText(), 'lot_size': self.header.lot_size_spin.value()}
+            # Strategy 3: Load from yesterday's close (if you have this data)
+            if current_price is None:
+                # Show clear error to user with retry option
+                self._show_network_error_notification(symbol)
+                logger.error(f"All fallback strategies failed for {symbol}. Ladder update aborted.")
+                return False
 
-    def _on_lot_size_changed(self, num_lots: int):
-        if self._settings_changing or not self.instrument_data:
-            return
+        # Proceed with ladder update
+        calculated_interval = self.strike_ladder.calculate_strike_interval(symbol)
 
-        symbol = self.header.symbol_button.text()
-        expiry_str = self.header.expiry_combo.currentText()
-
-        if not symbol:
-            return
-
-        lot_quantity = self.instrument_data.get(symbol, {}).get('lot_size', 1)
-
-        self.buy_exit_panel.update_parameters(symbol, num_lots, lot_quantity, expiry_str)
-        logger.debug(f"Lot size updated to {num_lots} without refreshing ladder.")
-
-    def _refresh_data(self):
-        self._publish_status("Refreshing data...", 3000, level="action")
-        self._refresh_positions()
-        self._refresh_orders()
-        self._update_account_info()
-        self._publish_status("Data refreshed.", 3000, level="success")
-
-    def _refresh_positions(self):
-        if not self.trader:
-            logger.warning("Kite client not available for position refresh.")
-            self._publish_status("API client not set. Cannot refresh positions.", 3500, level="error")
-            return
-        logger.debug("Attempting to refresh positions from API via PositionManager.")
-        self.position_manager.refresh_from_api()
-
-    @staticmethod
-    def _position_to_dict(position: Position) -> dict:
-        return {
-            'tradingsymbol': position.tradingsymbol,
-            'symbol': position.symbol,
-            'quantity': position.quantity,
-            'average_price': position.average_price,
-            'last_price': position.ltp,
-            'pnl': position.pnl,
-            'exchange': position.exchange,
-            'product': position.product,
-            'strike': position.contract.strike,
-            'option_type': position.contract.option_type,
-            'stop_loss_price': position.stop_loss_price,
-            'target_price': position.target_price,
-            'trailing_stop_loss': position.trailing_stop_loss,
-            'group_name': position.group_name
-        }
-
-    def _refresh_orders(self):
-        if not self.trader:
-            logger.warning("Kite client not available for order refresh.")
-            return
-        try:
-            orders = self.trader.orders()
-            logger.info(f"Fetched {len(orders)} orders.")
-        except Exception as e:
-            logger.error(f"Failed to fetch orders: {e}")
-            self._publish_status(f"Failed to fetch orders: {e}", 3500, level="warning")
-
-    def _update_performance(self):
-        if not self.performance_dialog:
-            return
-
-        today = date.today().isoformat()
-        stats = self.trade_ledger.get_trade_stats_for_date(today)
-
-        metrics = {
-            "total_trades": stats["total_trades"],
-            "winning_trades": stats["wins"],
-            "losing_trades": stats["losses"],
-            "win_rate": stats["win_rate"],
-            "total_pnl": stats["total_pnl"],
-        }
-
-        if self.performance_dialog.isVisible():
-            self.performance_dialog.update_metrics(metrics)
-
-    def _update_account_summary_widget(self):
-        trading_day = date.today().isoformat()
-        # 1️⃣ TODAY'S realized stats (LEDGER)
-        stats = self.trade_ledger.get_daily_trade_stats(
-            trading_day=trading_day
+        self.strike_ladder.update_strikes(
+            symbol=symbol,
+            current_price=current_price,
+            expiry=expiry_date,
+            strike_interval=calculated_interval
         )
 
-        realized_pnl = stats["total_pnl"]
-        win_rate = stats["win_rate"]
-        trade_count = stats["total_trades"]
+        self._update_market_subscriptions()
+        return True
 
-        # 2️⃣ Unrealized PnL (POSITIONS)
-        unrealized_pnl = self.position_manager.get_total_pnl()
+    def _estimate_underlying_from_positions(self, symbol: str) -> Optional[float]:
+        """
+        Estimate underlying price from current option positions
+        Uses Black-Scholes reverse calculation approximation
+        """
+        positions = self.position_manager.get_all_positions()
 
-        # 3️⃣ Margins (MODE AWARE)
-        used_margin = 0.0
-        available_margin = 0.0
+        for pos in positions:
+            if pos.contract and pos.contract.symbol == symbol:
+                # Simple approximation: ATM strike ≈ underlying
+                # For better accuracy, you'd use IV and Greeks
+                if abs(pos.contract.strike - pos.last_price) < 1000:  # Near ATM
+                    return pos.contract.strike
 
-        try:
-            if self.trading_mode == "paper":
-                margins = self.trader.margins()
-                equity = margins.get("equity", {})
-                available_margin = equity.get("available", {}).get("live_balance", 0.0)
-                used_margin = equity.get("utilised", {}).get("total", 0.0)
-            else:
-                margins = self.real_kite_client.margins()
-                equity = margins.get("equity", {})
-                available_margin = equity.get("available", {}).get("live_balance", 0.0)
-                used_margin = equity.get("utilised", {}).get("total", 0.0)
-        except Exception as e:
-            logger.warning(f"Margin fetch failed: {e}")
+        return None
 
-        # 4️⃣ Push ONLY daily data to widget
-        self.account_summary.update_summary(
-            unrealized_pnl=unrealized_pnl,
-            realized_pnl=realized_pnl,
-            used_margin=used_margin,
-            available_margin=available_margin,
-            win_rate=win_rate,
-            trade_count=trade_count
-        )
+    def _build_strikes_list(self, option_type: OptionType, contracts_above: int, contracts_below: int,
+                            atm_strike: Optional[float], strike_step: Optional[float]) -> List[Dict]:
+        strikes_info_list = []
+        if atm_strike is None or strike_step is None or strike_step == 0:
+            logger.warning("ATM strike or strike step is invalid. Cannot build strikes list.")
+            return strikes_info_list
 
-    def _schedule_trading_day_reset(self):
+        for i in range(contracts_below, 0, -1):
+            strike_price = atm_strike - (i * strike_step)
+            contract = self._get_contract_from_ladder(strike_price, option_type)
+            if contract:
+                strikes_info_list.append(
+                    self._create_strike_info_for_order(strike_price, option_type, contract, is_atm=False))
 
-        now = datetime.now()
-        today_730 = datetime.combine(now.date(), TRADING_DAY_START)
+        atm_contract = self._get_contract_from_ladder(atm_strike, option_type)
+        if atm_contract:
+            strikes_info_list.append(
+                self._create_strike_info_for_order(atm_strike, option_type, atm_contract, is_atm=True))
 
-        if now >= today_730:
-            today_730 += timedelta(days=1)
+        for i in range(1, contracts_above + 1):
+            strike_price = atm_strike + (i * strike_step)
+            contract = self._get_contract_from_ladder(strike_price, option_type)
+            if contract:
+                strikes_info_list.append(
+                    self._create_strike_info_for_order(strike_price, option_type, contract, is_atm=False))
+        return strikes_info_list
 
-        ms_until_reset = int((today_730 - now).total_seconds() * 1000)
+    def _get_contract_from_ladder(self, strike: float, option_type: OptionType) -> Optional[Contract]:
+        if strike in self.strike_ladder.contracts:
+            ladder_key = self._option_type_to_ladder_key(option_type)
+            return self.strike_ladder.contracts[strike].get(ladder_key)
+        return None
 
-        timer = QTimer(self)
-        timer.setSingleShot(True)
-        timer.timeout.connect(self._on_trading_day_reset)
-        timer.start(ms_until_reset)
+    @staticmethod
+    def _create_strike_info_for_order(strike: float, option_type: OptionType, contract_obj: Contract,
+                                      is_atm: bool) -> Dict:
+        return {'strike': strike, 'type': option_type.value, 'ltp': contract_obj.ltp if contract_obj else 0.0,
+                'contract': contract_obj, 'is_atm': is_atm,
+                'tradingsymbol': contract_obj.tradingsymbol if contract_obj else None}
 
-    def _on_trading_day_reset(self):
-        logger.info("Trading day reset at 07:30 AM")
-        self.risk_controller.reset_for_new_trading_day()
-        self._update_account_summary_widget()
-        self._schedule_trading_day_reset()  # schedule next day
-
-    def _update_ui(self):
-        self._update_account_summary_widget()
-        self._evaluate_risk_locks()
-
-        ladder_data = self.strike_ladder.get_ladder_data()
-        if ladder_data:
-            atm_strike = self.strike_ladder.atm_strike
-            interval = self.strike_ladder.get_strike_interval()
-            self.buy_exit_panel.update_strike_ladder(atm_strike, interval, ladder_data)
-
-        if self.performance_dialog and self.performance_dialog.isVisible():
-            self._update_performance()
-
-        now = datetime.now()
-        market_open_time = time(9, 15)
-        market_close_time = time(15, 30)
-        is_market_open = (market_open_time <= now.time() <= market_close_time) and (now.weekday() < 5)
-        market_status = "Open" if is_market_open else "Closed"
-
-        if self.margin_circuit_breaker.state == "OPEN" or self.profile_circuit_breaker.state == "OPEN":
-            api_status = "Degraded"
-        elif self.margin_circuit_breaker.state == "HALF_OPEN" or self.profile_circuit_breaker.state == "HALF_OPEN":
-            api_status = "Recovering"
-        else:
-            api_status = "Healthy"
-
-        # Update status bar through StatusBarWidget
-        self.status_bar_widget.update_api_status(f"API {api_status}")
-
-        # Use case-insensitive check since self.network_status is lowercase
-        network_status_lower = self.network_status.lower()
-        if "connected" in network_status_lower and "disconnected" not in network_status_lower:
-            network_chip_status = "Connected"
-        elif "disconnected" in network_status_lower:
-            network_chip_status = "Disconnected"
-        elif "connecting" in network_status_lower or "reconnecting" in network_status_lower:
-            network_chip_status = self.network_status.title()  # Capitalize first letter
-        else:
-            network_chip_status = self.network_status.title()
-
-        self.status_bar_widget.update_network_status(network_chip_status)
-        self.status_bar_widget.update_market_status(f"Market {market_status}")
-        self.status_bar_widget.update_clock(now.strftime("%H:%M:%S"))
-
-    def _get_cached_positions(self) -> List[Position]:
-        return self.position_manager.get_all_positions()
-
-    def _calculate_live_pnl_from_market_data(self, market_data: dict) -> float:
-        total_pnl = 0.0
-        current_positions = self.position_manager.get_all_positions()
-
-        for position in current_positions:
-            try:
-                quote_key = f"{position.exchange}:{position.tradingsymbol}"
-                if quote_key in market_data:
-                    current_price = market_data[quote_key].get('last_price', position.ltp)
-                    avg_price = position.average_price
-                    quantity = position.quantity
-
-                    if quantity > 0:
-                        pnl = (current_price - avg_price) * quantity
-                    else:
-                        pnl = (avg_price - current_price) * abs(quantity)
-                    total_pnl += pnl
-                else:
-                    total_pnl += position.pnl
-            except Exception as e:
-                logger.debug(f"Error calculating live P&L for position {position.tradingsymbol}: {e}")
-                total_pnl += position.pnl
-                continue
-        return total_pnl
-
-    def _show_modify_order_dialog(self, order_data: dict):
-        order_id = order_data.get("order_id")
-        tradingsymbol = order_data.get("tradingsymbol")
-        logger.info(f"Modification requested for order ID: {order_id}")
-
-        if not order_id or not tradingsymbol:
-            logger.error("Modify request failed: No order_id or tradingsymbol in data.")
-            QMessageBox.critical(self, "Error", "Cannot modify order: missing order details.")
-            return
-
-        contract = self._get_latest_contract_from_ladder(tradingsymbol)
-        if not contract:
-            logger.error(f"Could not find instrument details for {tradingsymbol} to modify order.")
-            QMessageBox.critical(self, "Error", f"Could not find instrument details for {tradingsymbol}.")
-            return
-
-        try:
-            self.trader.cancel_order(self.trader.VARIETY_REGULAR, order_id)
-            logger.info(f"Order {order_id} cancelled for modification.")
-            self._publish_status(f"Order {order_id} cancelled. Please enter new order details.", 4000, level="info")
-        except Exception as e:
-            logger.warning(f"Failed to cancel order {order_id} for modification, it might have been executed: {e}")
-            QMessageBox.information(self, "Order Not Found",
-                                    "The order could not be modified as it may have been executed. Please refresh the positions table to confirm.")
-            return
-
-        QTimer.singleShot(100, lambda: self._open_prefilled_order_dialog(contract, order_data))
-
-    def _open_prefilled_order_dialog(self, contract: Contract, order_data: dict):
-        if self.active_quick_order_dialog:
-            self.active_quick_order_dialog.reject()
-
-        default_lots = int(order_data.get('quantity', 1) / contract.lot_size if contract.lot_size > 0 else 1)
-
-        # Check if position already exists for this symbol
-        position_exists = self.position_manager.get_position(contract.tradingsymbol) is not None
-
-        dialog = QuickOrderDialog(
-            parent=self,
-            contract=contract,
-            default_lots=default_lots,
-            position_exists=position_exists
-        )
-        self.active_quick_order_dialog = dialog
-
-        dialog.populate_from_order(order_data)
-
-        dialog.order_placed.connect(self._execute_single_strike_order)
-        dialog.refresh_requested.connect(self._on_quick_order_refresh_request)
-        dialog.finished.connect(
-            lambda result, pending_order_id=order_data.get("order_id"): self._on_prefilled_modify_dialog_finished(
-                result,
-                pending_order_id,
-            )
-        )
-
-    def _on_quick_order_refresh_request(self, tradingsymbol: str):
-        if not self.active_quick_order_dialog:
-            return
-
-        logger.debug(f"Handling refresh request for {tradingsymbol}")
-
-        latest_contract = self._get_latest_contract_from_ladder(tradingsymbol)
-        if latest_contract:
-            self.active_quick_order_dialog.update_contract_data(latest_contract)
-        else:
-            logger.warning(f"Could not find latest contract data for {tradingsymbol} to refresh dialog.")
-
-    def _on_order_confirmation_refresh_request(self):
-        if not self.active_order_confirmation_dialog:
-            return
-
-        logger.debug("Handling refresh request for order confirmation dialog.")
-
-        current_details = self.active_order_confirmation_dialog.order_details
-        new_strikes_list = []
-        new_total_premium = 0.0
-
-        total_quantity_per_strike = current_details.get('total_quantity_per_strike', 0)
-
-        if total_quantity_per_strike == 0:
-            logger.error("Cannot refresh order confirmation: total_quantity_per_strike is zero.")
-            return
-
-        for strike_info in current_details.get('strikes', []):
-            contract = strike_info.get('contract')
-            if not contract:
-                continue
-
-            latest_contract = self._get_latest_contract_from_ladder(contract.tradingsymbol)
-
-            new_ltp = latest_contract.ltp if latest_contract else strike_info.get('ltp', 0.0)
-
-            new_strikes_list.append({
-                "strike": contract.strike,
-                "ltp": new_ltp,
-                "contract": latest_contract if latest_contract else contract
-            })
-            new_total_premium += new_ltp * total_quantity_per_strike
-
-        new_details = current_details.copy()
-        new_details['strikes'] = new_strikes_list
-        new_details['total_premium_estimate'] = new_total_premium
-
-        self.active_order_confirmation_dialog.update_order_details(new_details)
+    @staticmethod
+    def _option_type_to_ladder_key(option_type: OptionType) -> str:
+        return "CE" if option_type == OptionType.CALL else "PE"
 
     def _get_latest_contract_from_ladder(self, tradingsymbol: str) -> Optional[Contract]:
         for strike_data in self.strike_ladder.contracts.values():
@@ -1837,6 +1351,709 @@ class ImperiumMainWindow(QMainWindow):
         logger.warning(f"[CVD] No token found for {symbol}")
         return None, False, ""
 
+    # =========================================================================
+    # SECTION 11: PRICE FETCHING & CACHING
+    # =========================================================================
+
+    @with_timeout(timeout_seconds=5)
+    @with_timeout(timeout_seconds=5)
+    def _fetch_ltp_safe(self, instrument: str):
+        """Helper method to fetch LTP with timeout"""
+        return self.real_kite_client.ltp(instrument)
+
+    def _get_current_price(self, symbol: str, max_retries: int = 3) -> Optional[float]:
+        """
+        Get current price with circuit breaker protection and retry logic
+
+        Args:
+            symbol: Index symbol (NIFTY, BANKNIFTY, etc.)
+            max_retries: Maximum retry attempts with exponential backoff
+
+        Returns:
+            Current price or None if all attempts fail
+        """
+        if not symbol:
+            return None
+
+        # Check circuit breaker first
+        if not self.profile_circuit_breaker.can_execute():
+            logger.warning(
+                f"Circuit breaker {self.profile_circuit_breaker.get_state()} - "
+                f"using cached price for {symbol}"
+            )
+            # Try to use cached price from market data worker
+            cached_price = self._get_cached_index_price(symbol)
+            if cached_price:
+                return cached_price
+            # If no cache, we have to wait for circuit to recover
+            return None
+
+        # Index mapping
+        index_map = {
+            "NIFTY": ("NSE", "NIFTY 50"),
+            "BANKNIFTY": ("NSE", "NIFTY BANK"),
+            "FINNIFTY": ("NSE", "NIFTY FIN SERVICE"),
+            "MIDCPNIFTY": ("NSE", "NIFTY MID SELECT"),
+            "SENSEX": ("BSE", "SENSEX"),
+            "BANKEX": ("BSE", "BANKEX"),
+        }
+
+        exchange, name = index_map.get(symbol.upper(), ("NSE", symbol.upper()))
+        instrument = f"{exchange}:{name}"
+
+        # Retry with exponential backoff
+        for attempt in range(max_retries):
+            try:
+                ltp_data = self._fetch_ltp_safe(instrument)
+
+                if ltp_data and instrument in ltp_data:
+                    price = ltp_data[instrument]["last_price"]
+                    self.profile_circuit_breaker.record_success()
+                    self.network_monitor.record_success()  # ✅ Network success
+
+                    # Cache the price
+                    self._cache_index_price(symbol, price)
+
+                    if attempt > 0:
+                        logger.info(f"✓ Retrieved price for {symbol}: {price} (attempt {attempt + 1})")
+
+                    return price
+
+                logger.warning(f"LTP data not found for {instrument}. Response: {ltp_data}")
+
+            except NetworkError as e:
+                self.profile_circuit_breaker.record_failure()
+                self.network_monitor.record_failure()  # ❌ Network failure
+
+                if attempt < max_retries - 1:
+                    # Exponential backoff: 0.5s, 1s, 2s
+                    sleep_time = 0.5 * (2 ** attempt)
+                    logger.warning(
+                        f"Network error attempt {attempt + 1}/{max_retries} for {symbol}: {e}. "
+                        f"Retrying in {sleep_time}s..."
+                    )
+                    time.sleep(sleep_time)
+                else:
+                    logger.error(
+                        f"Network timeout for {symbol} after {max_retries} attempts: {e}"
+                    )
+                    api_logger.error(f"PRICE_FETCH_TIMEOUT symbol={symbol} error={str(e)[:100]}")
+
+            except Exception as e:
+                self.profile_circuit_breaker.record_failure()
+
+                if attempt < max_retries - 1:
+                    # Exponential backoff: 0.5s, 1s, 2s
+                    sleep_time = 0.5 * (2 ** attempt)
+                    logger.warning(
+                        f"Attempt {attempt + 1}/{max_retries} failed for {symbol}: {e}. "
+                        f"Retrying in {sleep_time}s..."
+                    )
+                    time.sleep(sleep_time)
+                else:
+                    logger.error(
+                        f"Failed to get current price for {symbol} after {max_retries} attempts: {e}"
+                    )
+                    api_logger.error(f"PRICE_FETCH_FAILED symbol={symbol} error={str(e)[:100]}")
+
+        # All retries failed - try cache as last resort
+        cached_price = self._get_cached_index_price(symbol)
+        if cached_price:
+            logger.warning(f"Using cached price for {symbol}: {cached_price}")
+            return cached_price
+
+        return None
+
+    def _cache_index_price(self, symbol: str, price: float):
+        """Cache index price for fallback use"""
+        if not hasattr(self, '_cached_index_prices'):
+            self._cached_index_prices = {}
+
+        self._cached_index_prices[symbol] = {
+            'price': price,
+            'timestamp': datetime.now()
+        }
+
+    def _get_cached_index_price(self, symbol: str) -> Optional[float]:
+        """
+        Get cached index price if available and fresh (< 5 minutes old)
+        """
+        if not hasattr(self, '_cached_index_prices'):
+            return None
+
+        cached = self._cached_index_prices.get(symbol)
+        if not cached:
+            return None
+
+        # Check if cache is stale (> 5 minutes)
+        age = (datetime.now() - cached['timestamp']).total_seconds()
+        if age > 300:  # 5 minutes
+            logger.debug(f"Cached price for {symbol} is stale ({age:.0f}s old)")
+            return None
+
+        return cached['price']
+
+    def _calculate_live_pnl_from_market_data(self, market_data: dict) -> float:
+        total_pnl = 0.0
+        current_positions = self.position_manager.get_all_positions()
+
+        for position in current_positions:
+            try:
+                quote_key = f"{position.exchange}:{position.tradingsymbol}"
+                if quote_key in market_data:
+                    current_price = market_data[quote_key].get('last_price', position.ltp)
+                    avg_price = position.average_price
+                    quantity = position.quantity
+
+                    if quantity > 0:
+                        pnl = (current_price - avg_price) * quantity
+                    else:
+                        pnl = (avg_price - current_price) * abs(quantity)
+                    total_pnl += pnl
+                else:
+                    total_pnl += position.pnl
+            except Exception as e:
+                logger.debug(f"Error calculating live P&L for position {position.tradingsymbol}: {e}")
+                total_pnl += position.pnl
+                continue
+        return total_pnl
+
+    # =========================================================================
+    # SECTION 12: SMART LIMIT PRICE CALCULATION
+    # =========================================================================
+
+    @staticmethod
+    def _calculate_smart_limit_price(contract: Contract) -> float:
+        base_price = contract.ltp
+        bid_price = contract.bid if hasattr(contract, 'bid') else 0.0
+        ask_price = contract.ask if hasattr(contract, 'ask') else 0.0
+        tick_size = 0.05
+        if base_price <= 0:
+            if ask_price > 0: return round(ask_price / tick_size) * tick_size
+            return tick_size
+        if not (0 < bid_price < ask_price):
+            return ImperiumMainWindow._calculate_ltp_based_price(base_price, tick_size)
+        spread_info = ImperiumMainWindow._analyze_bid_ask_spread(bid_price, ask_price, base_price, tick_size)
+        if spread_info['has_valid_spread']:
+            return ImperiumMainWindow._calculate_spread_based_price(base_price, bid_price, ask_price, spread_info)
+        else:
+            return ImperiumMainWindow._calculate_ltp_based_price(base_price, tick_size)
+
+    @staticmethod
+    def _analyze_bid_ask_spread(bid_price: float, ask_price: float, ltp: float, tick_size: float) -> dict:
+        has_valid_spread = 0 < bid_price < ask_price
+        result = {'has_valid_spread': has_valid_spread, 'spread_points': 0, 'mid_price': ltp, 'tick_size': tick_size}
+        if has_valid_spread:
+            result['spread_points'] = ask_price - bid_price
+            result['mid_price'] = (bid_price + ask_price) / 2
+        return result
+
+    @staticmethod
+    def _calculate_spread_based_price(ltp: float, bid: float, ask: float, spread_info: dict) -> float:
+        tick_size = spread_info.get('tick_size', 0.05)
+        if spread_info['spread_points'] <= 2 * tick_size:
+            target_price = ask
+        else:
+            if bid < ltp < ask:
+                target_price = ltp + tick_size
+            else:
+                target_price = (spread_info['mid_price'] + ask) / 2
+                if target_price <= bid:
+                    target_price = bid + tick_size
+        final_price = max(target_price, bid + tick_size)
+        final_price = min(final_price, ask + 5 * tick_size)
+        return round(final_price / tick_size) * tick_size
+
+    @staticmethod
+    def _calculate_ltp_based_price(base_price: float, tick_size: float) -> float:
+        if base_price < 1:
+            buffer = tick_size * 2
+        elif base_price < 10:
+            buffer = tick_size * 3
+        elif base_price < 50:
+            buffer = max(tick_size * 4, base_price * 0.01)
+        else:
+            buffer = max(tick_size * 5, base_price * 0.005)
+        limit_price = base_price + buffer
+        return round(limit_price / tick_size) * tick_size
+
+    # =========================================================================
+    # SECTION 13: CVD ENGINE & AUTOMATION
+    # =========================================================================
+
+    def _on_cvd_automation_signal(self, payload: dict):
+        self.cvd_automation_coordinator.handle_signal(payload)
+
+    def _on_cvd_automation_market_state(self, payload: dict):
+        self.cvd_automation_coordinator.handle_market_state(payload)
+
+    def _is_cvd_auto_cutoff_reached(self) -> bool:
+        return self.cvd_automation_coordinator.is_cutoff_reached()
+
+    def _enforce_cvd_auto_cutoff_exit(self, reason: str = "AUTO_3PM_CUTOFF"):
+        self.cvd_automation_coordinator.enforce_cutoff_exit(reason=reason)
+
+    def _persist_cvd_automation_state(self):
+        self.cvd_automation_coordinator.persist_state()
+
+    def _load_cvd_automation_state(self):
+        self.cvd_automation_coordinator.load_state()
+
+    def _reconcile_failed_auto_entry(self, token: int, tradingsymbol: str, signal_timestamp: str | None):
+        self.cvd_automation_coordinator.reconcile_failed_entry(token, tradingsymbol, signal_timestamp)
+
+    def _reconcile_cvd_automation_positions(self):
+        self.cvd_automation_coordinator.reconcile_positions()
+
+    def _get_atm_contract_for_signal(self, signal_side: str) -> Optional[Contract]:
+        return self.cvd_automation_coordinator.get_atm_contract_for_signal(signal_side)
+
+    def _exit_position_automated(self, position: Position, reason: str = "AUTO"):
+        self.cvd_automation_coordinator.exit_position_automated(position, reason=reason)
+
+    def _update_cvd_chart_symbol(self, symbol: str, cvd_token: int, suffix: str = ""):
+        self.subscription_policy.update_cvd_chart_symbol(symbol, cvd_token, suffix)
+
+    def _start_cvd_pending_retry(self, token: int):
+        self.execution_service.start_cvd_pending_retry(token)
+
+    def _stop_cvd_pending_retry(self, token: int):
+        self.execution_service.stop_cvd_pending_retry(token)
+
+    def _retry_cvd_pending_order(self, token: int):
+        self.execution_service.retry_cvd_pending_order(token)
+
+    def _on_cvd_dialog_closed(self, token):
+        QTimer.singleShot(0, self._update_market_subscriptions)
+
+    def _on_cvd_single_chart_closed(self, token):
+        """Handle CVD single chart dialog close."""
+        if token in self.cvd_single_chart_dialogs:
+            del self.cvd_single_chart_dialogs[token]
+        self._stop_cvd_pending_retry(token)
+        if self._cvd_automation_positions.pop(token, None) is not None:
+            self._persist_cvd_automation_state()
+        self._cvd_automation_market_state.pop(token, None)
+        if self.header_linked_cvd_token == token:
+            self.header_linked_cvd_token = None
+        QTimer.singleShot(0, self._update_market_subscriptions)
+
+    def _on_cvd_market_monitor_closed(self):
+        self.market_data_orchestrator.on_cvd_market_monitor_closed()
+
+    # =========================================================================
+    # SECTION 14: DIALOG MANAGEMENT
+    # =========================================================================
+
+    def _show_positions_dialog(self):
+        if self.positions_dialog is None:
+            self.positions_dialog = OpenPositionsDialog(self)
+            self.position_manager.positions_updated.connect(self.positions_dialog.update_positions)
+            self.positions_dialog.refresh_requested.connect(self._refresh_positions)
+            self.positions_dialog.position_exit_requested.connect(self._exit_position_from_dialog)
+            self.positions_dialog.modify_sl_tp_requested.connect(self._show_modify_sl_tp_dialog)
+            self.position_manager.refresh_completed.connect(self.positions_dialog.on_refresh_completed)
+
+        initial_positions = self.position_manager.get_all_positions()
+        self.positions_dialog.update_positions(initial_positions)
+        self.positions_dialog.show()
+        self.positions_dialog.raise_()
+        self.positions_dialog.activateWindow()
+
+    def _show_modify_sl_tp_dialog(self, symbol: str):
+        position = self.position_manager.get_position(symbol)
+        if not position:
+            QMessageBox.warning(self, "Error", "Position not found.")
+            return
+
+        lots = abs(position.quantity) / position.contract.lot_size if position.contract.lot_size > 0 else 1
+        dialog = QuickOrderDialog(
+            self,
+            position.contract,
+            lots,
+            mode=QuickOrderMode.MODIFY_RISK
+        )
+        dialog.populate_from_order(position)
+        dialog.risk_confirmed.connect(self._modify_sl_tp_for_position)
+
+    def _modify_sl_tp_for_position(self, order_params: dict):
+        contract = order_params.get('contract')
+        if not contract:
+            logger.error("Modify SL/TP failed: Contract object missing from order params.")
+            return
+
+        tradingsymbol = contract.tradingsymbol
+        sl_price = order_params.get('stop_loss_price')
+        tp_price = order_params.get('target_price')
+        tsl_value = order_params.get('trailing_stop_loss')
+
+        # Delegate the entire logic to the PositionManager
+        self.position_manager.update_sl_tp_for_position(
+            tradingsymbol, sl_price, tp_price, tsl_value
+        )
+
+    def _show_pending_orders_dialog(self):
+        self.order_dialog_service.show_pending_orders_dialog()
+
+    def _show_order_history_dialog(self):
+        self.order_dialog_service.show_order_history_dialog()
+
+    def _refresh_order_history_from_ledger(self):
+        self.order_dialog_service.refresh_order_history_from_ledger()
+
+    def _show_pnl_history_dialog(self):
+        self.analytics_dialog_service.show_pnl_history_dialog()
+
+    def _show_performance_dialog(self):
+        self.analytics_dialog_service.show_performance_dialog()
+
+    def _show_market_monitor_dialog(self):
+        self.monitor_dialog_service.show_market_monitor_dialog()
+
+    def _show_watchlist_dialog(self):
+        self.monitor_dialog_service.show_watchlist_dialog()
+
+    def _show_cvd_chart_dialog(self):
+        self.monitor_dialog_service.show_cvd_chart_dialog()
+
+    def _open_cvd_chart_after_subscription(
+            self,
+            cvd_token: int,
+            symbol: str,
+            suffix: str = "",
+            link_to_header: bool = False
+    ):
+        self.monitor_dialog_service.open_cvd_chart_after_subscription(cvd_token, symbol, suffix, link_to_header)
+
+    def _show_cvd_market_monitor_dialog(self):
+        self.monitor_dialog_service.show_cvd_market_monitor_dialog()
+
+    def _show_cvd_symbol_set_dialog(self):
+        def resolve_cvd_token_for_sets(symbol: str):
+            """Wrapper for CVD symbol sets - returns just the token."""
+            cvd_token, is_equity, suffix = self._get_cvd_token(symbol)
+            return cvd_token
+
+        dlg = CVDSetMultiChartDialog(
+            kite=self.real_kite_client,
+            symbol_set_manager=self.cvd_symbol_set_manager,
+            resolve_fut_token_fn=resolve_cvd_token_for_sets,
+            register_token_fn=lambda t: (
+                self.cvd_engine.register_token(t),
+                self.active_cvd_tokens.add(t),
+                self._update_market_subscriptions()
+            ),
+            unregister_tokens_fn=lambda tokens: (
+                self.active_cvd_tokens.difference_update(tokens),
+                self._update_market_subscriptions()
+            ),
+            parent=self
+        )
+        dlg.show()
+
+    def _retarget_cvd_dialog(
+            self,
+            dialog: AutoTraderDialog,
+            old_token: int,
+            new_token: int,
+            symbol: str,
+            suffix: str = ""
+    ):
+        self.monitor_dialog_service.retarget_cvd_dialog(dialog, old_token, new_token, symbol, suffix)
+
+    def _on_market_monitor_closed(self, dialog: QDialog):
+        self.dialog_coordinator.on_market_monitor_closed(dialog)
+
+    def _on_watchlist_symbol_selected(self, symbol: str):
+        self.dialog_coordinator.on_watchlist_symbol_selected(symbol)
+
+    def _show_option_chain_dialog(self):
+        if not self.instrument_data:
+            QMessageBox.warning(self, "Data Not Ready",
+                                "Instrument data is still loading. Please try again in a moment.")
+            return
+
+        if self.option_chain_dialog is None:
+            self.option_chain_dialog = OptionChainDialog(
+                self.real_kite_client,
+                self.instrument_data,
+                parent=None
+            )
+            self.option_chain_dialog.finished.connect(lambda: setattr(self, 'option_chain_dialog', None))
+
+        self.option_chain_dialog.show()
+        self.option_chain_dialog.activateWindow()
+        self.option_chain_dialog.raise_()
+
+    def _show_strategy_builder_dialog(self):
+        if not self.instrument_data:
+            QMessageBox.warning(self, "Data Not Ready",
+                                "Instrument data is still loading. Please try again in a moment.")
+            return
+
+        current_settings = self.header.get_current_settings()
+        symbol = current_settings.get("symbol")
+        expiry = current_settings.get("expiry")
+        default_lots = current_settings.get("lot_size", 1)
+
+        if not symbol:
+            QMessageBox.warning(self, "Symbol Missing", "Select a symbol before opening the strategy builder.")
+            return
+
+        if self.strategy_builder_dialog is not None:
+            self.strategy_builder_dialog.close()
+
+        self.strategy_builder_dialog = StrategyBuilderDialog(
+            instrument_data=self.instrument_data,
+            strike_ladder=self.strike_ladder,
+            symbol=symbol,
+            expiry=expiry,
+            default_lots=default_lots,
+            product=self.settings.get("default_product", self.trader.PRODUCT_MIS),
+            on_execute=self._execute_strategy_orders,
+            parent=None,
+        )
+        self.strategy_builder_dialog.finished.connect(
+            lambda: setattr(self, 'strategy_builder_dialog', None)
+        )
+
+        self.strategy_builder_dialog.show()
+        self.strategy_builder_dialog.activateWindow()
+        self.strategy_builder_dialog.raise_()
+
+    def _show_fii_dii_dialog(self):
+        """Show FII/DII data dialog"""
+        if self.fii_dii_dialog is None:
+            self.fii_dii_dialog = FIIDIIDialog(parent=self)
+
+        if self.fii_dii_dialog.isVisible():
+            self.fii_dii_dialog.raise_()
+            self.fii_dii_dialog.activateWindow()
+        else:
+            self.fii_dii_dialog.show()
+
+    def _show_journal_dialog(self, enforce_read_time: bool = False):
+        self.dialog_coordinator.show_journal_dialog(enforce_read_time=enforce_read_time)
+
+    def _show_startup_journal(self):
+        self._show_journal_dialog(enforce_read_time=True)
+
+    def _show_modify_order_dialog(self, order_data: dict):
+        order_id = order_data.get("order_id")
+        tradingsymbol = order_data.get("tradingsymbol")
+        logger.info(f"Modification requested for order ID: {order_id}")
+
+        if not order_id or not tradingsymbol:
+            logger.error("Modify request failed: No order_id or tradingsymbol in data.")
+            QMessageBox.critical(self, "Error", "Cannot modify order: missing order details.")
+            return
+
+        contract = self._get_latest_contract_from_ladder(tradingsymbol)
+        if not contract:
+            logger.error(f"Could not find instrument details for {tradingsymbol} to modify order.")
+            QMessageBox.critical(self, "Error", f"Could not find instrument details for {tradingsymbol}.")
+            return
+
+        try:
+            self.trader.cancel_order(self.trader.VARIETY_REGULAR, order_id)
+            logger.info(f"Order {order_id} cancelled for modification.")
+            self._publish_status(f"Order {order_id} cancelled. Please enter new order details.", 4000, level="info")
+        except Exception as e:
+            logger.warning(f"Failed to cancel order {order_id} for modification, it might have been executed: {e}")
+            QMessageBox.information(self, "Order Not Found",
+                                    "The order could not be modified as it may have been executed. Please refresh the positions table to confirm.")
+            return
+
+        QTimer.singleShot(100, lambda: self._open_prefilled_order_dialog(contract, order_data))
+
+    def _open_prefilled_order_dialog(self, contract: Contract, order_data: dict):
+        if self.active_quick_order_dialog:
+            self.active_quick_order_dialog.reject()
+
+        default_lots = int(order_data.get('quantity', 1) / contract.lot_size if contract.lot_size > 0 else 1)
+
+        # Check if position already exists for this symbol
+        position_exists = self.position_manager.get_position(contract.tradingsymbol) is not None
+
+        dialog = QuickOrderDialog(
+            parent=self,
+            contract=contract,
+            default_lots=default_lots,
+            position_exists=position_exists
+        )
+        self.active_quick_order_dialog = dialog
+
+        dialog.populate_from_order(order_data)
+
+        dialog.order_placed.connect(self._execute_single_strike_order)
+        dialog.refresh_requested.connect(self._on_quick_order_refresh_request)
+        dialog.finished.connect(
+            lambda result, pending_order_id=order_data.get("order_id"): self._on_prefilled_modify_dialog_finished(
+                result,
+                pending_order_id,
+            )
+        )
+
+    def _on_strike_chart_requested(self, contract: Contract):
+        """Open CVD Single Chart Dialog for the selected strike"""
+        if not contract:
+            logger.warning("Chart requested but contract data is missing.")
+            return
+
+        try:
+            cvd_token = contract.instrument_token
+            symbol = contract.tradingsymbol
+
+            # If dialog already exists for this token, just raise it
+            if cvd_token in self.cvd_single_chart_dialogs:
+                existing_dialog = self.cvd_single_chart_dialogs[cvd_token]
+                try:
+                    if existing_dialog and not existing_dialog.isHidden():
+                        existing_dialog.raise_()
+                        existing_dialog.activateWindow()
+                        return
+                except RuntimeError:
+                    # Dialog was already destroyed
+                    del self.cvd_single_chart_dialogs[cvd_token]
+
+            # Ensure CVD engine + websocket are both tracking this token.
+            if self.cvd_engine:
+                try:
+                    self.cvd_engine.set_mode(CVDMode.SINGLE_CHART)
+                    self.cvd_engine.register_token(cvd_token)
+                    self.active_cvd_tokens.add(cvd_token)
+                    self._update_market_subscriptions()
+
+                    if hasattr(self.market_data_worker, 'subscribed_tokens') and (
+                            cvd_token not in self.market_data_worker.subscribed_tokens
+                    ):
+                        QMessageBox.warning(
+                            self,
+                            "Subscription Failed",
+                            f"Failed to subscribe to market data for {symbol}.\n"
+                            "The chart may not update in real-time."
+                        )
+                except Exception as e:
+                    logger.error(f"Failed to subscribe to CVD data: {e}")
+
+            # Create new CVD Single Chart Dialog
+            dialog = AutoTraderDialog(
+                kite=self.real_kite_client,
+                instrument_token=cvd_token,
+                symbol=symbol,
+                cvd_engine=self.cvd_engine,
+                parent=self
+            )
+            dialog.destroyed.connect(
+                lambda: self._on_cvd_single_chart_closed(cvd_token)
+            )
+            self.cvd_single_chart_dialogs[cvd_token] = dialog
+            dialog.show()
+            dialog.raise_()
+            dialog.activateWindow()
+
+            logger.info(f"[CVD] Chart opened for strike {symbol} (token: {cvd_token})")
+
+        except Exception as e:
+            logger.error(f"Failed to open chart for strike: {e}")
+            QMessageBox.critical(
+                self,
+                "Chart Error",
+                f"Failed to open chart for {contract.tradingsymbol}:\n{str(e)}"
+            )
+
+    # =========================================================================
+    # SECTION 15: QUICK ORDER & SINGLE STRIKE
+    # =========================================================================
+
+    def _on_single_strike_selected(self, contract: Contract):
+        if not contract:
+            logger.warning("Single strike selected but contract data is missing.")
+            return
+
+        if self.active_quick_order_dialog:
+            self.active_quick_order_dialog.reject()
+
+        default_lots = self.header.lot_size_spin.value()
+
+        # Check if position already exists for this symbol
+        position_exists = self.position_manager.get_position(contract.tradingsymbol) is not None
+
+        dialog = QuickOrderDialog(
+            parent=self,
+            contract=contract,
+            default_lots=default_lots,
+            position_exists=position_exists
+        )
+        self.active_quick_order_dialog = dialog
+
+        dialog.order_placed.connect(self._execute_single_strike_order)
+        dialog.refresh_requested.connect(self._on_quick_order_refresh_request)
+        dialog.finished.connect(lambda: setattr(self, 'active_quick_order_dialog', None))
+
+    def _on_quick_order_refresh_request(self, tradingsymbol: str):
+        if not self.active_quick_order_dialog:
+            return
+
+        logger.debug(f"Handling refresh request for {tradingsymbol}")
+
+        latest_contract = self._get_latest_contract_from_ladder(tradingsymbol)
+        if latest_contract:
+            self.active_quick_order_dialog.update_contract_data(latest_contract)
+        else:
+            logger.warning(f"Could not find latest contract data for {tradingsymbol} to refresh dialog.")
+
+    def _on_order_confirmation_refresh_request(self):
+        if not self.active_order_confirmation_dialog:
+            return
+
+        logger.debug("Handling refresh request for order confirmation dialog.")
+
+        current_details = self.active_order_confirmation_dialog.order_details
+        new_strikes_list = []
+        new_total_premium = 0.0
+
+        total_quantity_per_strike = current_details.get('total_quantity_per_strike', 0)
+
+        if total_quantity_per_strike == 0:
+            logger.error("Cannot refresh order confirmation: total_quantity_per_strike is zero.")
+            return
+
+        for strike_info in current_details.get('strikes', []):
+            contract = strike_info.get('contract')
+            if not contract:
+                continue
+
+            latest_contract = self._get_latest_contract_from_ladder(contract.tradingsymbol)
+
+            new_ltp = latest_contract.ltp if latest_contract else strike_info.get('ltp', 0.0)
+
+            new_strikes_list.append({
+                "strike": contract.strike,
+                "ltp": new_ltp,
+                "contract": latest_contract if latest_contract else contract
+            })
+            new_total_premium += new_ltp * total_quantity_per_strike
+
+        new_details = current_details.copy()
+        new_details['strikes'] = new_strikes_list
+        new_details['total_premium_estimate'] = new_total_premium
+
+        self.active_order_confirmation_dialog.update_order_details(new_details)
+
+    def _on_prefilled_modify_dialog_finished(self, result: int, pending_order_id: str | None):
+        self.active_quick_order_dialog = None
+
+        if result == QDialog.DialogCode.Rejected:
+            if pending_order_id:
+                self._publish_status(f"Order {pending_order_id} cancelled.", 4000, level="info")
+            else:
+                self._publish_status("Order cancelled.", 4000, level="info")
+
+    # =========================================================================
+    # SECTION 16: KEYBOARD SHORTCUTS & LOT SIZE CONTROLS
+    # =========================================================================
+
     def _change_lot_size(self, delta: int):
         current = self.header.lot_size_spin.value()
         new_value = max(1, current + delta)
@@ -1911,393 +2128,258 @@ class ImperiumMainWindow(QMainWindow):
         # ✅ EXACT same behavior as clicking ONE ladder row
         self._on_single_strike_selected(contract)
 
-    def _check_live_completed_orders(self):
-        if self.trading_mode != "live":
+    # =========================================================================
+    # SECTION 17: UI UPDATE & PERFORMANCE
+    # =========================================================================
+
+    def _update_ui(self):
+        self._update_account_summary_widget()
+        self._evaluate_risk_locks()
+
+        ladder_data = self.strike_ladder.get_ladder_data()
+        if ladder_data:
+            atm_strike = self.strike_ladder.atm_strike
+            interval = self.strike_ladder.get_strike_interval()
+            self.buy_exit_panel.update_strike_ladder(atm_strike, interval, ladder_data)
+
+        if self.performance_dialog and self.performance_dialog.isVisible():
+            self._update_performance()
+
+        now = datetime.now()
+        market_open_time = time(9, 15)
+        market_close_time = time(15, 30)
+        is_market_open = (market_open_time <= now.time() <= market_close_time) and (now.weekday() < 5)
+        market_status = "Open" if is_market_open else "Closed"
+
+        if self.margin_circuit_breaker.state == "OPEN" or self.profile_circuit_breaker.state == "OPEN":
+            api_status = "Degraded"
+        elif self.margin_circuit_breaker.state == "HALF_OPEN" or self.profile_circuit_breaker.state == "HALF_OPEN":
+            api_status = "Recovering"
+        else:
+            api_status = "Healthy"
+
+        # Update status bar through StatusBarWidget
+        self.status_bar_widget.update_api_status(f"API {api_status}")
+
+        # Use case-insensitive check since self.network_status is lowercase
+        network_status_lower = self.network_status.lower()
+        if "connected" in network_status_lower and "disconnected" not in network_status_lower:
+            network_chip_status = "Connected"
+        elif "disconnected" in network_status_lower:
+            network_chip_status = "Disconnected"
+        elif "connecting" in network_status_lower or "reconnecting" in network_status_lower:
+            network_chip_status = self.network_status.title()  # Capitalize first letter
+        else:
+            network_chip_status = self.network_status.title()
+
+        self.status_bar_widget.update_network_status(network_chip_status)
+        self.status_bar_widget.update_market_status(f"Market {market_status}")
+        self.status_bar_widget.update_clock(now.strftime("%H:%M:%S"))
+
+    def _update_performance(self):
+        if not self.performance_dialog:
             return
+
+        today = date.today().isoformat()
+        stats = self.trade_ledger.get_trade_stats_for_date(today)
+
+        metrics = {
+            "total_trades": stats["total_trades"],
+            "winning_trades": stats["wins"],
+            "losing_trades": stats["losses"],
+            "win_rate": stats["win_rate"],
+            "total_pnl": stats["total_pnl"],
+        }
+
+        if self.performance_dialog.isVisible():
+            self.performance_dialog.update_metrics(metrics)
+
+    def _update_account_summary_widget(self):
+        trading_day = date.today().isoformat()
+        # 1️⃣ TODAY'S realized stats (LEDGER)
+        stats = self.trade_ledger.get_daily_trade_stats(
+            trading_day=trading_day
+        )
+
+        realized_pnl = stats["total_pnl"]
+        win_rate = stats["win_rate"]
+        trade_count = stats["total_trades"]
+
+        # 2️⃣ Unrealized PnL (POSITIONS)
+        unrealized_pnl = self.position_manager.get_total_pnl()
+
+        # 3️⃣ Margins (MODE AWARE)
+        used_margin = 0.0
+        available_margin = 0.0
 
         try:
-            orders = self.real_kite_client.orders()
+            if self.trading_mode == "paper":
+                margins = self.trader.margins()
+                equity = margins.get("equity", {})
+                available_margin = equity.get("available", {}).get("live_balance", 0.0)
+                used_margin = equity.get("utilised", {}).get("total", 0.0)
+            else:
+                margins = self.real_kite_client.margins()
+                equity = margins.get("equity", {})
+                available_margin = equity.get("available", {}).get("live_balance", 0.0)
+                used_margin = equity.get("utilised", {}).get("total", 0.0)
         except Exception as e:
-            logger.debug(f"Live order fetch failed: {e}")
-            return
+            logger.warning(f"Margin fetch failed: {e}")
 
-        for order in orders:
-            if order.get("status") != "COMPLETE":
-                continue
+        # 4️⃣ Push ONLY daily data to widget
+        self.account_summary.update_summary(
+            unrealized_pnl=unrealized_pnl,
+            realized_pnl=realized_pnl,
+            used_margin=used_margin,
+            available_margin=available_margin,
+            win_rate=win_rate,
+            trade_count=trade_count
+        )
 
-            if order.get("transaction_type") != "SELL":
-                continue
+    def _update_pending_order_widgets(self, pending_orders: List[Dict]):
+        self.order_dialog_service.update_pending_order_widgets(pending_orders)
 
-            order_id = order.get("order_id")
-            if not order_id:
-                continue
+    def _cancel_order_by_id(self, order_id: str):
+        self.order_dialog_service.cancel_order_by_id(order_id)
 
-            # 🔒 Prevent duplicate ledger writes
-            if order_id in self._processed_live_exit_orders:
-                continue
+    # =========================================================================
+    # SECTION 18: TRADING DAY LIFECYCLE
+    # =========================================================================
 
-            tradingsymbol = order.get("tradingsymbol")
+    def _schedule_trading_day_reset(self):
+        now = datetime.now()
+        today_730 = datetime.combine(now.date(), TRADING_DAY_START)
 
-            # NOTE:
-            # We intentionally snapshot the CURRENT Position object at exit time.
-            # For LIVE trading, each completed SELL order is treated as an independent exit trade.
-            # This design correctly supports partial exits and scaling out.
-            # Do NOT replace this with cached entry data or dict snapshots.
+        if now >= today_730:
+            today_730 += timedelta(days=1)
 
-            # 🔥 FIX: Try cached snapshot first, then current position
-            # The position may already be removed from API after order completion
-            original_position = self._position_snapshots_for_exit.get(tradingsymbol)
+        ms_until_reset = int((today_730 - now).total_seconds() * 1000)
 
-            if not original_position:
-                # Fallback: Try getting current position (may still exist for partial exits)
-                original_position = self.position_manager.get_position(tradingsymbol)
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+        timer.timeout.connect(self._on_trading_day_reset)
+        timer.start(ms_until_reset)
 
-            if not original_position:
-                logger.warning(
-                    f"[LIVE] Cannot record exit trade for {tradingsymbol} - "
-                    f"no position snapshot or current position found (order_id: {order_id})"
-                )
-                continue
+    def _on_trading_day_reset(self):
+        logger.info("Trading day reset at 07:30 AM")
+        self.risk_controller.reset_for_new_trading_day()
+        self._update_account_summary_widget()
+        self._schedule_trading_day_reset()  # schedule next day
 
-            self._record_completed_exit_trade(
-                confirmed_order=order,
-                original_position=original_position,
-                trading_mode="LIVE"
-            )
+    # =========================================================================
+    # SECTION 19: SOUND
+    # =========================================================================
 
-            self._processed_live_exit_orders.add(order_id)
+    def _play_sound(self, success: bool = True):
+        self.sound_service.play_notification(success=success)
 
-            # 🔥 FIX: Clean up snapshot after successful recording
-            if tradingsymbol in self._position_snapshots_for_exit:
-                del self._position_snapshots_for_exit[tradingsymbol]
-                logger.debug(f"Removed position snapshot for {tradingsymbol}")
+    # =========================================================================
+    # SECTION 20: HELP & INFO DIALOGS
+    # =========================================================================
 
-    def _on_strike_chart_requested(self, contract: Contract):
-        """Open CVD Single Chart Dialog for the selected strike"""
-        if not contract:
-            logger.warning("Chart requested but contract data is missing.")
-            return
+    def _show_about(self):
+        show_about(self)
 
+    def _show_shortcuts(self):
+        show_shortcuts(self)
+
+    def _show_expiry_days(self):
+        show_expiry_days(self)
+
+    # =========================================================================
+    # SECTION 21: WINDOW STATE & LIFECYCLE
+    # =========================================================================
+
+    def save_window_state(self):
         try:
-            cvd_token = contract.instrument_token
-            symbol = contract.tradingsymbol
-
-            # If dialog already exists for this token, just raise it
-            if cvd_token in self.cvd_single_chart_dialogs:
-                existing_dialog = self.cvd_single_chart_dialogs[cvd_token]
-                try:
-                    if existing_dialog and not existing_dialog.isHidden():
-                        existing_dialog.raise_()
-                        existing_dialog.activateWindow()
-                        return
-                except RuntimeError:
-                    # Dialog was already destroyed
-                    del self.cvd_single_chart_dialogs[cvd_token]
-
-            # Ensure CVD engine + websocket are both tracking this token.
-            if self.cvd_engine:
-                try:
-                    self.cvd_engine.set_mode(CVDMode.SINGLE_CHART)
-                    self.cvd_engine.register_token(cvd_token)
-                    self.active_cvd_tokens.add(cvd_token)
-                    self._update_market_subscriptions()
-
-                    if hasattr(self.market_data_worker, 'subscribed_tokens') and (
-                            cvd_token not in self.market_data_worker.subscribed_tokens
-                    ):
-                        QMessageBox.warning(
-                            self,
-                            "Subscription Failed",
-                            f"Failed to subscribe to market data for {symbol}.\n"
-                            "The chart may not update in real-time."
-                        )
-                except Exception as e:
-                    logger.error(f"Failed to subscribe to CVD data: {e}")
-
-            # Create new CVD Single Chart Dialog
-            dialog = AutoTraderDialog(
-                kite=self.real_kite_client,
-                instrument_token=cvd_token,
-                symbol=symbol,
-                cvd_engine=self.cvd_engine,
-                parent=self
-            )
-            dialog.destroyed.connect(
-                lambda: self._on_cvd_single_chart_closed(cvd_token)
-            )
-            self.cvd_single_chart_dialogs[cvd_token] = dialog
-            dialog.show()
-            dialog.raise_()
-            dialog.activateWindow()
-
-            logger.info(f"[CVD] Chart opened for strike {symbol} (token: {cvd_token})")
-
-        except Exception as e:
-            logger.error(f"Failed to open chart for strike: {e}")
-            QMessageBox.critical(
-                self,
-                "Chart Error",
-                f"Failed to open chart for {contract.tradingsymbol}:\n{str(e)}"
-            )
-
-    @staticmethod
-    def _option_type_to_ladder_key(option_type: OptionType) -> str:
-        return "CE" if option_type == OptionType.CALL else "PE"
-
-    def _show_fii_dii_dialog(self):
-        """Show FII/DII data dialog"""
-        if self.fii_dii_dialog is None:
-            self.fii_dii_dialog = FIIDIIDialog(parent=self)
-
-        if self.fii_dii_dialog.isVisible():
-            self.fii_dii_dialog.raise_()
-            self.fii_dii_dialog.activateWindow()
-        else:
-            self.fii_dii_dialog.show()
-
-    def _update_strike_ladder_with_fallback(self, symbol: str, expiry_date):
-        """
-        Update strike ladder with graceful degradation on price fetch failure
-        """
-        current_price = self._get_current_price(symbol)
-
-        if current_price is None:
-            # CRITICAL: Don't abort - use fallback strategies
-            logger.warning(f"Could not get current price for {symbol}. Trying fallback strategies...")
-
-            # Strategy 1: Use last known index price from market data
-            if hasattr(self.strike_ladder, 'last_index_price') and self.strike_ladder.last_index_price:
-                current_price = self.strike_ladder.last_index_price
-                logger.info(f"Using last known index price: {current_price}")
-
-            # Strategy 2: Use position-based price estimate
-            elif self.position_manager.get_all_positions():
-                estimated_price = self._estimate_underlying_from_positions(symbol)
-                if estimated_price:
-                    current_price = estimated_price
-                    logger.info(f"Using position-based price estimate: {current_price}")
-
-            # Strategy 3: Load from yesterday's close (if you have this data)
-            if current_price is None:
-                # Show clear error to user with retry option
-                self._show_network_error_notification(symbol)
-                logger.error(f"All fallback strategies failed for {symbol}. Ladder update aborted.")
-                return False
-
-        # Proceed with ladder update
-        calculated_interval = self.strike_ladder.calculate_strike_interval(symbol)
-
-        self.strike_ladder.update_strikes(
-            symbol=symbol,
-            current_price=current_price,
-            expiry=expiry_date,
-            strike_interval=calculated_interval
-        )
-
-        self._update_market_subscriptions()
-        return True
-
-    def _estimate_underlying_from_positions(self, symbol: str) -> Optional[float]:
-        """
-        Estimate underlying price from current option positions
-        Uses Black-Scholes reverse calculation approximation
-        """
-        positions = self.position_manager.get_all_positions()
-
-        for pos in positions:
-            if pos.contract and pos.contract.symbol == symbol:
-                # Simple approximation: ATM strike ≈ underlying
-                # For better accuracy, you'd use IV and Greeks
-                if abs(pos.contract.strike - pos.last_price) < 1000:  # Near ATM
-                    return pos.contract.strike
-
-        return None
-
-    def _show_network_error_notification(self, symbol: str):
-        """Show user-friendly network error with retry option"""
-        # Only show once per session to avoid spam
-        if hasattr(self, '_network_error_shown') and self._network_error_shown:
-            return
-
-        self._network_error_shown = True
-
-        msg = QMessageBox(self)
-        msg.setIcon(QMessageBox.Warning)
-        msg.setWindowTitle("Network Issue")
-        msg.setText(
-            f"Unable to fetch current price for {symbol}.\n\n"
-            "This may be due to:\n"
-            "• Network connectivity issues\n"
-            "• Kite API temporarily unavailable\n"
-            "• DNS resolution failure\n\n"
-            "The app will continue with cached data where possible."
-        )
-        msg.setStandardButtons(QMessageBox.Retry | QMessageBox.Ignore)
-
-        # Show status in status bar
-        self._publish_status(
-            f"⚠ Network issue detected - using cached data for {symbol}",
-            duration=10000,
-            level="warning"
-        )
-
-        if msg.exec() == QMessageBox.Retry:
-            # Clear circuit breaker and retry
-            self.profile_circuit_breaker.reset()
-            self._network_error_shown = False
-
-    def _on_websocket_state_changed(self, new_state: str):
-        """
-        Handle WebSocket state changes with proper subscription management
-
-        Called by market_data_worker when connection state changes
-        """
-        if new_state == "connected":
-            self.ws_state = WebSocketState.CONNECTED
-            self.ws_connection_time = datetime.now()
-            self.ws_ready_event_fired = True
-
-            logger.info("WebSocket connected - processing subscription queue")
-
-            # 🔥 Subscribe ALL required tokens cleanly
-            self._update_market_subscriptions()
-
-            self._process_subscription_queue()
-
-            self._publish_status("✓ Market data connected", 3000, level="success")
-
-
-        elif new_state == "connecting":
-            self.ws_state = WebSocketState.CONNECTING
-            self._publish_status("Connecting to market data...", 5000, level="action")
-
-        elif new_state == "disconnected":
-            old_state = self.ws_state
-            self.ws_state = WebSocketState.DISCONNECTED
-            self.ws_ready_event_fired = False
-
-            if old_state == WebSocketState.CONNECTED:
-                logger.warning("WebSocket disconnected - will queue subscriptions")
-                self._publish_status("⚠ Market data disconnected - reconnecting...", 0, level="warning")
-
-        elif new_state == "reconnecting":
-            self.ws_state = WebSocketState.RECONNECTING
-            self._publish_status("Reconnecting to market data...", 5000, level="action")
-
-    def _process_subscription_queue(self):
-        """
-        Process all queued subscriptions when WebSocket becomes ready
-        """
-        if not self.subscription_queue:
-            logger.debug("Subscription queue is empty")
-            return
-
-        logger.info(f"Processing {len(self.subscription_queue)} queued subscriptions")
-
-        # Merge all queued token sets
-        all_tokens = set()
-        while self.subscription_queue:
-            tokens = self.subscription_queue.popleft()
-            all_tokens.update(tokens)
-
-        self.pending_subscriptions.clear()
-
-        if all_tokens:
-            logger.info(f"Subscribing to {len(all_tokens)} tokens from queue")
-            self.market_data_worker.set_instruments(all_tokens)
-
-    def _on_network_status_changed(self, status):
-        """
-        Normalize and handle network status changes.
-        Handles decorated strings like:
-        'Connected (Post-Market)'
-        'Connected (Pre-Market)'
-        """
-
-        if isinstance(status, dict):
-            raw_state = str(status.get("state", "")).strip().lower()
-            message = status.get("message", "")
-        else:
-            raw_state = str(status).strip().lower()
-            message = ""
-
-        # 🔥 FIX: Use prefix matching instead of exact match
-        if raw_state.startswith("connected"):
-            normalized = "connected"
-        elif raw_state.startswith("connecting") or raw_state.startswith("reconnecting"):
-            normalized = "connecting"
-        elif raw_state.startswith("disconnected") or raw_state.startswith("error"):
-            normalized = "disconnected"
-        else:
-            normalized = "initializing"
-
-        self.network_status = raw_state
-        self.status_bar_widget.update_network_status(status)
-
-        # 🔥 CRITICAL
-        self._on_websocket_state_changed(normalized)
-
-        if message:
-            logger.info(f"Network status: {normalized} - {message}")
-
-    def _on_connection_lost(self):
-        """Called when network connection is lost (detected by failed API calls)"""
-        logger.warning("🔴 Network connection lost - showing error banner")
-        self._show_connection_error_banner("No internet connection detected")
-
-        # Update status bar with persistent warning
-        self._publish_status(
-            "⚠️ Internet connection lost - retrying...",
-            duration=0,  # Persistent until resolved
-            level="error"
-        )
-
-    def _on_connection_restored(self):
-        """Called when network connection is restored"""
-        logger.info("✅ Network connection restored")
-
-        # Clear error banner
-        if self._network_error_notification:
-            self._network_error_notification.close()
-            self._network_error_notification = None
-
-        # Update status bar with success message
-        self._publish_status(
-            "✅ Internet connection restored",
-            duration=3000,
-            level="success"
-        )
-
-        # Refresh data after reconnection
-        self._periodic_api_health_check()
-        self._update_market_subscriptions()
-
-    def _show_connection_error_banner(self, message: str):
-        """Show persistent connection error banner at top of window"""
-        # Don't spam notifications
-        if self._network_error_notification:
-            return
-
-        banner = QFrame(self)
-        banner.setStyleSheet("""
-            QFrame {
-                background-color: #ff4444;
-                border: 2px solid #cc0000;
-                border-radius: 4px;
-                padding: 8px;
+            from utils.config_manager import ConfigManager
+            config_manager = ConfigManager()
+            state = {
+                'geometry': self.saveGeometry().toBase64().data().decode('utf-8'),
+                'state': self.saveState().toBase64().data().decode('utf-8'),
+                'splitter': self.main_splitter.saveState().toBase64().data().decode('utf-8')
             }
-        """)
+            config_manager.save_window_state(state)
+            logger.info("Window state saved.")
+        except Exception as e:
+            logger.error(f"Failed to save window state: {e}")
 
-        layout = QVBoxLayout(banner)
-        label = QLabel(f"⚠️ {message}\nRetrying automatically...")
-        label.setStyleSheet("color: white; font-weight: bold; font-size: 12px;")
-        layout.addWidget(label)
+    def restore_window_state(self):
+        try:
+            from utils.config_manager import ConfigManager
+            config_manager = ConfigManager()
+            state = config_manager.load_window_state()
+            if state:
+                if state.get('geometry'):
+                    self.restoreGeometry(QByteArray.fromBase64(state['geometry'].encode('utf-8')))
+                if state.get('state'):
+                    self.restoreState(QByteArray.fromBase64(state['state'].encode('utf-8')))
+                if state.get('splitter'):
+                    self.main_splitter.restoreState(QByteArray.fromBase64(state['splitter'].encode('utf-8')))
+                logger.info("Window state restored.")
+            else:
+                self.setWindowState(Qt.WindowMaximized)
+        except Exception as e:
+            logger.error(f"Failed to restore window state: {e}")
+            self.setWindowState(Qt.WindowMaximized)
 
-        # Position at top of window
-        banner.setParent(self)
-        banner.setGeometry(10, 60, self.width() - 20, 50)  # Below title bar
-        banner.show()
-        banner.raise_()
+    def closeEvent(self, event):
+        if getattr(self, '_close_in_progress', False):
+            event.ignore()
+            return
+        self._close_in_progress = True
+        logger.info("Close event triggered.")
 
-        self._network_error_notification = banner
-        logger.debug("Connection error banner shown")
+        # Stop timers first
+        if hasattr(self, 'api_health_check_timer'):
+            self.api_health_check_timer.stop()
+        if hasattr(self, 'update_timer'):
+            self.update_timer.stop()
+        if hasattr(self, 'pending_order_refresh_timer'):
+            self.pending_order_refresh_timer.stop()
+        for token in list(getattr(self, '_cvd_pending_retry_timers', {}).keys()):
+            self._stop_cvd_pending_retry(token)
+
+        # Background workers
+        if hasattr(self, 'market_data_worker') and self.market_data_worker.is_running:
+            logger.info("Stopping market data worker...")
+            self.market_data_worker.stop()
+
+        if hasattr(self, 'instrument_loader') and self.instrument_loader.isRunning():
+            logger.info("Stopping instrument loader...")
+            self.instrument_loader.requestInterruption()
+            self.instrument_loader.quit()
+            if not self.instrument_loader.wait(2000):
+                logger.warning("Instrument loader did not stop gracefully.")
+            else:
+                logger.info("Instrument loader stopped.")
+
+        # ---- CLEAR EXIT CONFIRMATION ----
+        if self.position_manager.has_positions():
+            reply = QMessageBox.warning(
+                self,
+                "Exit Application",
+                (
+                    "You have open positions.\n\n"
+                    "Closing the application will NOT exit or square off your positions.\n"
+                    "They will remain open in your trading account.\n\n"
+                    "Do you still want to close the application?"
+                ),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+
+            if reply == QMessageBox.StandardButton.No:
+                event.ignore()
+
+                # Restart timers if exit cancelled
+                if hasattr(self, 'api_health_check_timer'):
+                    self.api_health_check_timer.start()
+                if hasattr(self, 'update_timer'):
+                    self.update_timer.start()
+
+                return
+
+        logger.info("Proceeding with application shutdown.")
+        self.save_window_state()
+        event.accept()
