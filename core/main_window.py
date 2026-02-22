@@ -19,16 +19,16 @@ from PySide6.QtGui import QShortcut, QKeySequence
 
 # Internal imports
 from utils.config_manager import ConfigManager
-from core.market_data_worker import MarketDataWorker
+from core.market_data.market_data_worker import MarketDataWorker
 from utils.data_models import OptionType, Position, Contract
-from core.instrument_loader import InstrumentLoader
+from core.market_data.instrument_loader import InstrumentLoader
 from dialogs.settings_dialog import SettingsDialog
 from dialogs.open_positions_dialog import OpenPositionsDialog
 from dialogs.quick_order_dialog import QuickOrderDialog, QuickOrderMode
-from core.position_manager import PositionManager
+from core.positions.position_manager import PositionManager
 from core.config import REFRESH_INTERVAL_MS
 from utils.trade_logger import TradeLogger
-from core.paper_trading_manager import PaperTradingManager
+from core.execution.paper_trading_manager import PaperTradingManager
 from dialogs.option_chain_dialog import OptionChainDialog
 from dialogs.strategy_builder_dialog import StrategyBuilderDialog
 from dialogs.order_confirmation_dialog import OrderConfirmationDialog
@@ -37,8 +37,8 @@ from core.auto_trader import AutoTraderDialog
 from core.auto_trader.cvd_automation_coordinator import CvdAutomationCoordinator
 from core.cvd.cvd_symbol_sets import CVDSymbolSetManager
 from dialogs.cvd_symbol_set_multi_chart_dialog import CVDSetMultiChartDialog
-from core.trade_ledger import TradeLedger
-from core.execution_stack import ExecutionRequest, ExecutionStack
+from core.execution.trade_ledger import TradeLedger
+from core.execution.execution_stack import ExecutionRequest, ExecutionStack
 from utils.title_bar import TitleBar
 from core.ui.main_window_shell import MainWindowShell
 from utils.api_circuit_breaker import APICircuitBreaker

@@ -1,7 +1,7 @@
 import logging
 from typing import Callable
 
-from core.paper_trading_manager import PaperTradingManager
+from core.execution.paper_trading_manager import PaperTradingManager
 from utils.network_utils import NetworkError, with_timeout
 
 logger = logging.getLogger(__name__)

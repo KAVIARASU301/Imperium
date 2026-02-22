@@ -4,10 +4,10 @@ import logging
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox, QWidget
 from kiteconnect import KiteConnect
-from core.login_manager import LoginManager
+from core.account.login_manager import LoginManager
 from core.main_window import ImperiumMainWindow
-from core.token_manager import TokenManager
-from core.paper_trading_manager import PaperTradingManager
+from core.account.token_manager import TokenManager
+from core.execution.paper_trading_manager import PaperTradingManager
 from core.config import setup_logging
 import locale
 

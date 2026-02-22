@@ -7,7 +7,7 @@ from typing import Optional
 
 from PySide6.QtCore import QTimer
 
-from core.paper_trading_manager import PaperTradingManager
+from core.execution.paper_trading_manager import PaperTradingManager
 from utils.data_models import Contract, OptionType, Position
 
 logger = logging.getLogger(__name__)

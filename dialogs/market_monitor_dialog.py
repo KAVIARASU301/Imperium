@@ -14,7 +14,7 @@ from kiteconnect import KiteConnect
 
 from utils.config_manager import ConfigManager
 from utils.cpr_calculator import CPRCalculator
-from core.market_data_worker import MarketDataWorker
+from core.market_data.market_data_worker import MarketDataWorker
 
 logger = logging.getLogger(__name__)
 

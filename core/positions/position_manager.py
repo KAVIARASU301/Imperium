@@ -9,7 +9,7 @@ from kiteconnect import KiteConnect
 
 from utils.trade_logger import TradeLogger
 from utils.data_models import Position, Contract
-from core.paper_trading_manager import PaperTradingManager
+from core.execution.paper_trading_manager import PaperTradingManager
 
 logger = logging.getLogger(__name__)
 
