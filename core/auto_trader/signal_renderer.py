@@ -193,7 +193,20 @@ class SignalRendererMixin:
         # which triggers position checks and potentially order placement each time.
         ts_str = self.all_timestamps[idx].isoformat() if idx < len(self.all_timestamps) else None
         new_price_close = float(price_data_array[idx])
-        state_key = (ts_str, round(new_price_close, 4))
+        new_ema10 = float(ema10[idx])
+        new_ema51 = float(ema51[idx])
+        new_cvd_close = float(cvd_data_array[idx])
+        new_cvd_ema10 = float(cvd_ema10[idx])
+        new_cvd_ema51 = float(cvd_ema51[idx])
+        state_key = (
+            ts_str,
+            round(new_price_close, 4),
+            round(new_ema10, 4),
+            round(new_ema51, 4),
+            round(new_cvd_close, 4),
+            round(new_cvd_ema10, 4),
+            round(new_cvd_ema51, 4),
+        )
         if getattr(self, "_last_emitted_state_key", None) == state_key:
             return
         self._last_emitted_state_key = state_key
@@ -209,11 +222,11 @@ class SignalRendererMixin:
             "signal_filter": self._selected_signal_filter(),
             "bar_x": float(x_arr[idx]),
             "price_close": new_price_close,
-            "ema10": float(ema10[idx]),
-            "ema51": float(ema51[idx]),
-            "cvd_close": float(cvd_data_array[idx]),
-            "cvd_ema10": float(cvd_ema10[idx]),
-            "cvd_ema51": float(cvd_ema51[idx]),
+            "ema10": new_ema10,
+            "ema51": new_ema51,
+            "cvd_close": new_cvd_close,
+            "cvd_ema10": new_cvd_ema10,
+            "cvd_ema51": new_cvd_ema51,
             "timestamp": ts_str,
         })
 
@@ -544,7 +557,7 @@ class SignalRendererMixin:
         if strategy_type == "range_breakout" and side is not None:
             self._live_active_breakout_side = side
             self._live_atr_skip_count = 0
-        elif strategy_type != "range_breakout":
+        elif side is not None and strategy_type != "range_breakout":
             # Non-breakout signal closed any breakout context
             self._live_active_breakout_side = None
             self._live_atr_skip_count = 0
