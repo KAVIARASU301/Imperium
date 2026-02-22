@@ -28,7 +28,7 @@ from core.auto_trader.setup_panel import SetupPanelMixin
 from core.auto_trader.settings_manager import SettingsManagerMixin
 from core.auto_trader.signal_renderer import SignalRendererMixin
 from core.auto_trader.simulator import SimulatorMixin
-from core.auto_trader.indicators import calculate_ema, calculate_atr, compute_adx, build_slope_direction_masks, is_chop_regime
+from core.auto_trader.indicators import calculate_ema, calculate_vwap, calculate_atr, compute_adx, build_slope_direction_masks, is_chop_regime
 from core.auto_trader.signal_governance import SignalGovernance
 
 logger = logging.getLogger(__name__)
@@ -548,6 +548,29 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
             self.ema_checkboxes[period] = cb
             ema_bar.addWidget(cb)
 
+        self.vwap_checkbox = QCheckBox("VWAP")
+        self.vwap_checkbox.setChecked(False)
+        self.vwap_checkbox.setStyleSheet("""
+            QCheckBox {
+                color: #00E676;
+                font-weight: 600;
+                font-size: 11px;
+                spacing: 3px;
+            }
+            QCheckBox::indicator {
+                width: 14px;
+                height: 14px;
+                border: 1px solid #00E676;
+                border-radius: 3px;
+                background: #1B1F2B;
+            }
+            QCheckBox::indicator:checked {
+                background: #00E676;
+            }
+        """)
+        self.vwap_checkbox.toggled.connect(self._on_vwap_toggled)
+        ema_bar.addWidget(self.vwap_checkbox)
+
         ema_bar.addSpacing(4)
 
         signal_filter_label = QLabel("Filter")
@@ -705,15 +728,20 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self.price_ema51_curve = pg.PlotCurveItem(
             pen=pg.mkPen('#FF6B6B', width=2.0, style=Qt.SolidLine)
         )
+        self.price_vwap_curve = pg.PlotCurveItem(
+            pen=pg.mkPen('#00E676', width=2.0, style=Qt.SolidLine)
+        )
 
         self.price_plot.addItem(self.price_ema10_curve)
         self.price_plot.addItem(self.price_ema21_curve)
         self.price_plot.addItem(self.price_ema51_curve)
+        self.price_plot.addItem(self.price_vwap_curve)
 
         # Full opacity for clear visibility
         self.price_ema10_curve.setOpacity(0.85)
         self.price_ema21_curve.setOpacity(0.85)
         self.price_ema51_curve.setOpacity(0.85)
+        self.price_vwap_curve.setOpacity(0.85)
 
         # Price crosshair
         pen = pg.mkPen((255, 255, 255, 120), width=1, style=Qt.DashLine)
@@ -945,6 +973,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self.window_bg_clear_btn.blockSignals(True)
         self.chart_bg_upload_btn.blockSignals(True)
         self.chart_bg_clear_btn.blockSignals(True)
+        self.vwap_checkbox.blockSignals(True)
         for cb in self.setup_ema_default_checks.values():
             cb.blockSignals(True)
 
@@ -1065,6 +1094,10 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
             default_enabled = (period == 51)
             cb.setChecked(_read_setting(f"ema_default_{period}", default_enabled, bool))
 
+        self.vwap_checkbox.setChecked(
+            _read_setting("show_vwap", self.vwap_checkbox.isChecked(), bool)
+        )
+
         persisted_window_bg = _read_setting("window_background_image_path", "") or ""
         persisted_chart_bg = _read_setting("chart_background_image_path", "") or ""
 
@@ -1118,6 +1151,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self.window_bg_clear_btn.blockSignals(False)
         self.chart_bg_upload_btn.blockSignals(False)
         self.chart_bg_clear_btn.blockSignals(False)
+        self.vwap_checkbox.blockSignals(False)
         for cb in self.setup_ema_default_checks.values():
             cb.blockSignals(False)
 
@@ -1172,6 +1206,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
             "confluence_long_color": self._confluence_long_color,
             "window_background_image_path": self._window_bg_image_path,
             "chart_background_image_path": self._chart_bg_image_path,
+            "show_vwap": self.vwap_checkbox.isChecked(),
         }
 
         for period, cb in self.setup_ema_default_checks.items():
@@ -1253,6 +1288,13 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
 
         self._refresh_plot_only()
 
+    def _on_vwap_toggled(self, checked: bool):
+        if hasattr(self, "chart_line_width_input"):
+            self._persist_setup_values()
+        if not checked:
+            self.price_vwap_curve.clear()
+        self._refresh_plot_only()
+
     def _on_focus_mode_changed(self, enabled: bool):
         self.btn_focus.setText("2D" if enabled else "1D")
         if self.cvd_engine:
@@ -1312,6 +1354,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self.price_ema10_curve.clear()
         self.price_ema21_curve.clear()
         self.price_ema51_curve.clear()
+        self.price_vwap_curve.clear()
         self.all_timestamps.clear()
         self._live_tick_points.clear()
         self._live_price_points.clear()
@@ -1787,6 +1830,14 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
             self.price_ema51_curve.setData(x_indices, calculate_ema(price_data_array, 51))
         else:
             self.price_ema51_curve.clear()
+
+        if self.vwap_checkbox.isChecked() and self.all_volume_data:
+            session_keys = [ts.date() for ts in self.all_timestamps]
+            volume_data_array = np.array(self.all_volume_data)
+            self.price_vwap_curve.setData(x_indices, calculate_vwap(price_data_array, volume_data_array, session_keys))
+            self.price_vwap_curve.setOpacity(self._ema_line_opacity)
+        else:
+            self.price_vwap_curve.clear()
 
         for ema_period, cb in self.ema_checkboxes.items():
             opacity = self._ema_line_opacity if cb.isChecked() else 0.0

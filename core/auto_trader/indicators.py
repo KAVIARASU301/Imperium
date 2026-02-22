@@ -18,6 +18,43 @@ def calculate_ema(data: np.ndarray, period: int) -> np.ndarray:
     return ema
 
 
+def calculate_vwap(
+        price: np.ndarray,
+        volume: np.ndarray,
+        session_keys=None,
+) -> np.ndarray:
+    """Calculate VWAP, optionally resetting cumulative totals per session key."""
+    price_arr = np.asarray(price, dtype=float)
+    volume_arr = np.asarray(volume, dtype=float)
+    length = len(price_arr)
+
+    vwap = np.zeros(length, dtype=float)
+    if length == 0:
+        return vwap
+
+    if len(volume_arr) != length:
+        volume_arr = np.ones(length, dtype=float)
+
+    volume_arr = np.clip(volume_arr, a_min=0.0, a_max=None)
+
+    cumulative_pv = 0.0
+    cumulative_volume = 0.0
+    previous_session = object()
+
+    for i in range(length):
+        current_session = session_keys[i] if session_keys is not None else None
+        if session_keys is not None and i > 0 and current_session != previous_session:
+            cumulative_pv = 0.0
+            cumulative_volume = 0.0
+
+        cumulative_pv += price_arr[i] * volume_arr[i]
+        cumulative_volume += volume_arr[i]
+        vwap[i] = cumulative_pv / cumulative_volume if cumulative_volume > 1e-12 else price_arr[i]
+        previous_session = current_session
+
+    return vwap
+
+
 def calculate_kama(
         data: np.ndarray,
         er_period: int = 10,
