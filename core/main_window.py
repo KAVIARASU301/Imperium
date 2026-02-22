@@ -35,16 +35,12 @@ from widgets.menu_bar import create_menu_bar
 from widgets.account_summary import AccountSummaryWidget
 from dialogs.settings_dialog import SettingsDialog
 from dialogs.open_positions_dialog import OpenPositionsDialog
-from dialogs.performance_dialog import PerformanceDialog
 from dialogs.quick_order_dialog import QuickOrderDialog, QuickOrderMode
 from core.position_manager import PositionManager
 from widgets.positions_table import PositionsTable
 from core.config import REFRESH_INTERVAL_MS
 from widgets.buy_exit_panel import BuyExitPanel
 from utils.trade_logger import TradeLogger
-from dialogs.pnl_history_dialog import PnlHistoryDialog
-from dialogs.pending_orders_dialog import PendingOrdersDialog
-from widgets.order_status_widget import OrderStatusWidget
 from core.paper_trading_manager import PaperTradingManager
 from dialogs.option_chain_dialog import OptionChainDialog
 from dialogs.strategy_builder_dialog import StrategyBuilderDialog
@@ -66,6 +62,7 @@ from widgets.status_bar import StatusBarWidget
 from utils.network_utils import with_timeout, NetworkError, NetworkMonitor
 from core.main_window_coordinators import RiskController, DialogCoordinator, MarketDataOrchestrator
 from core.account import AccountHealthService
+from core.presentation import OrderDialogService, AnalyticsDialogService, MonitorDialogService
 import requests
 
 logger = logging.getLogger(__name__)
@@ -194,6 +191,9 @@ class ImperiumMainWindow(QMainWindow):
         self.risk_controller = RiskController(self)
         self.dialog_coordinator = DialogCoordinator(self)
         self.market_data_orchestrator = MarketDataOrchestrator(self)
+        self.order_dialog_service = OrderDialogService(self)
+        self.analytics_dialog_service = AnalyticsDialogService(self)
+        self.monitor_dialog_service = MonitorDialogService(self)
 
         # --- FIX: UI Throttling Implementation ---
         self._latest_market_data = {}
@@ -554,7 +554,7 @@ class ImperiumMainWindow(QMainWindow):
         menu_actions['fii_dii_data'].triggered.connect(self._show_fii_dii_dialog)
 
     def _show_order_history_dialog(self):
-        self.dialog_coordinator.show_order_history_dialog()
+        self.order_dialog_service.show_order_history_dialog()
 
     def _show_journal_dialog(self, enforce_read_time: bool = False):
         self.dialog_coordinator.show_journal_dialog(enforce_read_time=enforce_read_time)
@@ -563,70 +563,19 @@ class ImperiumMainWindow(QMainWindow):
         self._show_journal_dialog(enforce_read_time=True)
 
     def _refresh_order_history_from_ledger(self):
-        self.dialog_coordinator.refresh_order_history_from_ledger()
+        self.order_dialog_service.refresh_order_history_from_ledger()
 
     def _show_market_monitor_dialog(self):
-        self.dialog_coordinator.show_market_monitor_dialog()
+        self.monitor_dialog_service.show_market_monitor_dialog()
 
     def _show_watchlist_dialog(self):
-        self.dialog_coordinator.show_watchlist_dialog()
+        self.monitor_dialog_service.show_watchlist_dialog()
 
     def _on_watchlist_symbol_selected(self, symbol: str):
         self.dialog_coordinator.on_watchlist_symbol_selected(symbol)
 
     def _show_cvd_chart_dialog(self):
-        current_settings = self.header.get_current_settings()
-        symbol = current_settings.get("symbol")
-
-        if not symbol:
-            QMessageBox.warning(self, "CVD Chart", "No symbol selected.")
-            return
-
-        cvd_token, is_equity, suffix = self._get_cvd_token(symbol)
-        if not cvd_token:
-            QMessageBox.warning(self, "CVD Chart", f"No token found for {symbol}.")
-            return
-
-        # If a menu-opened (header-linked) CVD chart already exists,
-        # keep reusing that one and retarget it to the current header symbol.
-        if self.header_linked_cvd_token is not None:
-            linked_dialog = self.cvd_single_chart_dialogs.get(self.header_linked_cvd_token)
-            if linked_dialog and not linked_dialog.isHidden():
-                if self.header_linked_cvd_token == cvd_token:
-                    linked_dialog.raise_()
-                    linked_dialog.activateWindow()
-                    return
-
-                self._retarget_cvd_dialog(
-                    dialog=linked_dialog,
-                    old_token=self.header_linked_cvd_token,
-                    new_token=cvd_token,
-                    symbol=symbol,
-                    suffix=suffix
-                )
-                self.header_linked_cvd_token = cvd_token
-                linked_dialog.raise_()
-                linked_dialog.activateWindow()
-                return
-
-        # If dialog already exists for this token, just raise it
-        if cvd_token in self.cvd_single_chart_dialogs:
-            existing_dialog = self.cvd_single_chart_dialogs[cvd_token]
-            if existing_dialog and not existing_dialog.isHidden():
-                existing_dialog.raise_()
-                existing_dialog.activateWindow()
-                return
-
-        # Register with CVD engine
-        self.cvd_engine.register_token(cvd_token)
-        self.active_cvd_tokens.add(cvd_token)
-
-        # Update subscriptions
-        self._update_market_subscriptions()
-
-        # Wait then open dialog
-        QTimer.singleShot(500, lambda: self._open_cvd_chart_after_subscription(cvd_token, symbol, suffix, True))
-        QTimer.singleShot(1000, self._log_active_subscriptions)
+        self.monitor_dialog_service.show_cvd_chart_dialog()
 
     def _open_cvd_chart_after_subscription(
             self,
@@ -635,46 +584,7 @@ class ImperiumMainWindow(QMainWindow):
             suffix: str = "",
             link_to_header: bool = False
     ):
-        """Helper to open CVD chart after subscription is confirmed."""
-        try:
-            # Verify subscription happened
-            if hasattr(self.market_data_worker, 'subscribed_tokens'):
-                if cvd_token not in self.market_data_worker.subscribed_tokens:
-                    logger.error(f"[CVD] Token {cvd_token} NOT in subscribed_tokens!")
-                    QMessageBox.warning(
-                        self,
-                        "Subscription Failed",
-                        f"Failed to subscribe to market data for {symbol}.\n"
-                        "The chart may not update in real-time."
-                    )
-
-            # Create new dialog and store reference by token
-            dialog = AutoTraderDialog(
-                kite=self.real_kite_client,
-                instrument_token=cvd_token,
-                symbol=f"{symbol}{suffix}",
-                cvd_engine=self.cvd_engine,
-                parent=self
-            )
-            dialog.automation_signal.connect(self._on_cvd_automation_signal)
-            dialog.automation_state_signal.connect(self._on_cvd_automation_market_state)
-            dialog.destroyed.connect(lambda: self._on_cvd_single_chart_closed(cvd_token))
-            self.cvd_single_chart_dialogs[cvd_token] = dialog
-            if link_to_header:
-                self.header_linked_cvd_token = cvd_token
-            dialog.show()
-            dialog.raise_()
-            dialog.activateWindow()
-
-            logger.info(f"[CVD] Chart opened for token {cvd_token} ({symbol}{suffix})")
-
-        except Exception as e:
-            logger.error("Failed to open CVD Chart dialog", exc_info=True)
-            QMessageBox.critical(
-                self,
-                "CVD Chart Error",
-                f"Failed to open CVD chart:\n{e}"
-            )
+        self.monitor_dialog_service.open_cvd_chart_after_subscription(cvd_token, symbol, suffix, link_to_header)
 
     def _log_active_subscriptions(self):
         """Diagnostic method to verify CVD tokens are subscribed."""
@@ -1369,65 +1279,10 @@ class ImperiumMainWindow(QMainWindow):
             symbol: str,
             suffix: str = ""
     ):
-        """Retarget an existing CVD dialog from one token/symbol to another."""
-        if old_token == new_token:
-            return
-
-        try:
-            # Register new token
-            self.cvd_engine.register_token(new_token)
-            self.active_cvd_tokens.add(new_token)
-
-            # Unregister old token if different
-            if old_token and old_token != new_token:
-                self.active_cvd_tokens.discard(old_token)
-
-            # Update dialog
-            if old_token in self.cvd_single_chart_dialogs:
-                del self.cvd_single_chart_dialogs[old_token]
-            self.cvd_single_chart_dialogs[new_token] = dialog
-
-            dialog.instrument_token = new_token
-            dialog.symbol = f"{symbol}{suffix}"
-            dialog.setWindowTitle(f"Price & Cumulative Volume Chart — {symbol}{suffix}")
-
-            # Reset and reload data
-            dialog.current_date, dialog.previous_date = dialog.navigator.get_dates()
-            dialog._load_and_plot()
-
-            # Update subscriptions
-            self._update_market_subscriptions()
-
-            logger.info(f"[CVD] Updated chart from token {old_token} to {new_token} ({symbol}{suffix})")
-
-        except Exception as e:
-            logger.error(f"Failed to update CVD chart symbol: {e}", exc_info=True)
+        self.monitor_dialog_service.retarget_cvd_dialog(dialog, old_token, new_token, symbol, suffix)
 
     def _show_cvd_market_monitor_dialog(self):
-        symbol_to_token = {}
-
-        for symbol in self.cvd_symbols:
-            fut_token = self._get_nearest_future_token(symbol)
-            if fut_token:
-                symbol_to_token[symbol] = fut_token
-                self.active_cvd_tokens.add(fut_token)
-
-        if not symbol_to_token:
-            QMessageBox.warning(self, "CVD Monitor", "No futures available.")
-            return
-
-        self._update_market_subscriptions()
-
-        dlg = CVDMultiChartDialog(
-            kite=self.real_kite_client,
-            symbol_to_token=symbol_to_token,
-            parent=self
-        )
-
-        dlg.destroyed.connect(self._on_cvd_market_monitor_closed)
-        dlg.show()
-        dlg.raise_()
-        dlg.activateWindow()
+        self.monitor_dialog_service.show_cvd_market_monitor_dialog()
 
     def _show_cvd_symbol_set_dialog(self):
         def resolve_cvd_token_for_sets(symbol: str):
@@ -1977,12 +1832,7 @@ class ImperiumMainWindow(QMainWindow):
         )
 
     def _show_pending_orders_dialog(self):
-        if self.pending_orders_dialog is None:
-            self.pending_orders_dialog = PendingOrdersDialog(self)
-            self.position_manager.pending_orders_updated.connect(self.pending_orders_dialog.update_orders)
-        self.pending_orders_dialog.update_orders(self.position_manager.get_pending_orders())
-        self.pending_orders_dialog.show()
-        self.pending_orders_dialog.activateWindow()
+        self.order_dialog_service.show_pending_orders_dialog()
 
     def _sync_positions_to_dialog(self):
         if not self.positions_dialog or not self.positions_dialog.isVisible():
@@ -2002,81 +1852,16 @@ class ImperiumMainWindow(QMainWindow):
             logger.warning("OpenPositionsDialog does not have 'positions_table' attribute for syncing.")
 
     def _show_pnl_history_dialog(self):
-        if not hasattr(self, 'pnl_history_dialog') or self.pnl_history_dialog is None:
-            self.pnl_history_dialog = PnlHistoryDialog(
-                trade_ledger=self.trade_ledger,
-                parent=self
-            )
-
-        self.pnl_history_dialog.show()
-        self.pnl_history_dialog.activateWindow()
-        self.pnl_history_dialog.raise_()
+        self.analytics_dialog_service.show_pnl_history_dialog()
 
     def _show_performance_dialog(self):
-        if self.performance_dialog is None:
-            self.performance_dialog = PerformanceDialog(
-                trade_ledger=self.trade_ledger,
-                parent=self
-            )
-
-            self.performance_dialog.finished.connect(
-                lambda: setattr(self, 'performance_dialog', None)
-            )
-
-        # Let the dialog pull data from the PnL database itself
-        self.performance_dialog.refresh()
-
-        self.performance_dialog.show()
-        self.performance_dialog.raise_()
-        self.performance_dialog.activateWindow()
+        self.analytics_dialog_service.show_performance_dialog()
 
     def _update_pending_order_widgets(self, pending_orders: List[Dict]):
-        spacing = 12
-        edge_margin = 16
-        current_order_ids = {order['order_id'] for order in pending_orders}
-        existing_widget_ids = set(self.pending_order_widgets.keys())
-
-        for order_id in existing_widget_ids - current_order_ids:
-            widget = self.pending_order_widgets.pop(order_id)
-            widget.close_widget()
-
-        widgets_in_order = []
-        for order_data in pending_orders:
-            order_id = order_data['order_id']
-            if order_id not in self.pending_order_widgets:
-                widget = OrderStatusWidget(order_data, self)
-                widget.cancel_requested.connect(self._cancel_order_by_id)
-                widget.modify_requested.connect(self._show_modify_order_dialog)
-                self.pending_order_widgets[order_id] = widget
-
-            widgets_in_order.append(self.pending_order_widgets[order_id])
-
-        if widgets_in_order:
-            screen_geometry = self.screen().availableGeometry()
-            anchor_widget = widgets_in_order[0]
-            bottom_gap = max(anchor_widget.height() // 2, 24)
-
-            y_pos = screen_geometry.bottom() - bottom_gap - anchor_widget.height()
-            for widget in widgets_in_order:
-                x_pos = screen_geometry.right() - widget.width() - edge_margin
-                widget.move(x_pos, y_pos)
-                y_pos -= widget.height() + spacing
-
-        if pending_orders and not self.pending_order_refresh_timer.isActive():
-            logger.info("Pending orders detected. Starting 1-second position refresh timer.")
-            self.pending_order_refresh_timer.start()
-        elif not pending_orders and self.pending_order_refresh_timer.isActive():
-            logger.info("No more pending orders. Stopping refresh timer.")
-            self.pending_order_refresh_timer.stop()
+        self.order_dialog_service.update_pending_order_widgets(pending_orders)
 
     def _cancel_order_by_id(self, order_id: str):
-        try:
-            self.trader.cancel_order(self.trader.VARIETY_REGULAR, order_id)
-            logger.info(f"Cancellation request sent for order ID: {order_id}")
-            self.position_manager.refresh_from_api()
-        except Exception as e:
-            logger.error(f"Failed to cancel order {order_id}: {e}")
-            QMessageBox.critical(self, "Cancel Failed", f"Could not cancel order {order_id}:\n{e}")
+        self.order_dialog_service.cancel_order_by_id(order_id)
 
     def _show_about(self):
         show_about(self)
