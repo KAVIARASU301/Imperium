@@ -65,6 +65,7 @@ from dialogs.fii_dii_dialog import FIIDIIDialog
 from widgets.status_bar import StatusBarWidget
 from utils.network_utils import with_timeout, NetworkError, NetworkMonitor
 from core.main_window_coordinators import RiskController, DialogCoordinator, MarketDataOrchestrator
+from core.account import AccountHealthService
 import requests
 
 logger = logging.getLogger(__name__)
@@ -123,6 +124,17 @@ class ImperiumMainWindow(QMainWindow):
         self.network_monitor.connection_lost.connect(self._on_connection_lost)
         self.network_monitor.connection_restored.connect(self._on_connection_restored)
         self._network_error_notification = None  # Track active notification
+
+        self.account_health_service = AccountHealthService(
+            trader=self.trader,
+            real_kite_client=self.real_kite_client,
+            profile_circuit_breaker=self.profile_circuit_breaker,
+            margin_circuit_breaker=self.margin_circuit_breaker,
+            network_monitor=self.network_monitor,
+            publish_status=lambda message, timeout_ms, level: self._publish_status(message, timeout_ms, level=level),
+            update_header_account_info=lambda user_id, balance: self.header.update_account_info(user_id, balance)
+            if hasattr(self, "header") else None,
+        )
 
         self.active_quick_order_dialog: Optional[QuickOrderDialog] = None
         self.active_order_confirmation_dialog: Optional[OrderConfirmationDialog] = None
@@ -1811,98 +1823,29 @@ class ImperiumMainWindow(QMainWindow):
 
     @with_timeout(timeout_seconds=5)
     def _periodic_api_health_check(self):
-        logger.debug("Performing periodic API health check.")
-        if self.profile_circuit_breaker.can_execute() or self.margin_circuit_breaker.can_execute():
-            self._update_account_info()
-        else:
-            logger.debug("API health check skipped - circuit breakers are OPEN.")
+        self.account_health_service._periodic_api_health_check()
+        self._sync_account_health_state()
 
     @with_timeout(timeout_seconds=5)
     def _fetch_profile_safe(self):
-        """Helper method to fetch profile with timeout"""
-        return self.real_kite_client.profile()
+        return self.account_health_service._fetch_profile_safe()
 
     @with_timeout(timeout_seconds=5)
     def _fetch_margins_safe(self):
-        """Helper method to fetch margins with timeout"""
-        return self.real_kite_client.margins()
+        return self.account_health_service._fetch_margins_safe()
 
     def _update_account_info(self):
-        if isinstance(self.trader, PaperTradingManager):
-            try:
-                profile = self.trader.profile()
-                margins_data = self.trader.margins()
-                user_id = profile.get("user_id", "PAPER")
-                balance = margins_data.get("equity", {}).get("net", 0.0)
-                self.last_successful_margins = margins_data
-                self.last_successful_user_id = user_id
-                self.last_successful_balance = balance
-                self.header.update_account_info(user_id, balance)
-                logger.debug(f"Paper account info updated. Balance: {balance}")
-            except Exception as e:
-                logger.error(f"Failed to get paper account info: {e}")
-            return
-
-        if not self.real_kite_client or not hasattr(self.real_kite_client,
-                                                    'access_token') or not self.real_kite_client.access_token:
-            logger.debug("Skipping live account info update: Not a valid Kite client.")
-            return
-
-        if self.profile_circuit_breaker.can_execute():
-            try:
-                profile = self._fetch_profile_safe()
-                if profile and isinstance(profile, dict):
-                    self.last_successful_user_id = profile.get("user_id", "Unknown")
-                    self.profile_circuit_breaker.record_success()
-                    self.network_monitor.record_success()  # ✅ Network success
-                    api_logger.info("Profile fetch successful.")
-                else:
-                    logger.warning(f"Profile fetch returned unexpected data type: {type(profile)}")
-                    self.profile_circuit_breaker.record_failure()
-                    api_logger.warning(f"Profile fetch: Unexpected data type {type(profile)}")
-            except NetworkError as e:
-                logger.warning(f"Profile fetch network error: {e}")
-                self.profile_circuit_breaker.record_failure()
-                self.network_monitor.record_failure()  # ❌ Network failure
-                api_logger.warning(f"Profile fetch network error: {e}")
-            except Exception as e:
-                logger.warning(f"Profile fetch API call failed: {e}")
-                self.profile_circuit_breaker.record_failure()
-                api_logger.warning(f"Profile fetch failed: {e}")
-
-        current_balance_to_display = self.last_successful_balance
-        if self.margin_circuit_breaker.can_execute():
-            try:
-                margins_data = self._fetch_margins_safe()
-                if margins_data and isinstance(margins_data, dict):
-                    calculated_balance = 0
-                    if 'equity' in margins_data and margins_data['equity'] is not None:
-                        calculated_balance += margins_data['equity'].get('net', 0)
-                    if 'commodity' in margins_data and margins_data['commodity'] is not None:
-                        calculated_balance += margins_data['commodity'].get('net', 0)
-                    self.last_successful_balance = calculated_balance
-                    current_balance_to_display = self.last_successful_balance
-                    self.margin_circuit_breaker.record_success()
-                    self.network_monitor.record_success()  # ✅ Network success
-                    api_logger.info(f"Margins fetch successful. Balance: {current_balance_to_display}")
-                    self.rms_failures = 0
-                else:
-                    logger.warning(f"Margins fetch returned unexpected data type: {type(margins_data)}")
-                    self.margin_circuit_breaker.record_failure()
-                    api_logger.warning(f"Margins fetch: Unexpected data type {type(margins_data)}")
-            except NetworkError as e:
-                logger.error(f"Margins fetch network error: {e}")
-                self.margin_circuit_breaker.record_failure()
-                self.network_monitor.record_failure()  # ❌ Network failure
-                api_logger.error(f"Margins fetch network error: {e}")
-                api_logger.error(f"Margins fetch failed: {e}")
-                if self.margin_circuit_breaker.state == "OPEN":
-                    self._publish_status("API issues (margins) - using cached data.", 5000, level="warning")
-        if hasattr(self, 'header'):
-            self.header.update_account_info(self.last_successful_user_id, current_balance_to_display)
+        self.account_health_service._update_account_info()
+        self._sync_account_health_state()
 
     def _get_account_balance_safe(self) -> float:
-        return self.last_successful_balance
+        return self.account_health_service._get_account_balance_safe()
+
+    def _sync_account_health_state(self):
+        self.last_successful_balance = self.account_health_service.last_successful_balance
+        self.last_successful_user_id = self.account_health_service.last_successful_user_id
+        self.last_successful_margins = self.account_health_service.last_successful_margins
+        self.rms_failures = self.account_health_service.rms_failures
 
     def _on_positions_updated(self, positions: List[Position]):
         logger.debug(f"Received {len(positions)} positions from PositionManager for UI update.")
