@@ -1,8 +1,13 @@
 import numpy as np
 import pyqtgraph as pg
 from datetime import time
-from core.auto_trader.indicators import calculate_ema, is_chop_regime
-
+from core.auto_trader.indicators import (
+    calculate_ema,
+    calculate_atr,
+    compute_adx,
+    is_chop_regime,
+    calculate_regime_trend_filter,
+)
 
 
 class SimulatorMixin:
@@ -200,10 +205,18 @@ class SimulatorMixin:
         low = np.array(self.all_price_low_data[:length], dtype=float)
         cvd_close = np.array(self.all_cvd_data[:length], dtype=float)
 
-        ema10 = calculate_ema(close, 10)
-        ema51 = calculate_ema(close, 51)
-        cvd_ema10 = calculate_ema(cvd_close, 10)
-        cvd_ema51 = calculate_ema(cvd_close, 51)
+        price_fast_filter, price_slow_filter = calculate_regime_trend_filter(close)
+        cvd_fast_filter, cvd_slow_filter = calculate_regime_trend_filter(cvd_close)
+        ema10 = price_fast_filter  # adaptive fast — replaces fixed EMA10
+        ema51 = price_slow_filter  # adaptive slow (KAMA) — replaces fixed EMA51
+        cvd_ema10 = cvd_fast_filter
+        cvd_ema51 = cvd_slow_filter
+
+        # Pre-compute ATR and ADX once for the full array (used by is_chop_regime)
+        price_high_full = np.array(self.all_price_high_data[:length], dtype=float)
+        price_low_full = np.array(self.all_price_low_data[:length], dtype=float)
+        atr_full = calculate_atr(price_high_full, price_low_full, close, 14)
+        adx_full = compute_adx(price_high_full, price_low_full, close, 14)
 
         stop_points = float(max(0.1, self.automation_stoploss_input.value()))
         max_profit_giveback_points = float(max(0.0, self.max_profit_giveback_input.value()))
@@ -377,7 +390,17 @@ class SimulatorMixin:
             if signal_strategy is None:
                 signal_strategy = "atr_reversal"
 
-            if is_chop_regime(self, idx, strategy_type=signal_strategy):
+            if is_chop_regime(
+                    idx=idx,
+                    strategy_type=signal_strategy,
+                    price=close,
+                    ema_slow=ema51,
+                    atr=atr_full,
+                    adx=adx_full,
+                    chop_filter_atr_reversal=getattr(self, "_chop_filter_atr_reversal", True),
+                    chop_filter_ema_cross=getattr(self, "_chop_filter_ema_cross", True),
+                    chop_filter_atr_divergence=getattr(self, "_chop_filter_atr_divergence", True),
+            ):
                 result["skipped"] += 1
                 result["skipped_x"].append(float(x_arr[idx]))
                 result["skipped_y"].append(float((high[idx] + y_offset[idx]) if signal_side == "short" else (low[idx] - y_offset[idx])))

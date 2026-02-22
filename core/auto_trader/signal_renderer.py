@@ -6,7 +6,13 @@ from datetime import time
 
 from PySide6.QtCore import QTimer
 
-from core.auto_trader.indicators import calculate_ema, calculate_atr, is_chop_regime
+from core.auto_trader.indicators import (
+    calculate_ema,
+    calculate_atr,
+    compute_adx,
+    is_chop_regime,
+    calculate_regime_trend_filter,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -180,10 +186,12 @@ class SignalRendererMixin:
         x_arr = np.array(self._last_plot_x_indices, dtype=float)
         price_data_array = np.array(self.all_price_data, dtype=float)
         cvd_data_array = np.array(self.all_cvd_data, dtype=float)
-        ema10 = calculate_ema(price_data_array, 10)
-        ema51 = calculate_ema(price_data_array, 51)
-        cvd_ema10 = calculate_ema(cvd_data_array, 10)
-        cvd_ema51 = calculate_ema(cvd_data_array, 51)
+        price_fast_filter, price_slow_filter = calculate_regime_trend_filter(price_data_array)
+        cvd_fast_filter, cvd_slow_filter = calculate_regime_trend_filter(cvd_data_array)
+        ema10 = price_fast_filter   # adaptive fast — replaces fixed EMA10
+        ema51 = price_slow_filter   # adaptive slow (KAMA) — replaces fixed EMA51
+        cvd_ema10 = cvd_fast_filter
+        cvd_ema51 = cvd_slow_filter
         idx = self._latest_closed_bar_index()
         if idx is None:
             return
@@ -316,29 +324,27 @@ class SignalRendererMixin:
         if not hasattr(self, "_confluence_line_map"):
             self._confluence_line_map = {}
 
-        # Calculate CVD EMAs and position masks
+        # Calculate CVD adaptive trend filters
         cvd_data = np.array(self.all_cvd_data, dtype=float)
-        cvd_ema10 = calculate_ema(cvd_data, 10)
-        cvd_ema51 = calculate_ema(cvd_data, 51)
+        cvd_fast_filter, cvd_slow_filter = calculate_regime_trend_filter(cvd_data)
 
-        cvd_above_ema10 = cvd_data > cvd_ema10
-        cvd_below_ema10 = cvd_data < cvd_ema10
+        cvd_above_fast = cvd_data > cvd_fast_filter
+        cvd_below_fast = cvd_data < cvd_fast_filter
 
-        # Calculate price EMAs
+        # Calculate price adaptive trend filters
         price_data = np.array(self.all_price_data, dtype=float)
-        price_ema10 = calculate_ema(price_data, 10)
-        price_ema51 = calculate_ema(price_data, 51)
+        price_fast_filter, price_slow_filter = calculate_regime_trend_filter(price_data)
 
         # ----------------------------------------------------------
         # STRATEGY 2: EMA & CVD CROSS
         # ----------------------------------------------------------
         short_ema_cross, long_ema_cross = self.strategy_detector.detect_ema_cvd_cross_strategy(
             price_data=price_data,
-            price_ema10=price_ema10,
-            price_ema51=price_ema51,
+            price_ema10=price_fast_filter,
+            price_ema51=price_slow_filter,
             cvd_data=cvd_data,
-            cvd_ema10=cvd_ema10,
-            cvd_ema51=cvd_ema51,
+            cvd_ema10=cvd_fast_filter,
+            cvd_ema51=cvd_slow_filter,
             cvd_ema_gap_threshold=self.cvd_ema_gap_input.value()
         )
 
@@ -348,8 +354,8 @@ class SignalRendererMixin:
         short_divergence, long_divergence = self.strategy_detector.detect_atr_cvd_divergence_strategy(
             price_atr_above=price_above_mask,
             price_atr_below=price_below_mask,
-            cvd_above_ema10=cvd_above_ema10,
-            cvd_below_ema10=cvd_below_ema10,
+            cvd_above_ema10=cvd_above_fast,
+            cvd_below_ema10=cvd_below_fast,
             cvd_above_ema51=cvd_above_ema51,
             cvd_below_ema51=cvd_below_ema51,
             cvd_data=cvd_data,
@@ -370,9 +376,9 @@ class SignalRendererMixin:
                 price_high=price_high,
                 price_low=price_low,
                 price_close=price_data,
-                price_ema10=price_ema10,
+                price_ema10=price_fast_filter,
                 cvd_data=cvd_data,
-                cvd_ema10=cvd_ema10,
+                cvd_ema10=cvd_fast_filter,
                 volume=volume_data,
                 range_lookback_minutes=self.range_lookback_input.value(),
                 breakout_threshold_multiplier=1.5
@@ -389,9 +395,9 @@ class SignalRendererMixin:
         )
         breakout_long_strong, breakout_short_strong = self.strategy_detector.evaluate_breakout_momentum_strength(
             price_close=price_data,
-            price_ema10=price_ema10,
+            price_ema10=price_fast_filter,
             cvd_data=cvd_data,
-            cvd_ema10=cvd_ema10,
+            cvd_ema10=cvd_fast_filter,
             volume=volume_data,
             long_context=breakout_long_context,
             short_context=breakout_short_context,
@@ -574,11 +580,11 @@ class SignalRendererMixin:
                 strategy_masks=strategy_masks,
                 closed_idx=closed_idx,
                 price_close=np.asarray(self.all_price_data, dtype=float),
-                ema10=price_ema10,
-                ema51=price_ema51,
+                ema10=price_fast_filter,
+                ema51=price_slow_filter,
                 atr=np.asarray(atr_values, dtype=float),
                 cvd_close=np.asarray(self.all_cvd_data, dtype=float),
-                cvd_ema10=cvd_ema10,
+                cvd_ema10=cvd_fast_filter,
             )
             if not governance_decision.enabled:
                 return
@@ -592,7 +598,22 @@ class SignalRendererMixin:
                     )
                 return
 
-        if is_chop_regime(self, closed_idx, strategy_type=strategy_type):
+        if is_chop_regime(
+            idx=closed_idx,
+            strategy_type=strategy_type,
+            price=np.asarray(self.all_price_data, dtype=float),
+            ema_slow=price_slow_filter,
+            atr=np.asarray(atr_values, dtype=float),
+            adx=compute_adx(
+                np.asarray(self.all_price_high_data, dtype=float),
+                np.asarray(self.all_price_low_data, dtype=float),
+                np.asarray(self.all_price_data, dtype=float),
+                14,
+            ),
+            chop_filter_atr_reversal=getattr(self, "_chop_filter_atr_reversal", True),
+            chop_filter_ema_cross=getattr(self, "_chop_filter_ema_cross", True),
+            chop_filter_atr_divergence=getattr(self, "_chop_filter_atr_divergence", True),
+        ):
             return
 
         closed_bar_ts = self.all_timestamps[closed_idx].isoformat()

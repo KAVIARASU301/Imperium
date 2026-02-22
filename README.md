@@ -92,6 +92,17 @@ This directory contains encrypted files for credentials/tokens and a local key u
 - Some features rely on market session timings and API availability.
 - Keep your API credentials private and rotate them periodically.
 
+## Institutional-Grade Auto-Trader Gaps (Current State)
+
+The current stack is strong for discretionary and semi-systematic execution, but a true institutional-grade auto trader would additionally need:
+
+- **Adaptive signal engines** (e.g., KAMA, volatility-scaled EMAs, or regime-switching trend filters) instead of fixed EMA windows such as 10/51 tuned to one instrument.
+- **Regime detection and strategy orchestration** so strategy logic changes automatically across trend/range/high-volatility sessions.
+- **Portfolio-level risk controls** (cross-symbol exposure caps, factor/greek concentration controls, and kill-switches at book level).
+- **Robust transaction-cost and slippage models** continuously calibrated with live fill telemetry.
+- **Walk-forward validation and drift monitoring** to detect alpha decay and disable stale models before losses compound.
+- **Production resiliency controls** (redundant market data paths, deterministic replay, incident playbooks, and automated failover).
+
 ## Contributing
 
 Contributions are welcome. If you submit a change, please:
