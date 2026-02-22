@@ -61,6 +61,7 @@ from dialogs.fii_dii_dialog import FIIDIIDialog
 from widgets.status_bar import StatusBarWidget
 from utils.network_utils import with_timeout, NetworkError, NetworkMonitor
 from core.main_window_coordinators import RiskController, DialogCoordinator, MarketDataOrchestrator
+from core.market_data import MarketSubscriptionPolicy
 from core.account import AccountHealthService
 from core.presentation import OrderDialogService, AnalyticsDialogService, MonitorDialogService
 import requests
@@ -194,6 +195,7 @@ class ImperiumMainWindow(QMainWindow):
         self.order_dialog_service = OrderDialogService(self)
         self.analytics_dialog_service = AnalyticsDialogService(self)
         self.monitor_dialog_service = MonitorDialogService(self)
+        self.subscription_policy = MarketSubscriptionPolicy(self)
 
         # --- FIX: UI Throttling Implementation ---
         self._latest_market_data = {}
@@ -587,20 +589,7 @@ class ImperiumMainWindow(QMainWindow):
         self.monitor_dialog_service.open_cvd_chart_after_subscription(cvd_token, symbol, suffix, link_to_header)
 
     def _log_active_subscriptions(self):
-        """Diagnostic method to verify CVD tokens are subscribed."""
-        if hasattr(self, 'market_data_worker'):
-            # FIX: Use 'subscribed_tokens' not '_subscribed_tokens'
-            active_tokens = self.market_data_worker.subscribed_tokens  # No underscore!
-            cvd_tokens = self.active_cvd_tokens
-
-            logger.info(f"[CVD] Active CVD tokens: {cvd_tokens}")
-            logger.info(f"[CVD] Subscribed tokens: {len(active_tokens)}")
-
-            missing = cvd_tokens - active_tokens
-            if missing:
-                logger.warning(f"[CVD] Tokens NOT subscribed: {missing}")
-            else:
-                logger.info(f"[CVD] All CVD tokens properly subscribed ✓")
+        self.subscription_policy.log_active_subscriptions()
 
     def _on_cvd_dialog_closed(self, token):
         QTimer.singleShot(0, self._update_market_subscriptions)
@@ -1253,23 +1242,7 @@ class ImperiumMainWindow(QMainWindow):
             logger.error("[AUTO] Failed automated exit for %s: %s", position.tradingsymbol, e, exc_info=True)
 
     def _update_cvd_chart_symbol(self, symbol: str, cvd_token: int, suffix: str = ""):
-        """Update menu-opened (header-linked) CVD single chart dialog with new symbol."""
-        if self.header_linked_cvd_token is None:
-            return
-
-        dialog = self.cvd_single_chart_dialogs.get(self.header_linked_cvd_token)
-        if not dialog or dialog.isHidden():
-            self.header_linked_cvd_token = None
-            return
-
-        self._retarget_cvd_dialog(
-            dialog=dialog,
-            old_token=self.header_linked_cvd_token,
-            new_token=cvd_token,
-            symbol=symbol,
-            suffix=suffix
-        )
-        self.header_linked_cvd_token = cvd_token
+        self.subscription_policy.update_cvd_chart_symbol(symbol, cvd_token, suffix)
 
     def _retarget_cvd_dialog(
             self,

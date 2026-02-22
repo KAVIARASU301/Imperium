@@ -250,23 +250,7 @@ class MarketDataOrchestrator:
         w._ui_update_needed = False
 
     def update_market_subscriptions(self):
-        w = self.main_window
-        required_tokens = set()
-        if hasattr(w.strike_ladder, "get_visible_contract_tokens"):
-            required_tokens.update(w.strike_ladder.get_visible_contract_tokens())
-        required_tokens.update(w.active_cvd_tokens)
-
-        if required_tokens == w._last_subscription_set:
-            logger.debug("Subscription set unchanged. Skipping update.")
-            return
-
-        logger.info(
-            "Subscription diff detected | Old: %s | New: %s",
-            len(w._last_subscription_set),
-            len(required_tokens),
-        )
-        w._last_subscription_set = required_tokens.copy()
-        w.market_data_worker.set_instruments(required_tokens)
+        self.main_window.subscription_policy.update_market_subscriptions()
 
     def on_cvd_market_monitor_closed(self):
         self.update_market_subscriptions()
