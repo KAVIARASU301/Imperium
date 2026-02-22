@@ -201,7 +201,7 @@ class SimulatorMixin:
                 "wins": 0,
                 "losses": 0,
                 "skipped": 0,
-                "stacked_positions": 0,  # ← PATCH STEP 6
+                "stacked_positions": 0,
             }
 
         close = np.array(self.all_price_data[:length], dtype=float)
@@ -250,7 +250,6 @@ class SimulatorMixin:
 
             if sim_stacker is not None:
                 pnl = sim_stacker.compute_total_pnl(exit_price)
-                result["stacked_positions"] += sim_stacker.total_positions - 1
             else:
                 if active_trade["signal_side"] == "long":
                     pnl = exit_price - active_trade["entry_price"]
