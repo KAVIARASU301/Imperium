@@ -3124,6 +3124,15 @@ class ImperiumMainWindow(QMainWindow):
         dialog.refresh_requested.connect(self._on_quick_order_refresh_request)
         dialog.finished.connect(lambda: setattr(self, 'active_quick_order_dialog', None))
 
+    def _on_prefilled_modify_dialog_finished(self, result: int, pending_order_id: str | None):
+        self.active_quick_order_dialog = None
+
+        if result == QDialog.DialogCode.Rejected:
+            if pending_order_id:
+                self._publish_status(f"Order {pending_order_id} cancelled.", 4000, level="info")
+            else:
+                self._publish_status("Order cancelled.", 4000, level="info")
+
     def _execute_single_strike_order(self, order_params: dict):
         contract_to_trade: Contract = order_params.get('contract')
         quantity = order_params.get('quantity')
@@ -4178,7 +4187,12 @@ class ImperiumMainWindow(QMainWindow):
 
         dialog.order_placed.connect(self._execute_single_strike_order)
         dialog.refresh_requested.connect(self._on_quick_order_refresh_request)
-        dialog.finished.connect(lambda: setattr(self, 'active_quick_order_dialog', None))
+        dialog.finished.connect(
+            lambda result, pending_order_id=order_data.get("order_id"): self._on_prefilled_modify_dialog_finished(
+                result,
+                pending_order_id,
+            )
+        )
 
     def _on_quick_order_refresh_request(self, tradingsymbol: str):
         if not self.active_quick_order_dialog:
