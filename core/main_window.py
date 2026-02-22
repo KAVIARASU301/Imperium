@@ -1,6 +1,5 @@
 # core/main_window.py
 import logging
-import os
 from enum import Enum
 from collections import deque
 import time
@@ -12,8 +11,7 @@ from core.cvd.cvd_mode import CVDMode
 from utils.time_utils import TRADING_DAY_START
 from uuid import uuid4
 from PySide6.QtWidgets import (QMainWindow, QMessageBox, QDialog, QSplitter, QLabel, QFrame, QVBoxLayout)
-from PySide6.QtCore import Qt, QTimer, QUrl, QByteArray
-from PySide6.QtMultimedia import QSoundEffect
+from PySide6.QtCore import Qt, QTimer, QByteArray
 from kiteconnect import KiteConnect
 from PySide6.QtGui import QShortcut, QKeySequence
 
@@ -52,6 +50,7 @@ from core.account import AccountHealthService
 from core.presentation import OrderDialogService, AnalyticsDialogService, MonitorDialogService
 from core.positions import PositionSyncAdapter
 from core.execution import ExecutionFacade, ExecutionService, ExecutionStack
+from core.sound import SoundService
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +79,7 @@ class ImperiumMainWindow(QMainWindow):
         self.real_kite_client = real_kite_client
         self.trading_mode = 'paper' if isinstance(trader, PaperTradingManager) else 'live'
         self.trade_logger = TradeLogger(mode=self.trading_mode)
+        self.sound_service = SoundService(self)
 
         self.position_manager = PositionManager(self.trader, self.trade_logger)
         self.config_manager = ConfigManager()
@@ -1474,186 +1474,7 @@ class ImperiumMainWindow(QMainWindow):
         return None
 
     def _play_sound(self, success: bool = True):
-        """
-        Play notification sound with guaranteed volume level.
-        Temporarily sets system volume to 80% to ensure audibility.
-        """
-        try:
-            # Save current system volume
-            original_volume = self._get_system_volume()
-
-            if original_volume is not None:
-                # Set to 80% for notification
-                self._set_system_volume(80)
-
-            # Play sound
-            sound_effect = QSoundEffect(self)
-            filename = "Pop.wav" if success else "fail.wav"
-            base_path = os.path.dirname(os.path.abspath(__file__))
-            assets_dir = os.path.join(base_path, "..", "assets")
-            if not os.path.exists(assets_dir):
-                assets_dir = os.path.join(base_path, "assets")
-            sound_path = os.path.join(assets_dir, filename)
-
-            if os.path.exists(sound_path):
-                sound_effect.setSource(QUrl.fromLocalFile(sound_path))
-                sound_effect.setVolume(1.0)  # Max app volume since we control system volume
-                sound_effect.play()
-
-                # Restore original volume after sound plays (~1 second)
-                if original_volume is not None:
-                    QTimer.singleShot(1200, lambda: self._set_system_volume(original_volume))
-            else:
-                logger.warning(f"Sound file not found: {sound_path}")
-
-        except Exception as e:
-            logger.error(f"Error playing sound: {e}")
-
-    def _get_system_volume(self) -> Optional[int]:
-        """Get current system volume (0-100). Returns None if unable to detect."""
-        try:
-            import platform
-            import subprocess
-
-            system = platform.system()
-
-            if system == "Linux":
-                # Try PulseAudio (most common)
-                try:
-                    result = subprocess.run(
-                        ['pactl', 'get-sink-volume', '@DEFAULT_SINK@'],
-                        capture_output=True,
-                        text=True,
-                        timeout=1
-                    )
-                    if result.returncode == 0:
-                        # Parse output: "Volume: front-left: 13107 /  20% / -41.79 dB"
-                        for part in result.stdout.split():
-                            if '%' in part:
-                                return int(part.rstrip('%'))
-                except (FileNotFoundError, subprocess.TimeoutExpired):
-                    pass
-
-                # Try ALSA as fallback
-                try:
-                    result = subprocess.run(
-                        ['amixer', 'get', 'Master'],
-                        capture_output=True,
-                        text=True,
-                        timeout=1
-                    )
-                    if result.returncode == 0:
-                        # Parse: "[20%]"
-                        import re
-                        match = re.search(r'\[(\d+)%\]', result.stdout)
-                        if match:
-                            return int(match.group(1))
-                except (FileNotFoundError, subprocess.TimeoutExpired):
-                    pass
-
-            elif system == "Windows":
-                # Windows volume control via comtypes
-                try:
-                    from comtypes import CLSCTX_ALL
-                    from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
-
-                    devices = AudioUtilities.GetSpeakers()
-                    interface = devices.Activate(
-                        IAudioEndpointVolume._iid_, CLSCTX_ALL, None
-                    )
-                    volume = interface.QueryInterface(IAudioEndpointVolume)
-                    current_volume = volume.GetMasterVolumeLevelScalar()
-                    return int(current_volume * 100)
-                except ImportError:
-                    logger.debug("pycaw not installed - install with: pip install pycaw comtypes")
-                except Exception:
-                    pass
-
-            elif system == "Darwin":  # macOS
-                try:
-                    result = subprocess.run(
-                        ['osascript', '-e', 'output volume of (get volume settings)'],
-                        capture_output=True,
-                        text=True,
-                        timeout=1
-                    )
-                    if result.returncode == 0:
-                        return int(result.stdout.strip())
-                except (FileNotFoundError, subprocess.TimeoutExpired):
-                    pass
-
-            return None
-
-        except Exception as e:
-            logger.debug(f"Could not get system volume: {e}")
-            return None
-
-    def _set_system_volume(self, volume: int):
-        """Set system volume to percentage (0-100)."""
-        try:
-            import platform
-            import subprocess
-
-            volume = max(0, min(100, volume))  # Clamp to 0-100
-            system = platform.system()
-
-            if system == "Linux":
-                # Try PulseAudio
-                try:
-                    subprocess.run(
-                        ['pactl', 'set-sink-volume', '@DEFAULT_SINK@', f'{volume}%'],
-                        timeout=1,
-                        check=False
-                    )
-                    logger.debug(f"Set system volume to {volume}% (PulseAudio)")
-                    return
-                except (FileNotFoundError, subprocess.TimeoutExpired):
-                    pass
-
-                # Try ALSA
-                try:
-                    subprocess.run(
-                        ['amixer', 'set', 'Master', f'{volume}%'],
-                        timeout=1,
-                        check=False
-                    )
-                    logger.debug(f"Set system volume to {volume}% (ALSA)")
-                    return
-                except (FileNotFoundError, subprocess.TimeoutExpired):
-                    pass
-
-            elif system == "Windows":
-                try:
-                    from comtypes import CLSCTX_ALL
-                    from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
-
-                    devices = AudioUtilities.GetSpeakers()
-                    interface = devices.Activate(
-                        IAudioEndpointVolume._iid_, CLSCTX_ALL, None
-                    )
-                    volume_interface = interface.QueryInterface(IAudioEndpointVolume)
-                    volume_interface.SetMasterVolumeLevelScalar(volume / 100.0, None)
-                    logger.debug(f"Set system volume to {volume}% (Windows)")
-                    return
-                except ImportError:
-                    logger.debug("pycaw not installed")
-                except Exception:
-                    pass
-
-            elif system == "Darwin":  # macOS
-                try:
-                    subprocess.run(
-                        ['osascript', '-e', f'set volume output volume {volume}'],
-                        timeout=1,
-                        check=False
-                    )
-                    logger.debug(f"Set system volume to {volume}% (macOS)")
-                    return
-                except (FileNotFoundError, subprocess.TimeoutExpired):
-                    pass
-
-        except Exception as e:
-            logger.debug(f"Could not set system volume: {e}")
+        self.sound_service.play_notification(success=success)
 
     @staticmethod
     def _calculate_smart_limit_price(contract: Contract) -> float:
