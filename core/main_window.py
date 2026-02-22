@@ -4348,18 +4348,26 @@ class ImperiumMainWindow(QMainWindow):
         if not self.buy_exit_panel:
             return
 
-        # Reset previous selections
-        self.buy_exit_panel.above_spin.setValue(0)
-        self.buy_exit_panel.below_spin.setValue(0)
+        previous_above = self.buy_exit_panel.above_spin.value()
+        previous_below = self.buy_exit_panel.below_spin.value()
 
-        # Apply new selection
-        if above > 0:
-            self.buy_exit_panel.above_spin.setValue(above)
-        if below > 0:
-            self.buy_exit_panel.below_spin.setValue(below)
+        try:
+            # Reset previous selections
+            self.buy_exit_panel.above_spin.setValue(0)
+            self.buy_exit_panel.below_spin.setValue(0)
 
-        # Trigger BUY using existing safe logic
-        self.buy_exit_panel._on_buy_clicked()
+            # Apply new selection
+            if above > 0:
+                self.buy_exit_panel.above_spin.setValue(above)
+            if below > 0:
+                self.buy_exit_panel.below_spin.setValue(below)
+
+            # Trigger BUY using existing safe logic
+            self.buy_exit_panel._on_buy_clicked()
+        finally:
+            # Restore UI state so keyboard quick-actions don't overwrite persisted panel settings.
+            self.buy_exit_panel.above_spin.setValue(previous_above)
+            self.buy_exit_panel.below_spin.setValue(previous_below)
 
     def _buy_exact_relative_strike(self, offset: int):
         """
@@ -4369,14 +4377,6 @@ class ImperiumMainWindow(QMainWindow):
 
         if not self.strike_ladder or not self.buy_exit_panel:
             return
-
-        # 🔒 CRITICAL: clear any range-based selection state
-        self.buy_exit_panel.above_spin.blockSignals(True)
-        self.buy_exit_panel.below_spin.blockSignals(True)
-        self.buy_exit_panel.above_spin.setValue(0)
-        self.buy_exit_panel.below_spin.setValue(0)
-        self.buy_exit_panel.above_spin.blockSignals(False)
-        self.buy_exit_panel.below_spin.blockSignals(False)
 
         atm_strike = self.strike_ladder.atm_strike
         strike_step = self.strike_ladder.get_strike_interval()
