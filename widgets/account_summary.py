@@ -156,11 +156,11 @@ class AccountSummaryWidget(QWidget):
             }
 
             #tableTitle {
-                color: #E3F2FD;
-                font-size: 12px;
-                font-weight: 700;
-                letter-spacing: 1px;
-                padding: 0 0 1px 0;
+                color: #EAF6FF;
+                font-size: 13px;
+                font-weight: 800;
+                letter-spacing: 1.2px;
+                padding: 1px 0 2px 0;
             }
 
             #tableFrame {
@@ -170,7 +170,7 @@ class AccountSummaryWidget(QWidget):
             }
 
             QLabel[class~="metricRow"] {
-                padding: 4px 8px;
+                padding: 6px 10px;
                 background: transparent;
             }
 
@@ -179,16 +179,17 @@ class AccountSummaryWidget(QWidget):
             }
 
             #metricTitleLabel {
-                color: #AFC8D2;
-                font-size: 10px;
-                font-weight: 600;
-                letter-spacing: 0.3px;
+                color: #D1E9F5;
+                font-size: 11px;
+                font-weight: 700;
+                letter-spacing: 0.5px;
+                text-transform: uppercase;
             }
 
             #metricValueLabel {
                 color: #FFFFFF;
-                font-size: 14px;
-                font-weight: 600;
+                font-size: 15px;
+                font-weight: 700;
                 font-family: 'Segoe UI', 'Roboto Mono', monospace;
             }
         """)
