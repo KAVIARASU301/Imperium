@@ -10,6 +10,7 @@ from core.auto_trader.indicators import (
 )
 from core.auto_trader.stacker import StackerState
 
+
 class SimulatorMixin:
     def _on_simulator_run_clicked(self):
         x_arr = getattr(self, "_latest_sim_x_arr", None)
@@ -173,6 +174,8 @@ class SimulatorMixin:
         )
         self._set_simulator_summary_text(summary, color)
 
+
+
     def _run_trade_simulation(
             self,
             x_arr: np.ndarray,
@@ -180,146 +183,332 @@ class SimulatorMixin:
             long_mask: np.ndarray,
             strategy_masks: dict | None = None,
     ) -> dict:
-
         length = min(
             len(x_arr), len(short_mask), len(long_mask),
-            len(self.all_price_data), len(self.all_price_high_data),
-            len(self.all_price_low_data), len(self.all_timestamps),
+            len(self.all_price_data), len(self.all_cvd_data),
+            len(self.all_price_high_data), len(self.all_price_low_data),
+            len(self.all_timestamps),
         )
-
         if length <= 0:
             return {
-                "taken_long_x": [], "taken_long_y": [],
-                "taken_short_x": [], "taken_short_y": [],
-                "exit_win_x": [], "exit_win_y": [],
-                "exit_loss_x": [], "exit_loss_y": [],
-                "skipped_x": [], "skipped_y": [],
-                "trade_path_x": [], "trade_path_y": [],
-                "skipped_line_keys": set(),
-                "total_points": 0.0,
-                "trades": 0,
-                "wins": 0,
-                "losses": 0,
-                "skipped": 0,
-                "stacked_positions": 0,
+                "taken_long_x": [], "taken_long_y": [], "taken_short_x": [], "taken_short_y": [],
+                "exit_win_x": [], "exit_win_y": [], "exit_loss_x": [], "exit_loss_y": [],
+                "skipped_x": [], "skipped_y": [], "trade_path_x": [], "trade_path_y": [],
+                "skipped_line_keys": set(), "total_points": 0.0,
+                "trades": 0, "wins": 0, "losses": 0, "skipped": 0,
             }
 
+        x_arr = np.array(x_arr[:length], dtype=float)
+        short_mask = np.array(short_mask[:length], dtype=bool)
+        long_mask = np.array(long_mask[:length], dtype=bool)
         close = np.array(self.all_price_data[:length], dtype=float)
         high = np.array(self.all_price_high_data[:length], dtype=float)
         low = np.array(self.all_price_low_data[:length], dtype=float)
+        cvd_close = np.array(self.all_cvd_data[:length], dtype=float)
+
+        price_fast_filter, price_slow_filter = calculate_regime_trend_filter(close)
+        cvd_fast_filter, cvd_slow_filter = calculate_regime_trend_filter(cvd_close)
+        ema10 = price_fast_filter  # adaptive fast — replaces fixed EMA10
+        ema51 = price_slow_filter  # adaptive slow (KAMA) — replaces fixed EMA51
+        cvd_ema10 = cvd_fast_filter
+        cvd_ema51 = cvd_slow_filter
+
+        # Pre-compute ATR and ADX once for the full array (used by is_chop_regime)
+        price_high_full = np.array(self.all_price_high_data[:length], dtype=float)
+        price_low_full = np.array(self.all_price_low_data[:length], dtype=float)
+        atr_full = calculate_atr(price_high_full, price_low_full, close, 14)
+        adx_full = compute_adx(price_high_full, price_low_full, close, 14)
 
         stop_points = float(max(0.1, self.automation_stoploss_input.value()))
+        max_profit_giveback_points = float(max(0.0, self.max_profit_giveback_input.value()))
+        max_profit_giveback_strategies = set(self._selected_max_giveback_strategies())
+        atr_trailing_step_points = 10.0
+        atr_skip_limit = int(getattr(self, "atr_skip_limit_input", None) and
+                             self.atr_skip_limit_input.value() or 0)
 
-        # ── PATCH STEP 2 ──────────────────────────────────────────
-        stacker_enabled = getattr(self, "stacker_enabled_check", None) and \
-                          self.stacker_enabled_check.isChecked()
-
-        stacker_step = float(self.stacker_step_input.value()) \
-            if hasattr(self, "stacker_step_input") else 20.0
-
-        stacker_max = int(self.stacker_max_input.value()) \
-            if hasattr(self, "stacker_max_input") else 2
-        # ──────────────────────────────────────────────────────────
+        # Pre-extract raw ATR masks for skip counting (may be None if not available)
+        _sm = strategy_masks or {}
+        short_atr_raw = _sm.get("short", {}).get("atr_reversal_raw")
+        long_atr_raw = _sm.get("long", {}).get("atr_reversal_raw")
+        if short_atr_raw is not None:
+            short_atr_raw = np.array(short_atr_raw[:length], dtype=bool)
+        if long_atr_raw is not None:
+            long_atr_raw = np.array(long_atr_raw[:length], dtype=bool)
 
         result = {
-            "taken_long_x": [], "taken_long_y": [],
-            "taken_short_x": [], "taken_short_y": [],
-            "exit_win_x": [], "exit_win_y": [],
-            "exit_loss_x": [], "exit_loss_y": [],
-            "skipped_x": [], "skipped_y": [],
-            "trade_path_x": [], "trade_path_y": [],
-            "skipped_line_keys": set(),
-            "total_points": 0.0,
-            "trades": 0,
-            "wins": 0,
-            "losses": 0,
-            "skipped": 0,
+            "taken_long_x": [], "taken_long_y": [], "taken_short_x": [], "taken_short_y": [],
+            "exit_win_x": [], "exit_win_y": [], "exit_loss_x": [], "exit_loss_y": [],
+            "skipped_x": [], "skipped_y": [], "trade_path_x": [], "trade_path_y": [],
+            "skipped_line_keys": set(), "total_points": 0.0,
+            "trades": 0, "wins": 0, "losses": 0, "skipped": 0,
             "stacked_positions": 0,
         }
 
+        stacker_enabled = bool(
+            getattr(self, "stacker_enabled_check", None)
+            and self.stacker_enabled_check.isChecked()
+        )
+        stacker_step = float(self.stacker_step_input.value()) \
+            if hasattr(self, "stacker_step_input") else 20.0
+        stacker_max = int(self.stacker_max_input.value()) \
+            if hasattr(self, "stacker_max_input") else 2
+
         active_trade = None
-        sim_stacker: StackerState | None = None  # ← PATCH STEP 3
+        sim_stacker: StackerState | None = None
+        stack_window_minutes = 15.0
+        y_offset = np.maximum((high - low) * 0.2, 1.0)
 
         def _close_trade(idx: int):
             nonlocal active_trade, sim_stacker
-
             if not active_trade:
                 return
-
             exit_price = float(close[idx])
-
+            if not np.isfinite(exit_price):
+                exit_price = float(active_trade["entry_price"])
             if sim_stacker is not None:
                 pnl = sim_stacker.compute_total_pnl(exit_price)
             else:
-                if active_trade["signal_side"] == "long":
-                    pnl = exit_price - active_trade["entry_price"]
-                else:
-                    pnl = active_trade["entry_price"] - exit_price
-
+                pnl = exit_price - active_trade["entry_price"] if active_trade["signal_side"] == "long" else active_trade["entry_price"] - exit_price
             result["total_points"] += float(pnl)
-
+            result["trade_path_x"].extend([float(x_arr[active_trade["entry_bar_idx"]]), float(x_arr[idx])])
+            result["trade_path_y"].extend([float(active_trade["entry_price"]), exit_price])
             if pnl > 0:
                 result["wins"] += 1
+                result["exit_win_x"].append(float(x_arr[idx]))
+                result["exit_win_y"].append(exit_price)
             else:
                 result["losses"] += 1
-
+                result["exit_loss_x"].append(float(x_arr[idx]))
+                result["exit_loss_y"].append(exit_price)
             active_trade = None
-            sim_stacker = None  # ← PATCH STEP 5 reset
-
-        # ──────────────────────────────────────────────────────────
+            sim_stacker = None
 
         for idx in range(length):
-
             ts = self.all_timestamps[idx]
+            if ts.time() >= time(15, 0):
+                if active_trade:
+                    _close_trade(idx)
+                continue
 
             if active_trade:
                 price_close = close[idx]
+                if not np.isfinite(price_close):
+                    continue
 
-                # ── PATCH STEP 4: STACK CHECK ─────────────────────
-                if sim_stacker is not None and not np.isnan(price_close):
-                    while sim_stacker.should_add_stack(price_close):
-                        sim_stacker.add_stack(entry_price=price_close, bar_idx=idx)
+                if sim_stacker is not None:
+                    while sim_stacker.should_add_stack(float(price_close)):
+                        sim_stacker.add_stack(entry_price=float(price_close), bar_idx=idx)
                         result["stacked_positions"] += 1
                         if not sim_stacker.can_stack_more:
                             break
-                # ────────────────────────────────────────────────────
 
-                sl = active_trade["sl_underlying"]
-                hit_stop = (
-                    price_close <= sl if active_trade["signal_side"] == "long"
-                    else price_close >= sl
+                signal_side = active_trade["signal_side"]
+                sl_underlying = active_trade["sl_underlying"]
+
+                favorable_move = (
+                    price_close - active_trade["entry_price"]
+                    if signal_side == "long"
+                    else active_trade["entry_price"] - price_close
                 )
 
+                if not np.isfinite(favorable_move):
+                    favorable_move = 0.0
+
+                max_favorable_points = max(active_trade.get("max_favorable_points", 0.0), favorable_move)
+                active_trade["max_favorable_points"] = max_favorable_points
+
+                trail_offset = 0.0
+                if active_trade.get("strategy_type") == "atr_reversal":
+                    if atr_trailing_step_points > 0:
+                        trail_steps = int(max(0.0, favorable_move) // atr_trailing_step_points)
+                        if trail_steps > 0:
+                            trail_offset = trail_steps * atr_trailing_step_points
+                elif active_trade.get("strategy_type") in {"ema_cross", "range_breakout"}:
+                    initial_trigger_points = 200.0
+                    incremental_trigger_points = 100.0
+                    trail_step_points = 100.0
+                    if favorable_move >= initial_trigger_points:
+                        trail_steps = 1 + int(
+                            (favorable_move - initial_trigger_points) // incremental_trigger_points
+                        )
+                        trail_offset = trail_steps * trail_step_points
+
+                if trail_offset > 0:
+                    new_sl = (
+                        active_trade["entry_price"] - stop_points + trail_offset
+                        if signal_side == "long"
+                        else active_trade["entry_price"] + stop_points - trail_offset
+                    )
+                    if signal_side == "long":
+                        sl_underlying = max(sl_underlying, new_sl)
+                    else:
+                        sl_underlying = min(sl_underlying, new_sl)
+                    active_trade["sl_underlying"] = sl_underlying
+
+                hit_stop = price_close <= sl_underlying if signal_side == "long" else price_close >= sl_underlying
+
+                prev_price = active_trade.get("last_price_close")
+                prev_ema10 = active_trade.get("last_ema10")
+                prev_ema51 = active_trade.get("last_ema51")
+                prev_cvd = active_trade.get("last_cvd_close")
+                prev_cvd_ema10 = active_trade.get("last_cvd_ema10")
+                prev_cvd_ema51 = active_trade.get("last_cvd_ema51")
+
+                has_price_ema10 = all(v is not None for v in (prev_price, prev_ema10)) and ema10[idx] > 0
+                has_price_ema51 = all(v is not None for v in (prev_price, prev_ema51)) and ema51[idx] > 0
+                has_cvd_ema10 = all(v is not None for v in (prev_cvd, prev_cvd_ema10)) and cvd_ema10[idx] != 0
+                has_cvd_ema51 = all(v is not None for v in (prev_cvd, prev_cvd_ema51)) and cvd_ema51[idx] != 0
+
+                price_cross_above_ema10 = has_price_ema10 and prev_price <= prev_ema10 and price_close > ema10[idx]
+                price_cross_below_ema10 = has_price_ema10 and prev_price >= prev_ema10 and price_close < ema10[idx]
+                price_cross_above_ema51 = has_price_ema51 and prev_price <= prev_ema51 and price_close > ema51[idx]
+                price_cross_below_ema51 = has_price_ema51 and prev_price >= prev_ema51 and price_close < ema51[idx]
+                cvd_cross_above_ema10 = has_cvd_ema10 and prev_cvd <= prev_cvd_ema10 and cvd_close[idx] > cvd_ema10[idx]
+                cvd_cross_below_ema10 = has_cvd_ema10 and prev_cvd >= prev_cvd_ema10 and cvd_close[idx] < cvd_ema10[idx]
+                cvd_cross_above_ema51 = has_cvd_ema51 and prev_cvd <= prev_cvd_ema51 and cvd_close[idx] > cvd_ema51[idx]
+                cvd_cross_below_ema51 = has_cvd_ema51 and prev_cvd >= prev_cvd_ema51 and cvd_close[idx] < cvd_ema51[idx]
+
+                active_strategy_type = active_trade.get("strategy_type") or "atr_reversal"
+                exit_now = False
                 if hit_stop:
+                    exit_now = True
+                elif (
+                    active_strategy_type in max_profit_giveback_strategies
+                    and max_profit_giveback_points > 0
+                    and max_favorable_points > 0
+                ):
+                    giveback_points = max_favorable_points - favorable_move
+                    exit_now = giveback_points >= max_profit_giveback_points
+                elif active_strategy_type == "ema_cross":
+                    exit_now = (signal_side == "long" and cvd_cross_below_ema10) or (signal_side == "short" and cvd_cross_above_ema10)
+                elif active_strategy_type == "atr_divergence":
+                    exit_now = (signal_side == "long" and price_cross_above_ema51) or (signal_side == "short" and price_cross_below_ema51)
+                elif active_strategy_type == "range_breakout":
+                    exit_now = (signal_side == "long" and (price_cross_below_ema10 or price_cross_below_ema51)) or (signal_side == "short" and (price_cross_above_ema10 or price_cross_above_ema51))
+                else:
+                    exit_now = (signal_side == "long" and (price_cross_above_ema51 or cvd_cross_above_ema51)) or (signal_side == "short" and (price_cross_below_ema51 or cvd_cross_below_ema51))
+
+                if exit_now:
                     _close_trade(idx)
 
-            signal_side = None
-            if short_mask[idx]:
-                signal_side = "short"
-            elif long_mask[idx]:
-                signal_side = "long"
+                if active_trade:
+                    active_trade["last_price_close"] = float(close[idx])
+                    active_trade["last_ema10"] = float(ema10[idx])
+                    active_trade["last_ema51"] = float(ema51[idx])
+                    active_trade["last_cvd_close"] = float(cvd_close[idx])
+                    active_trade["last_cvd_ema10"] = float(cvd_ema10[idx])
+                    active_trade["last_cvd_ema51"] = float(cvd_ema51[idx])
 
+            signal_side, signal_strategy = self._resolve_signal_side_and_strategy(
+                idx=idx,
+                short_mask=short_mask,
+                long_mask=long_mask,
+                strategy_masks=strategy_masks,
+            )
             if signal_side is None:
                 continue
 
-            if active_trade:
+            if ts.time() < time(9, 20) or ts.time() >= time(15, 0):
                 continue
 
+            if signal_strategy is None:
+                signal_strategy = "atr_reversal"
+
+            if is_chop_regime(
+                    idx=idx,
+                    strategy_type=signal_strategy,
+                    price=close,
+                    ema_slow=ema51,
+                    atr=atr_full,
+                    adx=adx_full,
+                    chop_filter_atr_reversal=getattr(self, "_chop_filter_atr_reversal", True),
+                    chop_filter_ema_cross=getattr(self, "_chop_filter_ema_cross", True),
+                    chop_filter_atr_divergence=getattr(self, "_chop_filter_atr_divergence", True),
+            ):
+                result["skipped"] += 1
+                result["skipped_x"].append(float(x_arr[idx]))
+                result["skipped_y"].append(float((high[idx] + y_offset[idx]) if signal_side == "short" else (low[idx] - y_offset[idx])))
+                result["skipped_line_keys"].add(f"{'S' if signal_side == 'short' else 'L'}:{idx}")
+                continue
+
+            if active_trade:
+                if active_trade["signal_side"] == signal_side:
+                    last_signal_time = active_trade.get("signal_timestamp")
+                    elapsed_min = 0.0
+                    if last_signal_time:
+                        elapsed_min = (ts - last_signal_time).total_seconds() / 60.0
+                    if elapsed_min < stack_window_minutes:
+                        result["skipped"] += 1
+                        result["skipped_x"].append(float(x_arr[idx]))
+                        result["skipped_y"].append(float((high[idx] + y_offset[idx]) if signal_side == "short" else (low[idx] - y_offset[idx])))
+                        result["skipped_line_keys"].add(f"{'S' if signal_side == 'short' else 'L'}:{idx}")
+                        continue
+                else:
+                    active_strategy = active_trade.get("strategy_type")
+                    active_priority = self._strategy_priority(active_strategy)
+                    new_priority = self._strategy_priority(signal_strategy)
+
+                    # ── ATR Skip Limit override ────────────────────────────────
+                    # When a breakout is active and ATR reversal keeps getting
+                    # suppressed, count the raw (pre-suppression) opposite-side
+                    # ATR signals. Once the count hits the user limit, force close
+                    # the breakout and take the ATR entry instead.
+                    if (
+                        atr_skip_limit > 0
+                        and active_strategy == "range_breakout"
+                        and signal_strategy == "atr_reversal"
+                    ):
+                        # Count raw ATR signals on the opposing side that fired
+                        # since the breakout entry (including this bar).
+                        entry_idx = active_trade.get("entry_bar_idx", idx)
+                        raw_mask = short_atr_raw if signal_side == "short" else long_atr_raw
+                        if raw_mask is not None:
+                            skipped_count = int(np.sum(raw_mask[entry_idx:idx + 1]))
+                        else:
+                            skipped_count = active_trade.get("atr_skip_count", 0) + 1
+                            active_trade["atr_skip_count"] = skipped_count
+
+                        if skipped_count >= atr_skip_limit:
+                            # Threshold reached — close breakout, take ATR
+                            _close_trade(idx)
+                            # Fall through to entry below
+                        else:
+                            result["skipped"] += 1
+                            result["skipped_x"].append(float(x_arr[idx]))
+                            result["skipped_y"].append(float((high[idx] + y_offset[idx]) if signal_side == "short" else (low[idx] - y_offset[idx])))
+                            result["skipped_line_keys"].add(f"{'S' if signal_side == 'short' else 'L'}:{idx}")
+                            continue
+                    # ──────────────────────────────────────────────────────────
+                    elif new_priority <= active_priority:
+                        result["skipped"] += 1
+                        result["skipped_x"].append(float(x_arr[idx]))
+                        result["skipped_y"].append(float((high[idx] + y_offset[idx]) if signal_side == "short" else (low[idx] - y_offset[idx])))
+                        result["skipped_line_keys"].add(f"{'S' if signal_side == 'short' else 'L'}:{idx}")
+                        continue
+                    else:
+                        _close_trade(idx)
+
             entry_price = float(close[idx])
-
-            sl_underlying = (
-                entry_price - stop_points
-                if signal_side == "long"
-                else entry_price + stop_points
-            )
-
+            if not np.isfinite(entry_price):
+                continue
+            sl_underlying = entry_price - stop_points if signal_side == "long" else entry_price + stop_points
             active_trade = {
                 "signal_side": signal_side,
+                "signal_timestamp": ts,
+                "strategy_type": signal_strategy,
                 "entry_price": entry_price,
+                "max_favorable_points": 0.0,
+                "entry_bar_idx": idx,      # used by ATR skip counter
+                "atr_skip_count": 0,       # fallback counter if raw masks unavailable
                 "sl_underlying": sl_underlying,
+                "last_price_close": entry_price,
+                "last_ema10": float(ema10[idx]),
+                "last_ema51": float(ema51[idx]),
+                "last_cvd_close": float(cvd_close[idx]),
+                "last_cvd_ema10": float(cvd_ema10[idx]),
+                "last_cvd_ema51": float(cvd_ema51[idx]),
             }
 
-            # ── PATCH STEP 3: INIT STACKER ────────────────────────
             if stacker_enabled:
                 sim_stacker = StackerState(
                     anchor_entry_price=entry_price,
@@ -328,9 +517,24 @@ class SimulatorMixin:
                     step_points=stacker_step,
                     max_stacks=stacker_max,
                 )
-            # ───────────────────────────────────────────────────────
+            else:
+                sim_stacker = None
 
+            if signal_side == "long":
+                result["taken_long_x"].append(float(x_arr[idx]))
+                result["taken_long_y"].append(entry_price)
+            else:
+                result["taken_short_x"].append(float(x_arr[idx]))
+                result["taken_short_y"].append(entry_price)
             result["trades"] += 1
+
+            if active_trade:
+                active_trade["last_price_close"] = float(close[idx])
+                active_trade["last_ema10"] = float(ema10[idx])
+                active_trade["last_ema51"] = float(ema51[idx])
+                active_trade["last_cvd_close"] = float(cvd_close[idx])
+                active_trade["last_cvd_ema10"] = float(cvd_ema10[idx])
+                active_trade["last_cvd_ema51"] = float(cvd_ema51[idx])
 
         if active_trade:
             _close_trade(length - 1)
