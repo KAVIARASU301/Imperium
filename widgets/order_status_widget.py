@@ -10,6 +10,24 @@ from PySide6.QtGui import QColor
 logger = logging.getLogger(__name__)
 
 
+ENTRY_EXIT_NOTIFICATIONS = {
+    "entry": {
+        "pending": "Entry order sent — waiting for fill",
+        "open": "Entry order is live in the market",
+        "complete": "Position entered successfully",
+        "rejected": "Entry rejected — review quantity/price",
+        "cancelled": "Entry cancelled",
+    },
+    "exit": {
+        "pending": "Exit order sent — reducing exposure",
+        "open": "Exit order is live in the market",
+        "complete": "Position exited successfully",
+        "rejected": "Exit rejected — manage risk manually",
+        "cancelled": "Exit cancelled — position still open",
+    },
+}
+
+
 class OrderStatusWidget(QWidget):
     """
     Premium toast notification for order status with glassmorphism design,
@@ -30,11 +48,28 @@ class OrderStatusWidget(QWidget):
         self.show()
         self.animate_in()
 
+    @staticmethod
+    def _normalize_status(raw_status: str) -> str:
+        status = (raw_status or "").lower()
+        if status in {"cancelled", "canceled"}:
+            return "cancelled"
+        return status
+
+    def _resolve_notification_message(self) -> str:
+        transaction_type = (self.order_data.get("transaction_type") or "").upper()
+        status = self._normalize_status(self.order_data.get("status", ""))
+
+        flow = "exit" if transaction_type == "SELL" else "entry"
+        return ENTRY_EXIT_NOTIFICATIONS.get(flow, {}).get(
+            status,
+            "Order update received",
+        )
+
     def _setup_ui(self):
         self.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_DeleteOnClose)
-        self.setFixedSize(320, 120)
+        self.setFixedSize(400, 182)
 
         # Main container with glassmorphism
         container = QFrame(self)
@@ -45,13 +80,13 @@ class OrderStatusWidget(QWidget):
         main_layout.addWidget(container)
 
         layout = QVBoxLayout(container)
-        layout.setContentsMargins(20, 15, 20, 15)
-        layout.setSpacing(8)
+        layout.setContentsMargins(22, 16, 22, 16)
+        layout.setSpacing(10)
 
         # Status indicator line
         status_line = QFrame()
         status_line.setObjectName("statusLine")
-        status_line.setFixedHeight(3)
+        status_line.setFixedHeight(4)
         layout.addWidget(status_line)
 
         status = self.order_data.get("status", "").lower()
@@ -68,6 +103,21 @@ class OrderStatusWidget(QWidget):
             line_color = "#F85149"  # sell = red intent
 
         status_line.setStyleSheet(f"background-color: {line_color};")
+
+        title_row = QHBoxLayout()
+        title_row.setSpacing(8)
+
+        indicator_dot = QLabel("●")
+        indicator_dot.setObjectName("toneDot")
+        indicator_dot.setStyleSheet(f"color: {line_color};")
+
+        headline_label = QLabel(self._resolve_notification_message())
+        headline_label.setObjectName("headlineLabel")
+        headline_label.setWordWrap(True)
+
+        title_row.addWidget(indicator_dot)
+        title_row.addWidget(headline_label, 1)
+        layout.addLayout(title_row)
 
         # Header with symbol and status badge
         header = QHBoxLayout()
@@ -192,9 +242,10 @@ class OrderStatusWidget(QWidget):
 
     @offset.setter
     def offset(self, value):
+        old_offset = self._offset
         self._offset = value
         pos = self.pos()
-        self.move(pos.x() + value - self._offset, pos.y())
+        self.move(pos.x() + (value - old_offset), pos.y())
 
     def _apply_styles(self):
         self.setStyleSheet("""
@@ -203,9 +254,13 @@ class OrderStatusWidget(QWidget):
            ========================= */
 
         #mainContainer {
-            background-color: #161A25;
-            border: 1px solid #3A4458;
-            border-radius: 6px;
+            background-color: qlineargradient(
+                x1: 0, y1: 0, x2: 1, y2: 1,
+                stop: 0 #1A2030,
+                stop: 1 #141A28
+            );
+            border: 1px solid #3F4A62;
+            border-radius: 12px;
         }
 
         /* =========================
@@ -215,8 +270,8 @@ class OrderStatusWidget(QWidget):
 
         #statusLine {
             background-color: #29C7C9;
-            border-top-left-radius: 6px;
-            border-top-right-radius: 6px;
+            border-top-left-radius: 12px;
+            border-top-right-radius: 12px;
         }
 
         /* =========================
@@ -225,19 +280,19 @@ class OrderStatusWidget(QWidget):
 
         #symbolLabel {
             color: #FFFFFF;
-            font-size: 15px;
+            font-size: 14px;
             font-weight: 600;
             letter-spacing: 0.2px;
         }
 
         #statusBadge {
-            background-color: #212635;
-            color: #A9B1C3;
-            border: 1px solid #3A4458;
+            background-color: rgba(47, 58, 80, 0.9);
+            color: #C4CCE0;
+            border: 1px solid #495573;
             font-size: 10px;
             font-weight: 700;
             padding: 4px 10px;
-            border-radius: 6px;
+            border-radius: 10px;
             letter-spacing: 0.4px;
         }
 
@@ -263,6 +318,18 @@ class OrderStatusWidget(QWidget):
             font-weight: 500;
         }
 
+        #toneDot {
+            font-size: 13px;
+            font-weight: 700;
+        }
+
+        #headlineLabel {
+            color: #EAF1FF;
+            font-size: 13px;
+            font-weight: 700;
+            letter-spacing: 0.1px;
+        }
+
         /* =========================
            BUTTONS (TERMINAL STYLE)
            ========================= */
@@ -270,20 +337,20 @@ class OrderStatusWidget(QWidget):
         QPushButton {
             font-family: "Segoe UI", system-ui;
             font-weight: 600;
-            border-radius: 3px;
-            padding: 5px 12px;
+            border-radius: 8px;
+            padding: 6px 12px;
             font-size: 10px;
-            border: none;
+            border: 1px solid transparent;
             letter-spacing: 0.3px;
-            min-height: 22px;
+            min-height: 24px;
         }
 
 
         /* Secondary action */
         #modifyButton {
-            background-color: #212635;
-            color: #A9B1C3;
-            border: none;
+            background-color: #222A3D;
+            color: #B5BED2;
+            border-color: #3E4A66;
         }
 
         #modifyButton:hover {
@@ -297,8 +364,8 @@ class OrderStatusWidget(QWidget):
 
         /* Danger action */
         #cancelButton {
-            background-color: rgba(248, 81, 73, 0.9);
-            color: #161A25;
+            background-color: rgba(248, 81, 73, 0.92);
+            color: #0F131E;
             font-weight: 700;
             padding: 6px 14px;
         }

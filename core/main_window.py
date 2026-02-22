@@ -2224,9 +2224,8 @@ class ImperiumMainWindow(QMainWindow):
         self.performance_dialog.activateWindow()
 
     def _update_pending_order_widgets(self, pending_orders: List[Dict]):
-        screen_geometry = self.screen().availableGeometry()
-        spacing = 10
-        widget_height = 110 + spacing
+        spacing = 12
+        edge_margin = 16
         current_order_ids = {order['order_id'] for order in pending_orders}
         existing_widget_ids = set(self.pending_order_widgets.keys())
 
@@ -2234,7 +2233,8 @@ class ImperiumMainWindow(QMainWindow):
             widget = self.pending_order_widgets.pop(order_id)
             widget.close_widget()
 
-        for i, order_data in enumerate(pending_orders):
+        widgets_in_order = []
+        for order_data in pending_orders:
             order_id = order_data['order_id']
             if order_id not in self.pending_order_widgets:
                 widget = OrderStatusWidget(order_data, self)
@@ -2242,10 +2242,18 @@ class ImperiumMainWindow(QMainWindow):
                 widget.modify_requested.connect(self._show_modify_order_dialog)
                 self.pending_order_widgets[order_id] = widget
 
-            widget = self.pending_order_widgets[order_id]
-            x_pos = screen_geometry.right() - widget.width() - spacing
-            y_pos = screen_geometry.bottom() - (widget_height * (i + 1))
-            widget.move(x_pos, y_pos)
+            widgets_in_order.append(self.pending_order_widgets[order_id])
+
+        if widgets_in_order:
+            screen_geometry = self.screen().availableGeometry()
+            anchor_widget = widgets_in_order[0]
+            bottom_gap = max(anchor_widget.height() // 2, 24)
+
+            y_pos = screen_geometry.bottom() - bottom_gap - anchor_widget.height()
+            for widget in widgets_in_order:
+                x_pos = screen_geometry.right() - widget.width() - edge_margin
+                widget.move(x_pos, y_pos)
+                y_pos -= widget.height() + spacing
 
         if pending_orders and not self.pending_order_refresh_timer.isActive():
             logger.info("Pending orders detected. Starting 1-second position refresh timer.")
