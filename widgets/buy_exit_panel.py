@@ -491,7 +491,7 @@ class BuyExitPanel(QWidget):
         formatted_value = locale.format_string("%d", total_premium, grouping=True)
 
         html = (
-            "<span style='font-size:14px; vertical-align:top;'>₹</span> "
+            "<span style='font-size:14px; vertical-align:top; font-weight:400;'>₹</span> "
             f"<span style='font-family:\"Segoe UI\",\"Roboto Mono\",monospace; "
             f"font-size:20px; font-weight:500;'>{formatted_value}</span>"
         )
