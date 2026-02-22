@@ -52,6 +52,7 @@ from core.market_data import MarketSubscriptionPolicy
 from core.account import AccountHealthService
 from core.presentation import OrderDialogService, AnalyticsDialogService, MonitorDialogService
 from core.positions import PositionSyncAdapter
+from core.execution import ExecutionFacade
 
 logger = logging.getLogger(__name__)
 
@@ -194,6 +195,21 @@ class ImperiumMainWindow(QMainWindow):
         self.analytics_dialog_service = AnalyticsDialogService(self)
         self.monitor_dialog_service = MonitorDialogService(self)
         self.subscription_policy = MarketSubscriptionPolicy(self)
+        self.execution_facade = ExecutionFacade(
+            get_instrument_data=lambda: self.instrument_data,
+            get_settings=lambda: self.settings,
+            get_active_order_confirmation_dialog=lambda: self.active_order_confirmation_dialog,
+            set_active_order_confirmation_dialog=lambda dialog: setattr(self, "active_order_confirmation_dialog", dialog),
+            create_order_confirmation_dialog=lambda details: OrderConfirmationDialog(self, details),
+            warning_user=lambda title, message: QMessageBox.warning(self, title, message),
+            execute_orders=self._execute_orders,
+            get_position=self.position_manager.get_position,
+            record_completed_exit_trade=self._record_completed_exit_trade,
+            update_account_info=self._update_account_info,
+            update_account_summary_widget=self._update_account_summary_widget,
+            refresh_positions=self._refresh_positions,
+            publish_status=lambda message, timeout_ms, level: self._publish_status(message, timeout_ms, level=level),
+        )
 
         # --- FIX: UI Throttling Implementation ---
         self._latest_market_data = {}
@@ -274,83 +290,23 @@ class ImperiumMainWindow(QMainWindow):
         auto_confirm = bool(self._auto_confirm_next_panel_order)
         # Consume one-shot auto-confirm intent so manual clicks are never affected.
         self._auto_confirm_next_panel_order = False
+        self.execution_facade.place_order(
+            order_details_from_panel=order_details_from_panel,
+            auto_confirm=auto_confirm,
+        )
 
-        if not order_details_from_panel.get('strikes'):
-            QMessageBox.warning(self, "Error", "No valid strikes found for the order.")
-            logger.warning("place_order called with no strikes in details.")
-            return
-
-        if self.active_order_confirmation_dialog:
-            self.active_order_confirmation_dialog.reject()
-
-        order_details_for_dialog = order_details_from_panel.copy()
-
-        symbol = order_details_for_dialog.get('symbol')
-        if not symbol or symbol not in self.instrument_data:
-            QMessageBox.warning(self, "Error", "Symbol data not found.")
-            return
-
-        instrument_lot_quantity = self.instrument_data[symbol].get('lot_size', 1)
-        num_lots = order_details_for_dialog.get('lot_size', 1)
-        order_details_for_dialog['total_quantity_per_strike'] = num_lots * instrument_lot_quantity
-        order_details_for_dialog['product'] = self.settings.get('default_product', 'MIS')
-        # 🔑 PASS RISK PARAMS FOR POSITION CREATION
-        order_details_for_dialog["stop_loss_price"] = order_details_from_panel.get("stop_loss_price")
-        order_details_for_dialog["target_price"] = order_details_from_panel.get("target_price")
-        order_details_for_dialog["trailing_stop_loss"] = order_details_from_panel.get("trailing_stop_loss")
-
-        dialog = OrderConfirmationDialog(self, order_details_for_dialog)
-
-        self.active_order_confirmation_dialog = dialog
-
-        dialog.refresh_requested.connect(self._on_order_confirmation_refresh_request)
-        dialog.finished.connect(lambda: setattr(self, 'active_order_confirmation_dialog', None))
-
-        if auto_confirm:
-            logger.info("[AUTO] Auto-confirming Buy/Exit panel order for %s", symbol)
-            self._execute_orders(order_details_for_dialog)
-            return
-
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            self._execute_orders(order_details_for_dialog)
+        dialog = self.active_order_confirmation_dialog
+        if dialog:
+            dialog.refresh_requested.connect(self._on_order_confirmation_refresh_request)
+            dialog.finished.connect(lambda: setattr(self, 'active_order_confirmation_dialog', None))
 
     def _on_paper_trade_update(self, order_data: dict):
         """Logs completed paper trades and triggers an immediate UI refresh."""
         self._processed_paper_exit_orders = getattr(self, "_processed_paper_exit_orders", set())
-
-        order_id = order_data.get("order_id")
-        if order_id in self._processed_paper_exit_orders:
-            return
-
-        self._processed_paper_exit_orders.add(order_id)
-
-        if order_data and order_data.get('status') == 'COMPLETE':
-            tradingsymbol = order_data.get('tradingsymbol')
-            exit_qty = order_data.get("exit_qty", 0)
-
-            if exit_qty > 0:
-                if order_data.get("_ledger_recorded"):
-                    return  # 🔒 already processed
-
-                original_position = self.position_manager.get_position(tradingsymbol)
-                if original_position:
-                    confirmed_order = {
-                        **order_data,
-                        "filled_quantity": exit_qty
-                    }
-                    self._record_completed_exit_trade(
-                        confirmed_order=confirmed_order,
-                        original_position=original_position,
-                        trading_mode="PAPER"
-                    )
-                    # 🔒 Mark as recorded AFTER successful write
-                    order_data["_ledger_recorded"] = True
-                return
-
-            logger.debug("Paper trade complete, triggering immediate account info refresh.")
-            self._update_account_info()
-            self._update_account_summary_widget()
-            self._refresh_positions()
+        self.execution_facade.on_paper_trade_update(
+            order_data=order_data,
+            processed_order_ids=self._processed_paper_exit_orders,
+        )
 
     def _setup_ui(self):
         MainWindowShell.setup_ui(self)
@@ -900,23 +856,10 @@ class ImperiumMainWindow(QMainWindow):
         self.position_sync_adapter.on_position_added(position)
 
     def _on_paper_order_rejected(self, data: dict):
-        reason = data.get("reason", "Order rejected by RMS")
-        symbol = data.get("tradingsymbol", "")
-        qty = data.get("quantity", 0)
-
-        message = f"❌ PAPER RMS REJECTED\n{symbol} × {qty}\n\n{reason}"
-
-        # Status bar (non-intrusive)
-        self._publish_status(message, 7000, level="error")
-
-        # Optional: modal dialog for visibility
-        QMessageBox.warning(
-            self,
-            "Paper RMS Rejection",
-            message
+        self.execution_facade.on_paper_order_rejected(
+            data=data,
+            show_modal=lambda title, message: QMessageBox.warning(self, title, message),
         )
-
-        logger.warning(f"Paper RMS rejection shown to user: {reason}")
 
     def _on_position_removed(self, symbol: str):
         self.position_sync_adapter.on_position_removed(symbol)
