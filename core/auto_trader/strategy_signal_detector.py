@@ -411,7 +411,7 @@ class StrategySignalDetector:
 
         # breakout_threshold_multiplier is converted into a minimum breakout
         # extension beyond the range boundary. 1.0 ~= 3% of the prior range.
-        min_breakout_strength = max(0.0, 0.03 * float(breakout_threshold_multiplier))
+        base_breakout_strength = max(0.0, 0.03 * float(breakout_threshold_multiplier))
 
         # Calculate rolling range and average range
         for i in range(lookback_bars, length):
@@ -426,6 +426,15 @@ class StrategySignalDetector:
 
             # Calculate average range for volatility context
             avg_range = np.mean(price_high[start_idx:i] - price_low[start_idx:i])
+
+            # Dynamic ATR threshold scaling using BB/Keltner squeeze ratio.
+            # Tighter squeeze (lower ratio) lowers the breakout strength required.
+            squeeze_ratio = self._compute_squeeze_ratio(
+                price_high[start_idx:i],
+                price_low[start_idx:i],
+                price_close[start_idx:i],
+            )
+            dynamic_breakout_strength = base_breakout_strength * np.clip(squeeze_ratio, 0.55, 1.60)
 
             # Detect consolidation: range should be relatively tight
             is_consolidating = range_size < (avg_range * 3.0)
@@ -463,7 +472,7 @@ class StrategySignalDetector:
 
                 # Price momentum: moved at least threshold beyond range
                 breakout_strength = (price_close[i] - window_high) / range_size if range_size > 0 else 0
-                strong_breakout = breakout_strength >= min_breakout_strength
+                strong_breakout = breakout_strength >= dynamic_breakout_strength
 
                 if volume_confirmed and cvd_bullish and strong_breakout:
                     long_breakout[i] = True
@@ -479,12 +488,44 @@ class StrategySignalDetector:
 
                 # Price momentum
                 breakout_strength = (window_low - price_close[i]) / range_size if range_size > 0 else 0
-                strong_breakout = breakout_strength >= min_breakout_strength
+                strong_breakout = breakout_strength >= dynamic_breakout_strength
 
                 if volume_confirmed and cvd_bearish and strong_breakout:
                     short_breakout[i] = True
 
         return long_breakout, short_breakout, range_highs, range_lows
+
+    def _compute_squeeze_ratio(
+            self,
+            high_window: np.ndarray,
+            low_window: np.ndarray,
+            close_window: np.ndarray,
+    ) -> float:
+        """
+        BB/Keltner squeeze ratio for the provided window.
+
+        Ratio interpretation:
+        - < 1.0: Bollinger bands sit inside Keltner channel (tighter squeeze)
+        - > 1.0: Expansion regime
+        """
+        if len(close_window) < 2:
+            return 1.0
+
+        close_std = float(np.std(close_window))
+        bb_width = max(1e-9, 4.0 * close_std)  # 2σ up + 2σ down
+
+        prev_close = np.concatenate(([close_window[0]], close_window[:-1]))
+        true_range = np.maximum.reduce([
+            high_window - low_window,
+            np.abs(high_window - prev_close),
+            np.abs(low_window - prev_close),
+        ])
+        atr = float(np.mean(true_range))
+
+        # Keltner width uses the common 1.5 * ATR envelope on both sides.
+        kc_width = max(1e-9, 3.0 * atr)
+
+        return bb_width / kc_width
 
     def _compute_adx_simple(
             self,
