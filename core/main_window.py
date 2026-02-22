@@ -1,8 +1,6 @@
 # core/main_window.py
 import logging
 import os
-import math
-import json
 from enum import Enum
 from collections import deque
 import time
@@ -36,12 +34,13 @@ from dialogs.strategy_builder_dialog import StrategyBuilderDialog
 from dialogs.order_confirmation_dialog import OrderConfirmationDialog
 from core.cvd.cvd_engine import CVDEngine
 from core.auto_trader import AutoTraderDialog
+from core.auto_trader.cvd_automation_coordinator import CvdAutomationCoordinator
 from core.cvd.cvd_symbol_sets import CVDSymbolSetManager
 from dialogs.cvd_symbol_set_multi_chart_dialog import CVDSetMultiChartDialog
 from core.trade_ledger import TradeLedger
 from core.execution_stack import ExecutionRequest, ExecutionStack
 from utils.title_bar import TitleBar
-from ui.main_window_shell import MainWindowShell
+from core.ui.main_window_shell import MainWindowShell
 from utils.api_circuit_breaker import APICircuitBreaker
 from utils.about import show_about
 from utils.expiry_days import show_expiry_days
@@ -157,14 +156,15 @@ class ImperiumMainWindow(QMainWindow):
         self.header_linked_cvd_token: Optional[int] = None
         self.trade_ledger = TradeLedger(mode=self.trading_mode)
         self.execution_stack = ExecutionStack(trading_mode=self.trading_mode, base_dir=Path.home() / ".imperium_desk")
-        self._cvd_automation_positions: Dict[int, dict] = {}
-        self._cvd_automation_market_state: Dict[int, dict] = {}
-        self._cvd_pending_retry_timers: Dict[int, QTimer] = {}
-        self._cvd_automation_state_file = (
-                Path.home()
-                / ".imperium_desk"
-                / f"cvd_automation_state_{self.trading_mode}.json"
+        self.cvd_automation_coordinator = CvdAutomationCoordinator(
+            main_window=self,
+            trading_mode=self.trading_mode,
+            base_dir=Path.home() / ".imperium_desk",
         )
+        self._cvd_automation_positions: Dict[int, dict] = self.cvd_automation_coordinator.positions
+        self._cvd_automation_market_state: Dict[int, dict] = self.cvd_automation_coordinator.market_state
+        self._cvd_pending_retry_timers: Dict[int, QTimer] = {}
+        self._cvd_automation_state_file = self.cvd_automation_coordinator.state_file
         self._load_cvd_automation_state()
 
         # -----------------------------
@@ -430,639 +430,34 @@ class ImperiumMainWindow(QMainWindow):
         QTimer.singleShot(0, self._update_market_subscriptions)
 
     def _on_cvd_automation_signal(self, payload: dict):
-        token = payload.get("instrument_token")
-        if token is None:
-            return
-
-        dialog = self.cvd_single_chart_dialogs.get(token)
-        if dialog and hasattr(dialog, "_record_detected_signal"):
-            dialog._record_detected_signal(payload)
-
-        if self._is_cvd_auto_cutoff_reached():
-            self._enforce_cvd_auto_cutoff_exit(reason="AUTO_3PM_CUTOFF")
-            logger.info("[AUTO] Ignoring CVD signal after 3:00 PM cutoff.")
-            return
-
-        state = self._cvd_automation_market_state.get(token, {})
-        if not state.get("enabled"):
-            return
-
-        signal_side = payload.get("signal_side")
-        if signal_side not in {"long", "short"}:
-            return
-
-        route = payload.get("route") or state.get("route") or "buy_exit_panel"
-
-        active_trade = self._cvd_automation_positions.get(token)
-        if active_trade:
-            active_side = active_trade.get("signal_side")
-            last_signal_time = active_trade.get("signal_timestamp")
-
-            # Parse signal timestamp
-            if last_signal_time:
-                try:
-                    last_time = datetime.fromisoformat(last_signal_time)
-                    current_time = datetime.fromisoformat(payload.get("timestamp"))
-                    time_diff_minutes = (current_time - last_time).total_seconds() / 60
-                except (ValueError, TypeError):
-                    time_diff_minutes = 0
-            else:
-                time_diff_minutes = 0
-
-            # Same direction trade
-            if active_side == signal_side:
-                # Allow stacking if 15+ minutes have passed
-                if time_diff_minutes < 15:
-                    logger.info(
-                        "[AUTO] Skipping same-side signal (%.1f mins since last). Need 15+ mins for stacking.",
-                        time_diff_minutes
-                    )
-                    return
-                else:
-                    logger.info(
-                        "[AUTO] Allowing stacking: same side after %.1f mins (15+ allowed)",
-                        time_diff_minutes
-                    )
-            # Opposite direction trade - reverse only on stronger strategy signal
-            else:
-                active_strategy = active_trade.get("strategy_type") or "atr_reversal"
-                incoming_signal_type = payload.get("signal_type") or state.get("signal_filter") or "atr_reversal"
-                if incoming_signal_type in {"ema_cvd_cross", "ema_cross"}:
-                    incoming_strategy = "ema_cross"
-                elif incoming_signal_type == "atr_divergence":
-                    incoming_strategy = "atr_divergence"
-                elif incoming_signal_type == "range_breakout":
-                    incoming_strategy = "range_breakout"
-                else:
-                    incoming_strategy = "atr_reversal"
-
-                strategy_priority = {
-                    "atr_reversal": 1,
-                    "atr_divergence": 2,
-                    "ema_cross": 3,
-                    "range_breakout": 4,
-                }
-                active_priority = strategy_priority.get(active_strategy, 0)
-                incoming_priority = strategy_priority.get(incoming_strategy, 0)
-
-                if incoming_priority <= active_priority:
-                    logger.info(
-                        "[AUTO] Ignoring opposite lower-priority signal for token=%s (%s/%s kept over %s/%s).",
-                        token,
-                        active_side,
-                        active_strategy,
-                        signal_side,
-                        incoming_strategy,
-                    )
-                    return
-
-                active_symbols = active_trade.get("tradingsymbols") or [active_trade.get("tradingsymbol")]
-                active_symbols = [s for s in active_symbols if s]
-                if active_symbols:
-                    logger.info(
-                        "[AUTO] Opposite higher-priority signal for token=%s (%s/%s -> %s/%s). Reversing %d position(s).",
-                        token, active_side, active_strategy, signal_side, incoming_strategy, len(active_symbols),
-                    )
-                    for sym in active_symbols:
-                        active_position = self.position_manager.get_position(sym)
-                        if active_position:
-                            self._exit_position_automated(active_position, reason="AUTO_REVERSE")
-                if self._cvd_automation_positions.pop(token, None) is not None:
-                    self._persist_cvd_automation_state()
-
-        contract = self._get_atm_contract_for_signal(signal_side)
-        if not contract:
-            logger.warning("[AUTO] ATM contract unavailable for signal: %s", signal_side)
-            return
-
-        lots = max(1, int(self.header.lot_size_spin.value()))
-        quantity = max(1, int(contract.lot_size) * lots)
-        stoploss_points = float(payload.get("stoploss_points") or state.get("stoploss_points") or 50.0)
-        max_profit_giveback_points = float(
-            payload.get("max_profit_giveback_points")
-            or state.get("max_profit_giveback_points")
-            or 0.0
-        )
-        max_profit_giveback_strategies = (
-            payload.get("max_profit_giveback_strategies")
-            or state.get("max_profit_giveback_strategies")
-            or ["atr_reversal", "ema_cross", "atr_divergence", "range_breakout"]
-        )
-        if not isinstance(max_profit_giveback_strategies, (list, tuple, set)):
-            max_profit_giveback_strategies = ["atr_reversal", "ema_cross", "atr_divergence", "range_breakout"]
-        atr_trailing_step_points = 10.0
-        entry_price = float(contract.ltp or 0.0)
-        entry_underlying = float(payload.get("price_close") or state.get("price_close") or 0.0)
-        signal_type = payload.get("signal_type") or state.get("signal_filter")
-        if signal_type == "ema_cross":
-            strategy_type = "ema_cross"
-        elif signal_type == "atr_divergence":
-            strategy_type = "atr_divergence"
-        elif signal_type == "range_breakout":
-            strategy_type = "range_breakout"
-        else:
-            strategy_type = "atr_reversal"
-        if entry_price <= 0:
-            logger.warning("[AUTO] Invalid LTP for %s, skipping entry.", contract.tradingsymbol)
-            return
-        if entry_underlying <= 0:
-            logger.warning("[AUTO] Invalid underlying close for %s, skipping entry.", contract.tradingsymbol)
-            return
-
-        # All auto-trader exits now use underlying-based stop-loss points from UI.
-        # Additional exit triggers are strategy-specific and handled in
-        # _on_cvd_automation_market_state.
-        sl_underlying = (
-            entry_underlying - stoploss_points
-            if signal_side == "long"
-            else entry_underlying + stoploss_points
-        )
-
-        order_params = {
-            "contract": contract,
-            "quantity": quantity,
-            "order_type": self.trader.ORDER_TYPE_MARKET,
-            "product": self.settings.get('default_product', self.trader.PRODUCT_MIS),
-            "transaction_type": self.trader.TRANSACTION_TYPE_BUY,
-            "stop_loss_price": None,
-            "target_price": None,
-            "group_name": f"CVD_AUTO_{token}",
-            "auto_token": token,
-        }
-
-        tracked_tradingsymbol = contract.tradingsymbol
-        all_tradingsymbols = [contract.tradingsymbol]  # default: single ATM; overwritten for buy_exit_panel
-        order_details = None
-
-        if route == "buy_exit_panel" and self.buy_exit_panel and self.strike_ladder:
-            desired_option_type = OptionType.CALL if signal_side == "long" else OptionType.PUT
-            if self.buy_exit_panel.option_type != desired_option_type:
-                self.buy_exit_panel.option_type = desired_option_type
-                self.buy_exit_panel._update_ui_for_option_type()
-
-            # For automation via buy_exit_panel: use panel's CURRENT settings
-            # DO NOT override above/below - respect what user has configured
-            # Panel will select strikes based on its own logic (radio buttons, above/below settings)
-
-            # Build order details directly from the panel with its current settings
-            order_details = self.buy_exit_panel.build_order_details()
-            # store ALL strike tradingsymbols
-            if order_details and order_details.get('strikes'):
-                all_tradingsymbols = [
-                    s['contract'].tradingsymbol
-                    for s in order_details['strikes']
-                    if s.get('contract') and getattr(s['contract'], 'tradingsymbol', None)
-                ]
-                if all_tradingsymbols:
-                    tracked_tradingsymbol = all_tradingsymbols[0]  # keep for backward compat
-
-        # Register the position BEFORE calling execute so that if the signal fires
-        # again within the async 500ms confirmation window we don't double-enter.
-        self._cvd_automation_positions[token] = {
-            "tradingsymbol": tracked_tradingsymbol,
-            "tradingsymbols": all_tradingsymbols if route == "buy_exit_panel" else [tracked_tradingsymbol],
-            "signal_side": signal_side,
-            "route": route,
-            "signal_timestamp": payload.get("timestamp"),  # Track when signal was generated
-            "strategy_type": strategy_type,
-            "stoploss_points": stoploss_points,
-            "max_profit_giveback_points": max_profit_giveback_points,
-            "max_profit_giveback_strategies": list(max_profit_giveback_strategies),
-            "atr_trailing_step_points": atr_trailing_step_points,
-            "entry_underlying": entry_underlying,
-            "max_favorable_points": 0.0,
-            "sl_underlying": sl_underlying,
-            "last_price_close": entry_underlying,
-            "last_ema10": state.get("ema10"),
-            "last_ema51": state.get("ema51"),
-            "last_cvd_close": state.get("cvd_close"),
-            "last_cvd_ema10": state.get("cvd_ema10"),
-            "last_cvd_ema51": state.get("cvd_ema51"),
-            "quantity": quantity,
-            "product": self.settings.get('default_product', self.trader.PRODUCT_MIS),
-            "transaction_type": self.trader.TRANSACTION_TYPE_BUY,
-            "group_name": f"CVD_AUTO_{token}",
-        }
-        self._persist_cvd_automation_state()
-
-        if dialog and hasattr(dialog, "_set_live_trade_state"):
-            dialog._set_live_trade_state("entered", self._cvd_automation_positions[token])
-
-        if route == "buy_exit_panel" and self.buy_exit_panel and self.strike_ladder:
-            if order_details and order_details.get('strikes'):
-                # Execute orders directly without showing confirmation dialog
-                symbol = order_details.get('symbol')
-                if symbol and symbol in self.instrument_data:
-                    instrument_lot_quantity = self.instrument_data[symbol].get('lot_size', 1)
-                    num_lots = order_details.get('lot_size', 1)
-                    order_details['total_quantity_per_strike'] = num_lots * instrument_lot_quantity
-                    order_details['product'] = self.settings.get('default_product', 'MIS')
-                    self._execute_orders(order_details)
-                    logger.info("[AUTO] Executed buy_exit_panel order directly without dialog - used panel settings")
-                else:
-                    logger.warning("[AUTO] Symbol data not found for buy_exit_panel order")
-            else:
-                logger.warning("[AUTO] Failed to build order details from buy_exit_panel")
-        else:
-            # Direct route: execute single strike order directly
-            self._execute_single_strike_order(order_params)
-
-        entry_signal_ts = payload.get("timestamp")
-        QTimer.singleShot(
-            2000,
-            lambda t=token, s=tracked_tradingsymbol, ts=entry_signal_ts: self._reconcile_failed_auto_entry(t, s, ts),
-        )
-
-        logger.info(
-            "[AUTO] Entered %s via %s | strategy=%s route=%s qty=%s underlying_sl=%s",
-            contract.tradingsymbol,
-            signal_side,
-            strategy_type,
-            route,
-            quantity,
-            f"{sl_underlying:.2f}" if sl_underlying is not None else "N/A",
-        )
+        self.cvd_automation_coordinator.handle_signal(payload)
 
     def _on_cvd_automation_market_state(self, payload: dict):
-        token = payload.get("instrument_token")
-        if token is None:
-            return
-
-        self._cvd_automation_market_state[token] = payload
-
-        if self._is_cvd_auto_cutoff_reached():
-            self._enforce_cvd_auto_cutoff_exit(reason="AUTO_3PM_CUTOFF")
-            return
-
-        active_trade = self._cvd_automation_positions.get(token)
-        if not active_trade:
-            return
-
-        # AFTER: check against all tracked symbols
-        tradingsymbols = active_trade.get("tradingsymbols") or [active_trade.get("tradingsymbol")]
-        tradingsymbols = [s for s in tradingsymbols if s]  # filter None
-
-        # Use primary symbol for pending-order check / cleanup logic
-        tradingsymbol = tradingsymbols[0] if tradingsymbols else None
-        positions = [self.position_manager.get_position(s) for s in tradingsymbols]
-        positions = [p for p in positions if p]
-
-        if not positions:
-            if tradingsymbol and self._has_pending_order_for_symbol(tradingsymbol):
-                self._start_cvd_pending_retry(token)
-                return
-            self._stop_cvd_pending_retry(token)
-            if self._cvd_automation_positions.pop(token, None) is not None:
-                self._persist_cvd_automation_state()
-                dialog = self.cvd_single_chart_dialogs.get(token)
-                if dialog and hasattr(dialog, "_set_live_trade_state"):
-                    dialog._set_live_trade_state("idle")
-            return
-
-        self._stop_cvd_pending_retry(token)
-        position = positions[0]  # use first for SL/ema check logic (underlying-based, same for all)
-
-        def _to_finite_float(value, default=0.0):
-            try:
-                parsed = float(value)
-            except (TypeError, ValueError):
-                return None if default is None else float(default)
-            return parsed if math.isfinite(parsed) else (None if default is None else float(default))
-
-        price_close = _to_finite_float(payload.get("price_close"), 0.0)
-        ema10 = _to_finite_float(payload.get("ema10"), 0.0)
-        cvd_ema10 = _to_finite_float(payload.get("cvd_ema10"), 0.0)
-        ema51 = _to_finite_float(payload.get("ema51"), 0.0)
-        cvd_close = _to_finite_float(payload.get("cvd_close"), 0.0)
-        cvd_ema51 = _to_finite_float(payload.get("cvd_ema51"), 0.0)
-        if price_close <= 0:
-            return
-
-        signal_side = active_trade.get("signal_side")
-        strategy_type = active_trade.get("strategy_type") or "atr_reversal"
-        stoploss_points = _to_finite_float(active_trade.get("stoploss_points"), 0.0)
-        max_profit_giveback_points = _to_finite_float(active_trade.get("max_profit_giveback_points"), 0.0)
-        max_profit_giveback_strategies = active_trade.get("max_profit_giveback_strategies")
-        if not isinstance(max_profit_giveback_strategies, (list, tuple, set)):
-            max_profit_giveback_strategies = ["atr_reversal", "ema_cross", "atr_divergence", "range_breakout"]
-        max_profit_giveback_strategies = set(max_profit_giveback_strategies)
-        atr_trailing_step_points = _to_finite_float(active_trade.get("atr_trailing_step_points"), 10.0)
-        entry_underlying = _to_finite_float(active_trade.get("entry_underlying"), 0.0)
-        max_favorable_points = _to_finite_float(active_trade.get("max_favorable_points"), 0.0)
-        sl_underlying = active_trade.get("sl_underlying")
-        if sl_underlying is not None:
-            sl_underlying = _to_finite_float(sl_underlying, None)
-        hit_stop = False
-        favorable_move = 0.0
-
-        if entry_underlying > 0:
-            favorable_move = (
-                price_close - entry_underlying
-                if signal_side == "long"
-                else entry_underlying - price_close
-            )
-            if not math.isfinite(favorable_move):
-                favorable_move = 0.0
-
-            max_favorable_points = max(max_favorable_points or 0.0, favorable_move)
-            active_trade["max_favorable_points"] = max_favorable_points
-
-        # Strategy-specific trailing logic based on favorable underlying movement.
-        if stoploss_points > 0 and entry_underlying > 0:
-            trail_offset = 0.0
-            if strategy_type == "atr_reversal" and atr_trailing_step_points > 0:
-                trail_steps = int(max(0.0, favorable_move) // atr_trailing_step_points)
-                if trail_steps > 0:
-                    trail_offset = trail_steps * atr_trailing_step_points
-            elif strategy_type in {"ema_cross", "range_breakout"}:
-                initial_trigger_points = 200.0
-                incremental_trigger_points = 100.0
-                trail_step_points = 100.0
-                if favorable_move >= initial_trigger_points:
-                    trail_steps = 1 + int(
-                        (favorable_move - initial_trigger_points) // incremental_trigger_points
-                    )
-                    trail_offset = trail_steps * trail_step_points
-
-            if trail_offset > 0:
-                new_sl_underlying = (
-                    entry_underlying - stoploss_points + trail_offset
-                    if signal_side == "long"
-                    else entry_underlying + stoploss_points - trail_offset
-                )
-                if sl_underlying is None:
-                    sl_underlying = new_sl_underlying
-                elif signal_side == "long":
-                    sl_underlying = max(float(sl_underlying), new_sl_underlying)
-                else:
-                    sl_underlying = min(float(sl_underlying), new_sl_underlying)
-                active_trade["sl_underlying"] = sl_underlying
-
-        if sl_underlying is not None:
-            if signal_side == "long":
-                hit_stop = price_close <= float(sl_underlying)
-            else:
-                hit_stop = price_close >= float(sl_underlying)
-
-        prev_price = active_trade.get("last_price_close")
-        prev_ema10 = active_trade.get("last_ema10")
-        prev_ema51 = active_trade.get("last_ema51")
-        prev_cvd = active_trade.get("last_cvd_close")
-        prev_cvd_ema10 = active_trade.get("last_cvd_ema10")
-        prev_cvd_ema51 = active_trade.get("last_cvd_ema51")
-
-        has_price_ema51 = all(v is not None for v in (prev_price, prev_ema51)) and ema51 > 0
-        has_price_ema10 = all(v is not None for v in (prev_price, prev_ema10)) and ema10 > 0
-        has_cvd_ema10 = all(v is not None for v in (prev_cvd, prev_cvd_ema10)) and cvd_ema10 != 0
-        has_cvd_ema51 = all(v is not None for v in (prev_cvd, prev_cvd_ema51)) and cvd_ema51 != 0
-
-        price_cross_above_ema51 = (
-                has_price_ema51 and prev_price <= prev_ema51 and price_close > ema51
-        )
-        price_cross_below_ema51 = (
-                has_price_ema51 and prev_price >= prev_ema51 and price_close < ema51
-        )
-        price_cross_above_ema10 = (
-                has_price_ema10 and prev_price <= prev_ema10 and price_close > ema10
-        )
-        price_cross_below_ema10 = (
-                has_price_ema10 and prev_price >= prev_ema10 and price_close < ema10
-        )
-        cvd_cross_above_ema10 = (
-                has_cvd_ema10 and prev_cvd <= prev_cvd_ema10 and cvd_close > cvd_ema10
-        )
-        cvd_cross_below_ema10 = (
-                has_cvd_ema10 and prev_cvd >= prev_cvd_ema10 and cvd_close < cvd_ema10
-        )
-        cvd_cross_above_ema51 = (
-                has_cvd_ema51 and prev_cvd <= prev_cvd_ema51 and cvd_close > cvd_ema51
-        )
-        cvd_cross_below_ema51 = (
-                has_cvd_ema51 and prev_cvd >= prev_cvd_ema51 and cvd_close < cvd_ema51
-        )
-
-        exit_reason = None
-        if hit_stop:
-            exit_reason = "AUTO_SL"
-        elif (
-            strategy_type in max_profit_giveback_strategies
-            and max_profit_giveback_points > 0
-            and max_favorable_points is not None
-            and max_favorable_points > 0
-        ):
-            giveback_points = max_favorable_points - favorable_move
-            if giveback_points >= max_profit_giveback_points:
-                exit_reason = "AUTO_MAX_PROFIT_GIVEBACK"
-        elif strategy_type == "ema_cross":
-            if signal_side == "long" and cvd_cross_below_ema10:
-                exit_reason = "AUTO_EMA10_CROSS"
-            elif signal_side == "short" and cvd_cross_above_ema10:
-                exit_reason = "AUTO_EMA10_CROSS"
-        elif strategy_type == "atr_divergence":
-            if signal_side == "long" and price_cross_above_ema51:
-                exit_reason = "AUTO_EMA51_CROSS"
-            elif signal_side == "short" and price_cross_below_ema51:
-                exit_reason = "AUTO_EMA51_CROSS"
-        elif strategy_type == "range_breakout":
-            if signal_side == "long" and (price_cross_below_ema10 or price_cross_below_ema51):
-                exit_reason = "AUTO_BREAKOUT_EXIT"
-            elif signal_side == "short" and (price_cross_above_ema10 or price_cross_above_ema51):
-                exit_reason = "AUTO_BREAKOUT_EXIT"
-        else:  # atr_reversal
-            if signal_side == "long" and (price_cross_above_ema51 or cvd_cross_above_ema51):
-                exit_reason = "AUTO_ATR_REVERSAL_EXIT"
-            elif signal_side == "short" and (price_cross_below_ema51 or cvd_cross_below_ema51):
-                exit_reason = "AUTO_ATR_REVERSAL_EXIT"
-
-        if exit_reason:
-            for pos in positions:
-                self._exit_position_automated(pos, reason=exit_reason)
-            if self._cvd_automation_positions.pop(token, None) is not None:
-                self._persist_cvd_automation_state()
-                dialog = self.cvd_single_chart_dialogs.get(token)
-                if dialog and hasattr(dialog, "_set_live_trade_state"):
-                    pnl_points = 0.0
-                    entry = active_trade.get("entry_underlying")
-                    if entry is not None:
-                        try:
-                            entry_v = float(entry)
-                            exit_v = float(price_close)
-                            pnl_points = (exit_v - entry_v) if signal_side == "long" else (entry_v - exit_v)
-                        except (TypeError, ValueError):
-                            pnl_points = 0.0
-                    dialog._set_live_trade_state("closed", {"points": pnl_points})
-            return
-
-        active_trade["last_price_close"] = price_close
-        active_trade["last_ema10"] = ema10
-        active_trade["last_ema51"] = ema51
-        active_trade["last_cvd_close"] = cvd_close
-        active_trade["last_cvd_ema10"] = cvd_ema10
-        active_trade["last_cvd_ema51"] = cvd_ema51
+        self.cvd_automation_coordinator.handle_market_state(payload)
 
     def _is_cvd_auto_cutoff_reached(self) -> bool:
-        """Stop CVD single-chart automation entries/exits handling after 3:00 PM."""
-        return datetime.now().time() >= time(15, 0)
+        return self.cvd_automation_coordinator.is_cutoff_reached()
 
     def _enforce_cvd_auto_cutoff_exit(self, reason: str = "AUTO_3PM_CUTOFF"):
-        """Close active CVD automation positions once the 3:00 PM cutoff is reached."""
-        if not self._cvd_automation_positions:
-            return
-
-        closed_tokens = []
-        for token, active_trade in list(self._cvd_automation_positions.items()):
-            tradingsymbols = active_trade.get("tradingsymbols") or [active_trade.get("tradingsymbol")]
-            tradingsymbols = [s for s in tradingsymbols if s]
-            if not tradingsymbols:
-                closed_tokens.append(token)
-                continue
-
-            for sym in tradingsymbols:
-                position = self.position_manager.get_position(sym)
-                if position:
-                    self._exit_position_automated(position, reason=reason)
-            closed_tokens.append(token)
-
-        for token in closed_tokens:
-            self._stop_cvd_pending_retry(token)
-            self._cvd_automation_positions.pop(token, None)
-        if closed_tokens:
-            self._persist_cvd_automation_state()
+        self.cvd_automation_coordinator.enforce_cutoff_exit(reason=reason)
 
     def _persist_cvd_automation_state(self):
-        """Persist active auto-managed trades so exits survive reconnect/restart."""
-        try:
-            self._cvd_automation_state_file.parent.mkdir(parents=True, exist_ok=True)
-            payload = {
-                "saved_at": datetime.now().isoformat(),
-                "trading_mode": self.trading_mode,
-                "positions": {
-                    str(token): trade
-                    for token, trade in self._cvd_automation_positions.items()
-                    if isinstance(trade, dict) and trade.get("tradingsymbol")
-                },
-            }
-            self._cvd_automation_state_file.write_text(
-                json.dumps(payload, indent=2),
-                encoding="utf-8",
-            )
-        except Exception as exc:
-            logger.error("[AUTO] Failed to persist CVD automation state: %s", exc, exc_info=True)
+        self.cvd_automation_coordinator.persist_state()
 
     def _load_cvd_automation_state(self):
-        """Restore active auto-managed trades from disk on app startup."""
-        if not self._cvd_automation_state_file.exists():
-            return
-
-        try:
-            payload = json.loads(self._cvd_automation_state_file.read_text(encoding="utf-8"))
-            persisted_positions = payload.get("positions", {})
-            restored = 0
-
-            if isinstance(persisted_positions, dict):
-                for token_raw, trade in persisted_positions.items():
-                    if not isinstance(trade, dict):
-                        continue
-                    tradingsymbol = str(trade.get("tradingsymbol") or "").strip()
-                    if not tradingsymbol:
-                        continue
-                    try:
-                        token = int(token_raw)
-                    except (TypeError, ValueError):
-                        continue
-                    self._cvd_automation_positions[token] = trade
-                    restored += 1
-
-            if restored:
-                logger.info("[AUTO] Restored %s persisted CVD automation position(s).", restored)
-        except Exception as exc:
-            logger.error("[AUTO] Failed to load CVD automation state: %s", exc, exc_info=True)
+        self.cvd_automation_coordinator.load_state()
 
     def _reconcile_failed_auto_entry(self, token: int, tradingsymbol: str, signal_timestamp: str | None):
-        """Drop pre-registered automation entries when broker/order placement never opened a position."""
-        active_trade = self._cvd_automation_positions.get(token)
-        if not active_trade:
-            return
-
-        if signal_timestamp and active_trade.get("signal_timestamp") != signal_timestamp:
-            return
-
-        tracked_symbol = tradingsymbol or active_trade.get("tradingsymbol")
-        if tracked_symbol and self.position_manager.get_position(tracked_symbol):
-            return
-
-        if tracked_symbol and self._has_pending_order_for_symbol(tracked_symbol):
-            self._start_cvd_pending_retry(token)
-            return
-
-        self._cvd_automation_positions.pop(token, None)
-        self._stop_cvd_pending_retry(token)
-        self._persist_cvd_automation_state()
-        logger.warning(
-            "[AUTO] Cleared stale pre-registered automation entry token=%s symbol=%s (no filled position found).",
-            token,
-            tracked_symbol,
-        )
+        self.cvd_automation_coordinator.reconcile_failed_entry(token, tradingsymbol, signal_timestamp)
 
     def _reconcile_cvd_automation_positions(self):
-        """Drop persisted automation ownership for positions that are already closed."""
-        if not self._cvd_automation_positions:
-            return
-
-        removed_tokens = []
-        for token, active_trade in list(self._cvd_automation_positions.items()):
-            tradingsymbol = active_trade.get("tradingsymbol") if isinstance(active_trade, dict) else None
-            if not tradingsymbol:
-                removed_tokens.append(token)
-                continue
-
-            if self.position_manager.get_position(tradingsymbol):
-                continue
-
-            if self._has_pending_order_for_symbol(tradingsymbol):
-                self._start_cvd_pending_retry(token)
-                continue
-
-            removed_tokens.append(token)
-
-        for token in removed_tokens:
-            self._stop_cvd_pending_retry(token)
-            self._cvd_automation_positions.pop(token, None)
-
-        if removed_tokens:
-            logger.info(
-                "[AUTO] Cleared %s stale persisted CVD automation position(s).",
-                len(removed_tokens),
-            )
-            self._persist_cvd_automation_state()
+        self.cvd_automation_coordinator.reconcile_positions()
 
     def _get_atm_contract_for_signal(self, signal_side: str) -> Optional[Contract]:
-        if not self.strike_ladder or self.strike_ladder.atm_strike is None:
-            return None
-        ladder_row = self.strike_ladder.contracts.get(self.strike_ladder.atm_strike, {})
-        option_key = "CE" if signal_side == "long" else "PE"
-        return ladder_row.get(option_key)
+        return self.cvd_automation_coordinator.get_atm_contract_for_signal(signal_side)
 
     def _exit_position_automated(self, position: Position, reason: str = "AUTO"):
-        try:
-            transaction_type = (
-                self.trader.TRANSACTION_TYPE_SELL
-                if position.quantity > 0
-                else self.trader.TRANSACTION_TYPE_BUY
-            )
-            self.trader.place_order(
-                variety=self.trader.VARIETY_REGULAR,
-                exchange=position.exchange,
-                tradingsymbol=position.tradingsymbol,
-                transaction_type=transaction_type,
-                quantity=abs(position.quantity),
-                product=position.product,
-                order_type=self.trader.ORDER_TYPE_MARKET,
-            )
-            logger.info("[AUTO] Exit placed for %s (%s)", position.tradingsymbol, reason)
-            self._refresh_positions()
-        except Exception as e:
-            logger.error("[AUTO] Failed automated exit for %s: %s", position.tradingsymbol, e, exc_info=True)
+        self.cvd_automation_coordinator.exit_position_automated(position, reason=reason)
 
     def _update_cvd_chart_symbol(self, symbol: str, cvd_token: int, suffix: str = ""):
         self.subscription_policy.update_cvd_chart_symbol(symbol, cvd_token, suffix)

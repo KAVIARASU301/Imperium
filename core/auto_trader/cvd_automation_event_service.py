@@ -10,7 +10,7 @@ from PySide6.QtCore import QObject, QTimer, Signal
 logger = logging.getLogger(__name__)
 
 
-class CvdAutomationService(QObject):
+class CvdAutomationEventService(QObject):
     """Background coordinator for CVD automation events/state.
 
     Dialogs push raw automation events here. The service journals inbound events,
@@ -121,3 +121,7 @@ class CvdAutomationService(QObject):
                 fp.write("\n")
         except Exception as exc:
             logger.error("[AUTO-SVC] Failed to append event journal: %s", exc, exc_info=True)
+
+
+# Backward-compatible alias
+CvdAutomationService = CvdAutomationEventService
