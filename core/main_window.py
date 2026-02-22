@@ -2296,7 +2296,7 @@ class ImperiumMainWindow(QMainWindow):
 
             # Play sound
             sound_effect = QSoundEffect(self)
-            filename = "success.wav" if success else "fail.wav"
+            filename = "Pop.wav" if success else "fail.wav"
             base_path = os.path.dirname(os.path.abspath(__file__))
             assets_dir = os.path.join(base_path, "..", "assets")
             if not os.path.exists(assets_dir):
