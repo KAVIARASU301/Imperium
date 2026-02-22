@@ -424,6 +424,27 @@ class SignalRendererMixin:
         short_mask = short_mask[:length]
         long_mask = long_mask[:length]
 
+        strategy_masks = {
+            "short": {
+                "atr_reversal": short_atr_reversal[:length],
+                "atr_divergence": short_divergence[:length],
+                "ema_cross": short_ema_cross[:length],
+                "range_breakout": short_breakout[:length],
+            },
+            "long": {
+                "atr_reversal": long_atr_reversal[:length],
+                "atr_divergence": long_divergence[:length],
+                "ema_cross": long_ema_cross[:length],
+                "range_breakout": long_breakout[:length],
+            },
+        }
+
+        # Keep the latest plotted masks available for simulator replay.
+        self._latest_sim_x_arr = x_arr
+        self._latest_sim_short_mask = short_mask
+        self._latest_sim_long_mask = long_mask
+        self._latest_sim_strategy_masks = strategy_masks
+
         # ───────────────────────── DRAW LINES ─────────────────────────
         new_keys = set()
 
@@ -468,7 +489,7 @@ class SignalRendererMixin:
             idx=closed_idx,
             short_mask=short_mask,
             long_mask=long_mask,
-            strategy_masks=None,
+            strategy_masks=strategy_masks,
         )
 
         if side is None or strategy_type is None:
