@@ -35,12 +35,21 @@ class SignalGovernance:
         self._health_by_strategy = {name: deque(maxlen=80) for name in self.STRATEGIES}
         self._bar_counter = 0
 
-        self.strategy_weights = {
+        self._base_strategy_weights = {
             "atr_reversal": 0.24,
             "atr_divergence": 0.20,
             "ema_cross": 0.26,
             "range_breakout": 0.30,
         }
+        self.strategy_weights = dict(self._base_strategy_weights)
+        self._weight_posterior = {
+            name: [1.0 + (base_weight * 4.0), 1.0 + ((1.0 - base_weight) * 4.0)]
+            for name, base_weight in self._base_strategy_weights.items()
+        }
+        self._edge_ema_by_strategy = {name: 0.0 for name in self.STRATEGIES}
+        self._weight_learning_rate = 0.18
+        self._weight_decay = 0.985
+        self._edge_ema_alpha = 0.12
         self.regime_strategy_matrix = {
             "trend": {"atr_reversal": True, "atr_divergence": True, "ema_cross": True, "range_breakout": True},
             "chop": {"atr_reversal": True, "atr_divergence": False, "ema_cross": False, "range_breakout": False},
@@ -123,6 +132,52 @@ class SignalGovernance:
             return
         self._health_by_strategy[strategy].append(float(signed_return))
 
+    def _update_online_strategy_weights(self, realized_edge: dict[str, np.ndarray], closed_idx: int) -> None:
+        raw_weights: dict[str, float] = {}
+        edge_scale = 0.003
+
+        for strategy in self.STRATEGIES:
+            alpha, beta = self._weight_posterior[strategy]
+            alpha = 1.0 + (alpha - 1.0) * self._weight_decay
+            beta = 1.0 + (beta - 1.0) * self._weight_decay
+
+            strategy_edge = realized_edge.get(strategy)
+            if strategy_edge is not None and closed_idx < len(strategy_edge):
+                edge = float(strategy_edge[closed_idx])
+                if not np.isnan(edge):
+                    success = 1.0 if edge > 0.0 else 0.0
+                    alpha += success
+                    beta += 1.0 - success
+
+                    prev_ema = self._edge_ema_by_strategy[strategy]
+                    self._edge_ema_by_strategy[strategy] = (
+                        (1.0 - self._edge_ema_alpha) * prev_ema
+                        + self._edge_ema_alpha * edge
+                    )
+
+            self._weight_posterior[strategy] = [alpha, beta]
+            posterior_win_rate = alpha / max(alpha + beta, 1e-9)
+            edge_ema = self._edge_ema_by_strategy[strategy]
+            edge_score = float(np.clip((edge_ema + edge_scale) / (2.0 * edge_scale), 0.0, 1.0))
+            combined_score = 0.55 * posterior_win_rate + 0.45 * edge_score
+            raw_weights[strategy] = self._base_strategy_weights[strategy] * max(0.05, combined_score)
+
+        raw_sum = sum(raw_weights.values())
+        if raw_sum <= 0.0:
+            return
+
+        normalized_weights = {
+            strategy: raw_weights[strategy] / raw_sum
+            for strategy in self.STRATEGIES
+        }
+        for strategy in self.STRATEGIES:
+            current = self.strategy_weights[strategy]
+            target = normalized_weights[strategy]
+            self.strategy_weights[strategy] = (
+                (1.0 - self._weight_learning_rate) * current
+                + self._weight_learning_rate * target
+            )
+
     def _health_score(self, strategy: str) -> float:
         history = self._health_by_strategy.get(strategy)
         if not history:
@@ -156,6 +211,9 @@ class SignalGovernance:
         if not enabled:
             reasons.append(f"regime_block:{regime}")
 
+        realized_edge = self._build_realized_edge_series(strategy_masks, price_close)
+        self._update_online_strategy_weights(realized_edge, closed_idx)
+
         agreement_score = 0.0
         total_weight = 0.0
         for name, weight in self.strategy_weights.items():
@@ -178,7 +236,6 @@ class SignalGovernance:
         if drift_score > 0.7:
             reasons.append("feature_drift_high")
 
-        realized_edge = self._build_realized_edge_series(strategy_masks, price_close)
         stability = self._walk_forward_stability(realized_edge).get(strategy_type, 0.5)
         if stability < 0.35:
             reasons.append("parameter_stability_low")
