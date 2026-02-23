@@ -334,6 +334,8 @@ class StrategySignalDetector:
         window_bars = max(1, int(round(self.timeframe_minutes)))
 
         fired_dates: set = set()
+        session_dates_seen: set = set()
+        session_dates_evaluated: set = set()
 
         for idx in range(length):
             ts = timestamps[idx]
@@ -345,12 +347,16 @@ class StrategySignalDetector:
             except Exception:
                 continue
 
+            session_dates_seen.add(session_date)
+
             if session_date in fired_dates:
                 continue
 
             # ── FIX 2: exact-time window, not "at or after" ──
             if not (trigger_minutes <= candle_minutes < trigger_minutes + window_bars):
                 continue
+
+            session_dates_evaluated.add(session_date)
 
             price = float(price_data[idx])
             ema10 = float(price_ema10[idx])
@@ -362,6 +368,19 @@ class StrategySignalDetector:
             if not np.isfinite([price, ema10, ema51, vwap, cvd, cvd_fast]).all():
                 # ── FIX 3: mark fired even on NaN so we don't drift to later bars ──
                 fired_dates.add(session_date)
+                logger.info(
+                    "Open Drive @ %s %02d:%02d -> NO TRADE (invalid values). "
+                    "price=%s ema10=%s ema51=%s vwap=%s cvd=%s cvd_ema10=%s",
+                    session_date,
+                    int(trigger_hour),
+                    int(trigger_minute),
+                    price,
+                    ema10,
+                    ema51,
+                    vwap,
+                    cvd,
+                    cvd_fast,
+                )
                 continue
 
             long_cond = (price > ema10 > ema51) and (cvd > cvd_fast)
@@ -372,10 +391,57 @@ class StrategySignalDetector:
 
             if long_cond:
                 long_open_drive[idx] = True
+                logger.info(
+                    "Open Drive @ %s %02d:%02d -> LONG | price=%.2f ema10=%.2f ema51=%.2f vwap=%.2f cvd=%.2f cvd_ema10=%.2f",
+                    session_date,
+                    int(trigger_hour),
+                    int(trigger_minute),
+                    price,
+                    ema10,
+                    ema51,
+                    vwap,
+                    cvd,
+                    cvd_fast,
+                )
             elif short_cond:
                 short_open_drive[idx] = True
+                logger.info(
+                    "Open Drive @ %s %02d:%02d -> SHORT | price=%.2f ema10=%.2f ema51=%.2f vwap=%.2f cvd=%.2f cvd_ema10=%.2f",
+                    session_date,
+                    int(trigger_hour),
+                    int(trigger_minute),
+                    price,
+                    ema10,
+                    ema51,
+                    vwap,
+                    cvd,
+                    cvd_fast,
+                )
             # else: conditions didn't align at trigger time — session still marked,
             # no signal fires. Never chase later bars.
+            else:
+                logger.info(
+                    "Open Drive @ %s %02d:%02d -> NO TRADE | price=%.2f ema10=%.2f ema51=%.2f vwap=%.2f cvd=%.2f cvd_ema10=%.2f",
+                    session_date,
+                    int(trigger_hour),
+                    int(trigger_minute),
+                    price,
+                    ema10,
+                    ema51,
+                    vwap,
+                    cvd,
+                    cvd_fast,
+                )
+
+        missing_trigger_dates = sorted(session_dates_seen - session_dates_evaluated)
+        for missing_date in missing_trigger_dates:
+            logger.info(
+                "Open Drive @ %s %02d:%02d -> NO TRADE (no candle in trigger window; timeframe=%sm)",
+                missing_date,
+                int(trigger_hour),
+                int(trigger_minute),
+                int(window_bars),
+            )
 
         return short_open_drive, long_open_drive
     def detect_atr_cvd_divergence_strategy(
