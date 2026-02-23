@@ -151,6 +151,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self._cpr_wide_multiplier = 1.5
         self._cpr_lines = []
         self._cpr_labels = []
+        self._latest_previous_day_cpr: dict | None = None
 
         # 🆕 Strategy-aware chop filter defaults
         self._chop_filter_atr_reversal = True
@@ -1879,8 +1880,9 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
 
         self._fetch_thread.start()
 
-    def _on_fetch_result(self, cvd_df, price_df, prev_close):
+    def _on_fetch_result(self, cvd_df, price_df, prev_close, previous_day_cpr):
         self._is_loading = False
+        self._latest_previous_day_cpr = previous_day_cpr
         self._plot_data(cvd_df, price_df, prev_close)
 
         self._historical_loaded_once = True
@@ -2173,6 +2175,29 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
 
         focus_mode = not self.btn_focus.isChecked()
         sessions = list(dict.fromkeys(data["session"].tolist()))
+
+        # 1D mode loads only the latest session for chart clarity. In that case,
+        # use CPR computed from the previous trading day in the fetch worker.
+        if len(sessions) == 1 and self._latest_previous_day_cpr:
+            session_rows = data[data["session"] == sessions[0]]
+            if session_rows.empty:
+                return
+
+            session_start_pos = int(session_rows.index[0])
+            session_end_pos = int(session_rows.index[-1])
+            if focus_mode:
+                x_start = float(self._time_to_session_index(session_rows.iloc[0]["timestamp"]))
+                x_end = float(self._time_to_session_index(session_rows.iloc[-1]["timestamp"]))
+            else:
+                x_start = float(session_start_pos)
+                x_end = float(session_end_pos)
+
+            if x_end <= x_start:
+                x_end = x_start + 0.5
+
+            self._draw_cpr_band(self._latest_previous_day_cpr, x_start, x_end)
+            return
+
         for idx, session in enumerate(sessions):
             if idx == 0:
                 continue
@@ -2199,35 +2224,37 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
             if x_end <= x_start:
                 x_end = x_start + 0.5
 
-            x_anchor = x_start
+            self._draw_cpr_band(cpr, x_start, x_end)
 
-            levels = (("TC", cpr["tc"]), ("Pivot", cpr["pivot"]), ("BC", cpr["bc"]))
-            for level_name, y_val in levels:
-                line = pg.PlotDataItem(
-                    [x_start, x_end],
-                    [float(y_val), float(y_val)],
-                    pen=pg.mkPen("#90CAF9", width=1.2, style=Qt.DashLine),
-                )
-                line.setZValue(20)
-                self.price_plot.addItem(line)
-                self._cpr_lines.append(line)
-
-                txt = TextItem(f"{level_name}: {float(y_val):.2f}", color="#90CAF9", anchor=(0, 1))
-                txt.setPos(float(x_anchor), float(y_val))
-                txt.setZValue(21)
-                self.price_plot.addItem(txt)
-                self._cpr_labels.append(txt)
-
-            classification, color = self._classify_cpr_width(float(cpr["range_width"]))
-            class_label = TextItem(
-                f"{classification} (W={float(cpr['range_width']):.2f})",
-                color=color,
-                anchor=(0, 0),
+    def _draw_cpr_band(self, cpr: dict, x_start: float, x_end: float):
+        x_anchor = x_start
+        levels = (("TC", cpr["tc"]), ("Pivot", cpr["pivot"]), ("BC", cpr["bc"]))
+        for level_name, y_val in levels:
+            line = pg.PlotDataItem(
+                [x_start, x_end],
+                [float(y_val), float(y_val)],
+                pen=pg.mkPen("#90CAF9", width=1.2, style=Qt.DashLine),
             )
-            class_label.setPos(float(x_anchor), float(cpr["tc"]) + 0.2)
-            class_label.setZValue(22)
-            self.price_plot.addItem(class_label)
-            self._cpr_labels.append(class_label)
+            line.setZValue(20)
+            self.price_plot.addItem(line)
+            self._cpr_lines.append(line)
+
+            txt = TextItem(f"{level_name}: {float(y_val):.2f}", color="#90CAF9", anchor=(0, 1))
+            txt.setPos(float(x_anchor), float(y_val))
+            txt.setZValue(21)
+            self.price_plot.addItem(txt)
+            self._cpr_labels.append(txt)
+
+        classification, color = self._classify_cpr_width(float(cpr["range_width"]))
+        class_label = TextItem(
+            f"{classification} (W={float(cpr['range_width']):.2f})",
+            color=color,
+            anchor=(0, 0),
+        )
+        class_label.setPos(float(x_anchor), float(cpr["tc"]) + 0.2)
+        class_label.setZValue(22)
+        self.price_plot.addItem(class_label)
+        self._cpr_labels.append(class_label)
 
     def _refresh_plot_only(self):
         """Refresh chart overlays from in-memory data without reloading sessions or touching trade state."""

@@ -2,10 +2,11 @@ import pandas as pd
 from PySide6.QtCore import QObject, Signal
 
 from core.cvd.cvd_historical import CVDHistoricalBuilder
+from utils.cpr_calculator import CPRCalculator
 
 
 class _DataFetchWorker(QObject):
-    result_ready = Signal(object, object, float)
+    result_ready = Signal(object, object, float, object)
     error = Signal(str)
     finished = Signal()
 
@@ -60,6 +61,7 @@ class _DataFetchWorker(QObject):
                 return
 
             prev_close = 0.0
+            previous_day_cpr = None
             if len(sessions) >= 2:
                 prev_data = cvd_df[cvd_df["session"] == sessions[-2]]
                 if not prev_data.empty:
@@ -74,7 +76,11 @@ class _DataFetchWorker(QObject):
                 cvd_out = cvd_df[cvd_df["session"].isin(sessions[-2:])].copy()
                 price_out = df[df["session"].isin(sessions[-2:])].copy()
 
-            self.result_ready.emit(cvd_out, price_out, prev_close)
+            if len(sessions) >= 2:
+                prev_day_price = df[df["session"] == sessions[-2]]
+                previous_day_cpr = CPRCalculator.get_previous_day_cpr(prev_day_price)
+
+            self.result_ready.emit(cvd_out, price_out, prev_close, previous_day_cpr)
 
         except Exception as exc:
             self.error.emit(str(exc))
