@@ -50,8 +50,51 @@ class CvdAutomationCoordinator:
             return
 
         is_stack = bool(payload.get("is_stack"))  # stacker pyramid entry flag
+        is_stack_unwind = bool(payload.get("is_stack_unwind"))  # LIFO unwind exit
         route = payload.get("route") or state.get("route") or "buy_exit_panel"
         active_trade = self.positions.get(token)
+
+        # ── LIFO UNWIND: exit a specific stacked position ────────────────────
+        if is_stack_unwind:
+            if not active_trade:
+                logger.warning("[STACKER] Unwind signal but no active trade for token=%s", token)
+                return
+            stack_num = payload.get("stack_number", 0)
+            stack_entry_price = payload.get("stack_entry_price", 0.0)
+            # Retrieve the specific tradingsymbol for this stack slot (if tracked)
+            stacked_syms = active_trade.get("stacked_tradingsymbols", [])
+            # Try to find by stack number (1-based index)
+            target_sym = None
+            if stacked_syms and 0 < stack_num <= len(stacked_syms):
+                target_sym = stacked_syms[stack_num - 1]
+            elif stacked_syms:
+                # fallback: unwind the last tracked stack symbol
+                target_sym = stacked_syms[-1]
+
+            if target_sym:
+                position = w.position_manager.get_position(target_sym)
+                if position:
+                    self.exit_position_automated(position, reason=f"AUTO_STACK_UNWIND#{stack_num}")
+                    # Remove from tracked list
+                    try:
+                        stacked_syms.remove(target_sym)
+                    except ValueError:
+                        pass
+                    active_trade["stacked_tradingsymbols"] = stacked_syms
+                    logger.info(
+                        "[STACKER] Unwound stack #%d (%s) entry=%.2f current=%.2f",
+                        stack_num, target_sym, stack_entry_price,
+                        float(payload.get("price_close", 0)),
+                    )
+                else:
+                    logger.warning("[STACKER] Unwind target %s not found in position manager", target_sym)
+            else:
+                logger.warning(
+                    "[STACKER] No stacked symbol found for unwind #%d token=%s "
+                    "(stacked_tradingsymbols=%s)",
+                    stack_num, token, stacked_syms,
+                )
+            return  # always return — never place a new order on unwind
 
         if active_trade:
             active_side = active_trade.get("signal_side")
@@ -152,6 +195,7 @@ class CvdAutomationCoordinator:
                 "[STACKER] Placing stack order #%s: token=%s side=%s",
                 payload.get("stack_number", "?"), token, signal_side,
             )
+            placed_syms: list[str] = []
             if route == "buy_exit_panel" and w.buy_exit_panel and w.strike_ladder:
                 if order_details and order_details.get('strikes'):
                     symbol = order_details.get('symbol')
@@ -160,10 +204,19 @@ class CvdAutomationCoordinator:
                         order_details['total_quantity_per_strike'] = order_details.get('lot_size', 1) * instrument_lot_quantity
                         order_details['product'] = w.settings.get('default_product', 'MIS')
                         w._execute_orders(order_details)
+                        placed_syms = [s['contract'].tradingsymbol for s in order_details['strikes'] if s.get('contract') and getattr(s['contract'], 'tradingsymbol', None)]
                 else:
                     logger.warning("[STACKER] Failed to build order details from buy_exit_panel for stack")
             else:
                 w._execute_single_strike_order(order_params)
+                placed_syms = [contract.tradingsymbol]
+
+            # ── Track stacked symbols so unwind can exit the right position ──
+            if active_trade is not None and placed_syms:
+                stacked = active_trade.setdefault("stacked_tradingsymbols", [])
+                stacked.extend(placed_syms)
+                logger.debug("[STACKER] Tracked stack symbols: %s (total=%d)", placed_syms, len(stacked))
+
             return  # ← do NOT update positions dict for stack entries
 
         self.positions[token] = {
@@ -355,6 +408,14 @@ class CvdAutomationCoordinator:
         if exit_reason:
             for pos in positions:
                 self.exit_position_automated(pos, reason=exit_reason)
+            # Also exit any remaining stacked positions that weren't unwound yet
+            if active_trade:
+                remaining_stacked = active_trade.get("stacked_tradingsymbols", [])
+                for sym in remaining_stacked:
+                    stk_pos = w.position_manager.get_position(sym)
+                    if stk_pos:
+                        self.exit_position_automated(stk_pos, reason=f"{exit_reason}_STACK")
+                        logger.info("[STACKER] Exiting remaining stack on anchor exit: %s", sym)
             if self.positions.pop(token, None) is not None:
                 # Reset stacker state and notify the dialog
                 self._stacker_states.pop(token, None)

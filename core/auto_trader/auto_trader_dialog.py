@@ -2262,7 +2262,13 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
             x_arr_val: float,
     ):
         """
-        Checks if stacking thresholds are crossed and emits additional buy signals.
+        On each closed bar:
+          1. Check if any stacked positions should be UNWOUND (price crossed back
+             through their entry) — emit unwind exit signals LIFO.
+          2. Check if new stacks should be ADDED (price moved further in favour).
+
+        The anchor position is untouched by unwind logic — it exits only on its
+        own strategy exit signal.
         """
 
         if not getattr(self, "stacker_enabled_check", None):
@@ -2277,6 +2283,39 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         if state.signal_side != side:
             return
 
+        # ── 1. LIFO UNWIND: exit stacks whose entry price was breached ──────
+        to_unwind = state.stacks_to_unwind(current_price)
+        if to_unwind:
+            for entry in to_unwind:
+                unwind_ts = f"{closed_bar_ts}_unwind{entry.stack_number}"
+                unwind_payload = {
+                    "instrument_token": self.instrument_token,
+                    "symbol": self.symbol,
+                    "signal_side": side,
+                    "signal_type": strategy_type,
+                    "signal_x": x_arr_val,
+                    "price_close": current_price,
+                    "stoploss_points": float(self.automation_stoploss_input.value()),
+                    "route": self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL,
+                    "timestamp": unwind_ts,
+                    "is_stack_unwind": True,          # ← coordinator routes this as EXIT
+                    "stack_number": entry.stack_number,
+                    "anchor_price": state.anchor_entry_price,
+                    "stack_entry_price": entry.entry_price,
+                }
+                logger.info(
+                    "[STACKER] Unwind stack #%d: token=%s side=%s entry=%.2f current=%.2f",
+                    entry.stack_number,
+                    self.instrument_token,
+                    side,
+                    entry.entry_price,
+                    current_price,
+                )
+                QTimer.singleShot(0, lambda p=unwind_payload: self.automation_signal.emit(p))
+
+            state.remove_stacks(to_unwind)
+
+        # ── 2. STACK ADD: add new positions if price moved further in favour ─
         while state.should_add_stack(current_price):
             state.add_stack(entry_price=current_price, bar_idx=current_bar_idx)
             stack_num = len(state.stack_entries)

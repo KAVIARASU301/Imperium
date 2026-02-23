@@ -1,4 +1,5 @@
 import numpy as np
+import logging
 import pyqtgraph as pg
 from datetime import time
 from core.auto_trader.indicators import (
@@ -9,6 +10,7 @@ from core.auto_trader.indicators import (
     calculate_regime_trend_filter,
 )
 from core.auto_trader.stacker import StackerState
+logger = logging.getLogger(__name__)
 
 
 class SimulatorMixin:
@@ -168,9 +170,19 @@ class SimulatorMixin:
 
         points = results["total_points"]
         color = "#66BB6A" if points >= 0 else "#EF5350"
+        stacker_part = ""
+        if results.get("stacked_positions", 0) > 0:
+            uw = results.get("unwind_wins", 0)
+            ul = results.get("unwind_losses", 0)
+            sw = results.get("stack_exit_wins", 0)
+            sl = results.get("stack_exit_losses", 0)
+            # Unwinds = LIFO exits when market reversed through entry price (mostly losses/BE)
+            # Stack exits = stacks closed profitably with anchor signal
+            stacker_part = f" | Unwinds {uw}W/{ul}L | StackExit {sw}W/{sl}L"
         summary = (
             f"Sim: Trades {results['trades']} | Skipped {results['skipped']} | "
-            f"Wins {results['wins']} / Losses {results['losses']} | Pts {points:+.2f}"
+            f"Wins {results['wins']} / Losses {results['losses']}{stacker_part} | "
+            f"Pts {points:+.2f} (incl. stacks)"
         )
         self._set_simulator_summary_text(summary, color)
 
@@ -241,7 +253,9 @@ class SimulatorMixin:
             "skipped_x": [], "skipped_y": [], "trade_path_x": [], "trade_path_y": [],
             "skipped_line_keys": set(), "total_points": 0.0,
             "trades": 0, "wins": 0, "losses": 0, "skipped": 0,
-            "stacked_positions": 0,
+            "stacked_positions": 0, "stacked_unwinds": 0,
+            "unwind_wins": 0, "unwind_losses": 0,
+            "stack_exit_wins": 0, "stack_exit_losses": 0,
         }
 
         stacker_enabled = bool(
@@ -265,14 +279,38 @@ class SimulatorMixin:
             exit_price = float(close[idx])
             if not np.isfinite(exit_price):
                 exit_price = float(active_trade["entry_price"])
-            if sim_stacker is not None:
-                pnl = sim_stacker.compute_total_pnl(exit_price)
-            else:
-                pnl = exit_price - active_trade["entry_price"] if active_trade["signal_side"] == "long" else active_trade["entry_price"] - exit_price
-            result["total_points"] += float(pnl)
+
+            signal_side = active_trade["signal_side"]
+
+            # ── Anchor P&L (always) ──────────────────────────────────────────
+            anchor_pnl = (
+                exit_price - active_trade["entry_price"]
+                if signal_side == "long"
+                else active_trade["entry_price"] - exit_price
+            )
+
+            # ── Stack P&L: remaining stacks exit with anchor ─────────────────
+            # Track each surviving stack's win/loss individually so the summary
+            # shows "Stack exits W|L" separate from LIFO unwinds.
+            if sim_stacker is not None and sim_stacker.stack_entries:
+                for stk in sim_stacker.stack_entries:
+                    stk_pnl = (
+                        exit_price - stk.entry_price
+                        if signal_side == "long"
+                        else stk.entry_price - exit_price
+                    )
+                    result["total_points"] += float(stk_pnl)
+                    if stk_pnl > 0:
+                        result["stack_exit_wins"] += 1
+                    elif stk_pnl < 0:
+                        result["stack_exit_losses"] += 1
+                    else:
+                        result["stack_exit_losses"] += 1  # breakeven counts as loss/neutral
+
+            result["total_points"] += float(anchor_pnl)
             result["trade_path_x"].extend([float(x_arr[active_trade["entry_bar_idx"]]), float(x_arr[idx])])
             result["trade_path_y"].extend([float(active_trade["entry_price"]), exit_price])
-            if pnl > 0:
+            if anchor_pnl > 0:
                 result["wins"] += 1
                 result["exit_win_x"].append(float(x_arr[idx]))
                 result["exit_win_y"].append(exit_price)
@@ -282,6 +320,35 @@ class SimulatorMixin:
                 result["exit_loss_y"].append(exit_price)
             active_trade = None
             sim_stacker = None
+
+        def _unwind_stacks(idx: int) -> bool:
+            """
+            LIFO unwind: exit any stacked positions whose entry price has been
+            breached by current bar close. Returns True if any were unwound.
+            P&L from unwound stacks is immediately booked into result.
+            Each unwound stack is counted as unwind_wins or unwind_losses.
+            The anchor is untouched — it waits for its own exit signal.
+            """
+            nonlocal sim_stacker
+            if sim_stacker is None or not sim_stacker.stack_entries:
+                return False
+            to_unwind = sim_stacker.stacks_to_unwind(float(close[idx]))
+            if not to_unwind:
+                return False
+            exit_price = float(close[idx])
+            for entry in to_unwind:
+                stack_pnl = sim_stacker.compute_partial_pnl([entry], exit_price)
+                result["total_points"] += float(stack_pnl)
+                if stack_pnl > 0:
+                    result["unwind_wins"] += 1
+                else:
+                    result["unwind_losses"] += 1
+            sim_stacker.remove_stacks(to_unwind)
+            logger.debug(
+                "[SIM STACKER] Unwound %d stack(s) at bar %d price=%.2f",
+                len(to_unwind), idx, exit_price,
+            )
+            return True
 
         for idx in range(length):
             ts = self.all_timestamps[idx]
@@ -296,6 +363,10 @@ class SimulatorMixin:
                     continue
 
                 if sim_stacker is not None:
+                    # ── LIFO UNWIND first: if market reversed, exit breached stacks ──
+                    _unwind_stacks(idx)
+
+                    # ── Then check if we can add new stacks (favorable move) ──
                     while sim_stacker.should_add_stack(float(price_close)):
                         sim_stacker.add_stack(entry_price=float(price_close), bar_idx=idx)
                         result["stacked_positions"] += 1
