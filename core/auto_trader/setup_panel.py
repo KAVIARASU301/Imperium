@@ -681,7 +681,7 @@ class SetupPanelMixin:
         priority_layout = QVBoxLayout(priority_tab)
         priority_layout.setContentsMargins(6, 6, 6, 6)
         priority_layout.setSpacing(6)
-        priority_layout.addWidget(_note("Higher number = higher strategy priority. Auto trader uses Narrow/Neutral/Wide list based on CPR width, and Fallback when CPR is unavailable."))
+        priority_layout.addWidget(_note("Lower number = higher strategy priority (1 is highest). Auto trader uses Narrow/Neutral/Wide list based on CPR width, and Fallback when CPR is unavailable."))
 
         columns_grid = QGridLayout()
         columns_grid.setHorizontalSpacing(_COL_SPACING)

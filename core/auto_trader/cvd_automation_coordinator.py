@@ -133,8 +133,15 @@ class CvdAutomationCoordinator:
                 except Exception:
                     strategy_priority = {}
                 if not strategy_priority:
-                    strategy_priority = {"atr_reversal": 1, "atr_divergence": 2, "ema_cross": 3, "cvd_range_breakout": 4, "range_breakout": 5, "open_drive": 6}
-                if strategy_priority.get(incoming_strategy, 0) <= strategy_priority.get(active_strategy, 0):
+                    strategy_priority = {
+                        "open_drive": 1,
+                        "cvd_range_breakout": 2,
+                        "range_breakout": 3,
+                        "ema_cross": 4,
+                        "atr_divergence": 5,
+                        "atr_reversal": 6,
+                    }
+                if strategy_priority.get(incoming_strategy, 99) >= strategy_priority.get(active_strategy, 99):
                     logger.info(
                         "[AUTO] Ignoring opposite lower-priority signal for token=%s (%s list=%s kept %s/%s over %s/%s).",
                         token,
