@@ -1286,6 +1286,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
     def _on_open_drive_settings_changed(self, *_):
         self._live_stacker_state = None
         self._persist_setup_values()
+        self._load_and_plot(force=True)
 
     def _on_automation_settings_changed(self, *_):
         self._persist_setup_values()

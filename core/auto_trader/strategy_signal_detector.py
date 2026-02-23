@@ -299,12 +299,10 @@ class StrategySignalDetector:
 
         LONG:
             price > EMA10 > EMA51
-            price > VWAP
             CVD > CVD EMA10
 
         SHORT (vice versa):
             price < EMA10 < EMA51
-            price < VWAP
             CVD < CVD EMA10
         """
         length = min(
@@ -321,9 +319,6 @@ class StrategySignalDetector:
 
         for idx in range(length):
             ts = timestamps[idx]
-            with suppress(Exception):
-                if ts.hour != trigger_hour or ts.minute != trigger_minute:
-                    continue
             try:
                 session_date = ts.date()
             except Exception:
@@ -331,6 +326,15 @@ class StrategySignalDetector:
 
             if session_date in fired_dates:
                 continue
+
+            # Use first candle at/after trigger time for the session.
+            # This keeps the strategy functional on non-1m timeframes
+            # where an exact HH:MM candle may not exist (e.g., 5m candles).
+            with suppress(Exception):
+                candle_minutes = int(ts.hour) * 60 + int(ts.minute)
+                trigger_minutes = int(trigger_hour) * 60 + int(trigger_minute)
+                if candle_minutes < trigger_minutes:
+                    continue
 
             price = float(price_data[idx])
             ema10 = float(price_ema10[idx])
@@ -342,8 +346,8 @@ class StrategySignalDetector:
             if not np.isfinite([price, ema10, ema51, vwap, cvd, cvd_fast]).all():
                 continue
 
-            long_cond = (price > ema10 > ema51) and (price > vwap) and (cvd > cvd_fast)
-            short_cond = (price < ema10 < ema51) and (price < vwap) and (cvd < cvd_fast)
+            long_cond = (price > ema10 > ema51) and (cvd > cvd_fast)
+            short_cond = (price < ema10 < ema51) and (cvd < cvd_fast)
 
             if long_cond:
                 long_open_drive[idx] = True
