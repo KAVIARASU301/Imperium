@@ -262,9 +262,11 @@ class CvdAutomationCoordinator:
             "last_price_close": entry_underlying,
             "last_ema10": state.get("ema10"),
             "last_ema51": state.get("ema51"),
+            "last_ema51_simple": state.get("ema51_simple", state.get("ema51")),
             "last_cvd_close": state.get("cvd_close"),
             "last_cvd_ema10": state.get("cvd_ema10"),
             "last_cvd_ema51": state.get("cvd_ema51"),
+            "last_cvd_ema51_simple": state.get("cvd_ema51_simple", state.get("cvd_ema51")),
             "quantity": quantity,
             "product": w.settings.get('default_product', w.trader.PRODUCT_MIS),
             "transaction_type": w.trader.TRANSACTION_TYPE_BUY,
@@ -371,8 +373,10 @@ class CvdAutomationCoordinator:
         ema10 = _to_finite_float(payload.get("ema10"), 0.0)
         cvd_ema10 = _to_finite_float(payload.get("cvd_ema10"), 0.0)
         ema51 = _to_finite_float(payload.get("ema51"), 0.0)
+        ema51_simple = _to_finite_float(payload.get("ema51_simple"), ema51)
         cvd_close = _to_finite_float(payload.get("cvd_close"), 0.0)
         cvd_ema51 = _to_finite_float(payload.get("cvd_ema51"), 0.0)
+        cvd_ema51_simple = _to_finite_float(payload.get("cvd_ema51_simple"), cvd_ema51)
 
         signal_side = active_trade.get("signal_side")
         strategy_type = active_trade.get("strategy_type") or "atr_reversal"
@@ -409,7 +413,9 @@ class CvdAutomationCoordinator:
         hit_stop = (price_close <= float(sl_underlying)) if (sl_underlying is not None and signal_side == "long") else (price_close >= float(sl_underlying)) if sl_underlying is not None else False
 
         prev_price, prev_ema10, prev_ema51 = active_trade.get("last_price_close"), active_trade.get("last_ema10"), active_trade.get("last_ema51")
+        prev_ema51_simple = active_trade.get("last_ema51_simple", prev_ema51)
         prev_cvd, prev_cvd_ema10, prev_cvd_ema51 = active_trade.get("last_cvd_close"), active_trade.get("last_cvd_ema10"), active_trade.get("last_cvd_ema51")
+        prev_cvd_ema51_simple = active_trade.get("last_cvd_ema51_simple", prev_cvd_ema51)
         price_cross_above_ema51 = all(v is not None for v in (prev_price, prev_ema51)) and ema51 > 0 and prev_price <= prev_ema51 and price_close > ema51
         price_cross_below_ema51 = all(v is not None for v in (prev_price, prev_ema51)) and ema51 > 0 and prev_price >= prev_ema51 and price_close < ema51
         price_cross_above_ema10 = all(v is not None for v in (prev_price, prev_ema10)) and ema10 > 0 and prev_price <= prev_ema10 and price_close > ema10
@@ -418,6 +424,10 @@ class CvdAutomationCoordinator:
         cvd_cross_below_ema10 = all(v is not None for v in (prev_cvd, prev_cvd_ema10)) and cvd_ema10 != 0 and prev_cvd >= prev_cvd_ema10 and cvd_close < cvd_ema10
         cvd_cross_above_ema51 = all(v is not None for v in (prev_cvd, prev_cvd_ema51)) and cvd_ema51 != 0 and prev_cvd <= prev_cvd_ema51 and cvd_close > cvd_ema51
         cvd_cross_below_ema51 = all(v is not None for v in (prev_cvd, prev_cvd_ema51)) and cvd_ema51 != 0 and prev_cvd >= prev_cvd_ema51 and cvd_close < cvd_ema51
+        price_cross_above_ema51_simple = all(v is not None for v in (prev_price, prev_ema51_simple)) and ema51_simple > 0 and prev_price <= prev_ema51_simple and price_close > ema51_simple
+        price_cross_below_ema51_simple = all(v is not None for v in (prev_price, prev_ema51_simple)) and ema51_simple > 0 and prev_price >= prev_ema51_simple and price_close < ema51_simple
+        cvd_cross_above_ema51_simple = all(v is not None for v in (prev_cvd, prev_cvd_ema51_simple)) and cvd_ema51_simple != 0 and prev_cvd <= prev_cvd_ema51_simple and cvd_close > cvd_ema51_simple
+        cvd_cross_below_ema51_simple = all(v is not None for v in (prev_cvd, prev_cvd_ema51_simple)) and cvd_ema51_simple != 0 and prev_cvd >= prev_cvd_ema51_simple and cvd_close < cvd_ema51_simple
 
         use_open_drive_override = strategy_type == "open_drive" and (open_drive_max_profit_giveback_points or 0.0) > 0
         effective_giveback_points = (
@@ -444,10 +454,16 @@ class CvdAutomationCoordinator:
                 or (signal_side == "short" and (price_close > ema10 or cvd_close > cvd_ema10))
         ):
             exit_reason = "AUTO_OPEN_DRIVE_FAST_EMA_CLOSE_EXIT"
-        elif strategy_type == "atr_reversal" and ema51 > 0 and (
-                (signal_side == "long" and price_close >= ema51)
-                or (signal_side == "short" and price_close <= ema51)
+        elif strategy_type == "atr_reversal" and (
+                (signal_side == "long" and (price_cross_above_ema51_simple or cvd_cross_above_ema51_simple))
+                or (signal_side == "short" and (price_cross_below_ema51_simple or cvd_cross_below_ema51_simple))
         ):
+            logger.debug(
+                "[AUTO] ATR reversal exit via persistent EMA51 state: side=%s price=%.2f ema51=%.2f",
+                signal_side,
+                price_close,
+                ema51,
+            )
             exit_reason = "AUTO_ATR_REVERSAL_EXIT"
 
         if exit_reason:
@@ -472,9 +488,11 @@ class CvdAutomationCoordinator:
             "last_price_close": price_close,
             "last_ema10": ema10,
             "last_ema51": ema51,
+            "last_ema51_simple": ema51_simple,
             "last_cvd_close": cvd_close,
             "last_cvd_ema10": cvd_ema10,
             "last_cvd_ema51": cvd_ema51,
+            "last_cvd_ema51_simple": cvd_ema51_simple,
         })
 
     def is_cutoff_reached(self) -> bool:

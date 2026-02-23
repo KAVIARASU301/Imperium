@@ -477,7 +477,15 @@ class SimulatorMixin:
                         or (signal_side == "short" and (price_close > ema10[idx] or cvd_close[idx] > cvd_ema10[idx]))
                     )
                 else:
-                    exit_now = (signal_side == "long" and (price_cross_above_ema51 or cvd_cross_above_ema51)) or (signal_side == "short" and (price_cross_below_ema51 or cvd_cross_below_ema51))
+                    # Keep ATR reversal exit logic aligned with live coordinator:
+                    # persistent price-vs-EMA51 state check (not one-time cross event).
+                    exit_now = (
+                        ema51[idx] > 0
+                        and (
+                            (signal_side == "long" and price_close >= ema51[idx])
+                            or (signal_side == "short" and price_close <= ema51[idx])
+                        )
+                    )
 
                 if exit_now:
                     _close_trade(idx)
