@@ -1513,7 +1513,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
     def eventFilter(self, obj, event):
         if event.type() == QEvent.Type.MouseButtonPress:
             combo = self._resolve_signal_filter_combo_from_object(obj)
-            if combo is not None:
+            if combo is not None and obj is combo.lineEdit():
                 QTimer.singleShot(0, combo.showPopup)
                 return True
         return super().eventFilter(obj, event)
