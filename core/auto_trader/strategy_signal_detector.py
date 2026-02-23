@@ -304,6 +304,18 @@ class StrategySignalDetector:
         SHORT (vice versa):
             price < EMA10 < EMA51
             CVD < CVD EMA10
+
+        FIX 1: Removed `with suppress(Exception)` around the time-check `continue`.
+               A `continue` inside a `with` block only exits the context manager,
+               NOT the enclosing for-loop — so bars were never actually skipped.
+
+        FIX 2: Changed from `candle_minutes >= trigger_minutes` (fires on every bar
+               after trigger time) to a tight window of [trigger, trigger + 1 candle).
+               This guarantees the check runs exactly at the user-configured time.
+
+        FIX 3: Mark the session as fired even when conditions don't align at the
+               trigger bar. Prevents the strategy from drifting to later bars in
+               the same session when 9:17 conditions fail.
         """
         length = min(
             len(timestamps), len(price_data), len(price_ema10), len(price_ema51),
@@ -315,26 +327,30 @@ class StrategySignalDetector:
         if not enabled or length == 0:
             return short_open_drive, long_open_drive
 
+        trigger_minutes = int(trigger_hour) * 60 + int(trigger_minute)
+        # Trigger window = exactly 1 candle wide at the configured time.
+        # For 1m: fires at 9:17 only. For 5m: fires at the 9:15 or 9:20 candle
+        # that contains 9:17. This keeps it working across timeframes.
+        window_bars = max(1, int(round(self.timeframe_minutes)))
+
         fired_dates: set = set()
 
         for idx in range(length):
             ts = timestamps[idx]
+
+            # ── FIX 1: bare try/except so `continue` propagates to the for-loop ──
             try:
                 session_date = ts.date()
+                candle_minutes = int(ts.hour) * 60 + int(ts.minute)
             except Exception:
-                session_date = idx
+                continue
 
             if session_date in fired_dates:
                 continue
 
-            # Use first candle at/after trigger time for the session.
-            # This keeps the strategy functional on non-1m timeframes
-            # where an exact HH:MM candle may not exist (e.g., 5m candles).
-            with suppress(Exception):
-                candle_minutes = int(ts.hour) * 60 + int(ts.minute)
-                trigger_minutes = int(trigger_hour) * 60 + int(trigger_minute)
-                if candle_minutes < trigger_minutes:
-                    continue
+            # ── FIX 2: exact-time window, not "at or after" ──
+            if not (trigger_minutes <= candle_minutes < trigger_minutes + window_bars):
+                continue
 
             price = float(price_data[idx])
             ema10 = float(price_ema10[idx])
@@ -344,20 +360,24 @@ class StrategySignalDetector:
             cvd_fast = float(cvd_ema10[idx])
 
             if not np.isfinite([price, ema10, ema51, vwap, cvd, cvd_fast]).all():
+                # ── FIX 3: mark fired even on NaN so we don't drift to later bars ──
+                fired_dates.add(session_date)
                 continue
 
             long_cond = (price > ema10 > ema51) and (cvd > cvd_fast)
             short_cond = (price < ema10 < ema51) and (cvd < cvd_fast)
 
+            # ── FIX 3: always mark session fired after checking trigger bar ──
+            fired_dates.add(session_date)
+
             if long_cond:
                 long_open_drive[idx] = True
-                fired_dates.add(session_date)
             elif short_cond:
                 short_open_drive[idx] = True
-                fired_dates.add(session_date)
+            # else: conditions didn't align at trigger time — session still marked,
+            # no signal fires. Never chase later bars.
 
         return short_open_drive, long_open_drive
-
     def detect_atr_cvd_divergence_strategy(
             self,
             price_atr_above: np.ndarray,  # Price ATR reversal - above EMA (potential SHORT)

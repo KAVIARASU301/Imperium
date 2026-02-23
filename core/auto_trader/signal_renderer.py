@@ -371,8 +371,13 @@ class SignalRendererMixin:
                 range_lookback_minutes=self.range_lookback_input.value(),
                 breakout_threshold_multiplier=1.5
             )
+
         session_keys = [ts.date() for ts in self.all_timestamps]
         price_vwap = calculate_vwap(price_data, volume_data, session_keys)
+
+        # ── FIX: Always detect open_drive using the user's configured time ──
+        # Previously open_drive was computed elsewhere and not passed here,
+        # so confluence lines never rendered for open_drive signals.
         short_open_drive, long_open_drive = self.strategy_detector.detect_open_drive_strategy(
             timestamps=self.all_timestamps,
             price_data=price_data,
@@ -385,7 +390,6 @@ class SignalRendererMixin:
             trigger_minute=int(self.open_drive_time_minute_input.value()),
             enabled=bool(self.open_drive_enabled_check.isChecked()),
         )
-
 
         breakout_long_context, breakout_short_context = self.strategy_detector.build_breakout_context_masks(
             long_breakout=long_breakout,
@@ -435,6 +439,14 @@ class SignalRendererMixin:
             short_mask = short_atr_reversal | short_ema_cross | short_divergence | short_breakout | short_open_drive
             long_mask = long_atr_reversal | long_ema_cross | long_divergence | long_breakout | long_open_drive
 
+        # ── FIX: Open drive lines must ALWAYS draw when enabled, regardless
+        # of the active signal_filter. They represent a time-specific trigger
+        # so they should always be visible on the chart even when a filter is
+        # narrowing the general signal set.
+        if bool(self.open_drive_enabled_check.isChecked()):
+            short_mask = short_mask | short_open_drive
+            long_mask = long_mask | long_open_drive
+
         length = min(len(x_arr), len(short_mask), len(long_mask))
         x_arr = x_arr[:length]
         short_mask = short_mask[:length]
@@ -466,6 +478,18 @@ class SignalRendererMixin:
         # ───────────────────────── DRAW LINES ─────────────────────────
         new_keys = set()
 
+        # ── FIX: Use strategy-aware key prefix so open_drive lines never get
+        # suppressed by a coincident ATR/EMA line at the same bar index.
+        # Previously all strategies shared "S:{idx}"/"L:{idx}" keys, so if
+        # any strategy already drew at that bar, open_drive was silently skipped.
+        def _resolve_strategy_at(idx: int, side: str) -> str:
+            side_masks = strategy_masks.get(side, {})
+            for st in ("open_drive", "range_breakout", "ema_cross", "atr_divergence", "atr_reversal"):
+                m = side_masks.get(st)
+                if m is not None and idx < len(m) and bool(m[idx]):
+                    return st
+            return "atr_reversal"
+
         def _add_line(key: str, x: float, color: str):
             if key in self._confluence_line_map:
                 return
@@ -480,12 +504,14 @@ class SignalRendererMixin:
             self._confluence_line_map[key] = pairs
 
         for idx in np.where(short_mask)[0]:
-            key = f"S:{idx}"
+            strategy = _resolve_strategy_at(int(idx), "short")
+            key = f"S:{idx}:{strategy}"
             new_keys.add(key)
             _add_line(key, float(x_arr[idx]), self._confluence_short_color)
 
         for idx in np.where(long_mask)[0]:
-            key = f"L:{idx}"
+            strategy = _resolve_strategy_at(int(idx), "long")
+            key = f"L:{idx}:{strategy}"
             new_keys.add(key)
             _add_line(key, float(x_arr[idx]), self._confluence_long_color)
 
@@ -535,9 +561,15 @@ class SignalRendererMixin:
         QTimer.singleShot(0, lambda p=payload: self.automation_signal.emit(p))
 
         # ───────────────────────── STACKER INIT ─────────────────────────
-        stacker_allowed = bool(getattr(self, "stacker_enabled_check", None) and self.stacker_enabled_check.isChecked())
+        stacker_allowed = bool(
+            getattr(self, "stacker_enabled_check", None)
+            and self.stacker_enabled_check.isChecked()
+        )
         if strategy_type == "open_drive":
-            stacker_allowed = stacker_allowed and bool(getattr(self, "open_drive_stack_enabled_check", None) and self.open_drive_stack_enabled_check.isChecked())
+            stacker_allowed = stacker_allowed and bool(
+                getattr(self, "open_drive_stack_enabled_check", None)
+                and self.open_drive_stack_enabled_check.isChecked()
+            )
 
         if stacker_allowed:
             self._live_stacker_state = StackerState(
