@@ -150,7 +150,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self._chop_filter_atr_reversal = True
         self._chop_filter_ema_cross = True
         self._chop_filter_atr_divergence = True
-        # range_breakout is NEVER chop-filtered (hardcoded)
+        self._chop_filter_cvd_range_breakout = False
 
         # 🆕 Breakout consolidation requirement defaults
         self._breakout_min_consolidation_minutes = 0
@@ -997,6 +997,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self.chop_filter_atr_reversal_check.blockSignals(True)
         self.chop_filter_ema_cross_check.blockSignals(True)
         self.chop_filter_atr_divergence_check.blockSignals(True)
+        self.chop_filter_cvd_range_breakout_check.blockSignals(True)
         self.stacker_enabled_check.setChecked(_read_setting("stacker_enabled", False, bool))
         self.stacker_step_input.setValue(_read_setting("stacker_step_points", 20, int))
         self.stacker_max_input.setValue(_read_setting("stacker_max_stacks", 2, int))
@@ -1126,9 +1127,13 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self.chop_filter_atr_reversal_check.setChecked(_read_setting("chop_filter_atr_reversal", True, bool))
         self.chop_filter_ema_cross_check.setChecked(_read_setting("chop_filter_ema_cross", True, bool))
         self.chop_filter_atr_divergence_check.setChecked(_read_setting("chop_filter_atr_divergence", True, bool))
+        self.chop_filter_cvd_range_breakout_check.setChecked(
+            _read_setting("chop_filter_cvd_range_breakout", False, bool)
+        )
         self._chop_filter_atr_reversal = self.chop_filter_atr_reversal_check.isChecked()
         self._chop_filter_ema_cross = self.chop_filter_ema_cross_check.isChecked()
         self._chop_filter_atr_divergence = self.chop_filter_atr_divergence_check.isChecked()
+        self._chop_filter_cvd_range_breakout = self.chop_filter_cvd_range_breakout_check.isChecked()
         # 🆕 Load consolidation requirement
         self.breakout_min_consol_input.setValue(_read_setting("breakout_min_consolidation_minutes", 0, int))
         self.breakout_min_consol_adx_input.setValue(_read_setting("breakout_min_consolidation_adx", 0.0, float))
@@ -1213,6 +1218,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self.chop_filter_atr_reversal_check.blockSignals(False)
         self.chop_filter_ema_cross_check.blockSignals(False)
         self.chop_filter_atr_divergence_check.blockSignals(False)
+        self.chop_filter_cvd_range_breakout_check.blockSignals(False)
         self.open_drive_enabled_check.blockSignals(False)
         self.open_drive_time_hour_input.blockSignals(False)
         self.open_drive_time_minute_input.blockSignals(False)
