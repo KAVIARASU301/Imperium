@@ -293,6 +293,21 @@ class SetupPanelMixin:
         self.open_drive_stack_enabled_check.toggled.connect(self._on_open_drive_settings_changed)
         open_drive_form.addRow("Stack", self.open_drive_stack_enabled_check)
 
+        self.open_drive_max_profit_giveback_input = QSpinBox()
+        self.open_drive_max_profit_giveback_input.setRange(0, 5000)
+        self.open_drive_max_profit_giveback_input.setValue(0)
+        self.open_drive_max_profit_giveback_input.setSingleStep(5)
+        self.open_drive_max_profit_giveback_input.setSpecialValueText("Off")
+        self.open_drive_max_profit_giveback_input.setStyleSheet(compact_spinbox_style)
+        _set_input_w(self.open_drive_max_profit_giveback_input)
+        self.open_drive_max_profit_giveback_input.setToolTip(
+            "Open Drive-only max profit giveback in points.\n"
+            "When set (> 0), this overrides the global giveback for Open Drive trades only.\n"
+            "0 = Off"
+        )
+        self.open_drive_max_profit_giveback_input.valueChanged.connect(self._on_open_drive_settings_changed)
+        open_drive_form.addRow("OD Giveback", self.open_drive_max_profit_giveback_input)
+
         col2.addWidget(open_drive_group)
 
         # ── Chop Filter (per strategy) ────────────────────────────────────────

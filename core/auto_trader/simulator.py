@@ -234,6 +234,7 @@ class SimulatorMixin:
 
         stop_points = float(max(0.1, self.automation_stoploss_input.value()))
         max_profit_giveback_points = float(max(0.0, self.max_profit_giveback_input.value()))
+        open_drive_max_profit_giveback_points = float(max(0.0, getattr(self, "open_drive_max_profit_giveback_input", None).value() if getattr(self, "open_drive_max_profit_giveback_input", None) is not None else 0.0))
         max_profit_giveback_strategies = set(self._selected_max_giveback_strategies())
         atr_trailing_step_points = 10.0
         atr_skip_limit = int(getattr(self, "atr_skip_limit_input", None) and
@@ -448,15 +449,15 @@ class SimulatorMixin:
                 exit_now = False
                 if hit_stop:
                     exit_now = True
-                elif (
-                    active_strategy_type != "open_drive"
-                    and
-                    active_strategy_type in max_profit_giveback_strategies
-                    and max_profit_giveback_points > 0
-                    and max_favorable_points > 0
-                ):
-                    giveback_points = max_favorable_points - favorable_move
-                    exit_now = giveback_points >= max_profit_giveback_points
+                elif active_strategy_type in max_profit_giveback_strategies and max_favorable_points > 0:
+                    effective_giveback_points = (
+                        open_drive_max_profit_giveback_points
+                        if active_strategy_type == "open_drive" and open_drive_max_profit_giveback_points > 0
+                        else max_profit_giveback_points
+                    )
+                    if effective_giveback_points > 0:
+                        giveback_points = max_favorable_points - favorable_move
+                        exit_now = giveback_points >= effective_giveback_points
                 elif active_strategy_type == "ema_cross":
                     exit_now = (signal_side == "long" and cvd_cross_below_ema10) or (signal_side == "short" and cvd_cross_above_ema10)
                 elif active_strategy_type == "atr_divergence":
@@ -464,7 +465,10 @@ class SimulatorMixin:
                 elif active_strategy_type == "range_breakout":
                     exit_now = (signal_side == "long" and (price_cross_below_ema10 or price_cross_below_ema51)) or (signal_side == "short" and (price_cross_above_ema10 or price_cross_above_ema51))
                 elif active_strategy_type == "open_drive":
-                    exit_now = (signal_side == "long" and price_close < ema10[idx]) or (signal_side == "short" and price_close > ema10[idx])
+                    exit_now = (
+                        (signal_side == "long" and (price_close < ema10[idx] or cvd_close[idx] < cvd_ema10[idx]))
+                        or (signal_side == "short" and (price_close > ema10[idx] or cvd_close[idx] > cvd_ema10[idx]))
+                    )
                 else:
                     exit_now = (signal_side == "long" and (price_cross_above_ema51 or cvd_cross_above_ema51)) or (signal_side == "short" and (price_cross_below_ema51 or cvd_cross_below_ema51))
 
