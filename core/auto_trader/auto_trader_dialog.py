@@ -1285,6 +1285,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
             "chop_filter_atr_reversal": self.chop_filter_atr_reversal_check.isChecked(),
             "chop_filter_ema_cross": self.chop_filter_ema_cross_check.isChecked(),
             "chop_filter_atr_divergence": self.chop_filter_atr_divergence_check.isChecked(),
+            "chop_filter_cvd_range_breakout": self.chop_filter_cvd_range_breakout_check.isChecked(),
             # 🆕 Breakout consolidation
             "breakout_min_consolidation_minutes": int(self.breakout_min_consol_input.value()),
             "breakout_min_consolidation_adx": float(self.breakout_min_consol_adx_input.value()),
@@ -1376,6 +1377,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self._chop_filter_atr_divergence = self.chop_filter_atr_divergence_check.isChecked()
         self._breakout_min_consolidation_minutes = self.breakout_min_consol_input.value()
         self._breakout_min_consolidation_adx = float(self.breakout_min_consol_adx_input.value())
+        self._chop_filter_cvd_range_breakout = self.chop_filter_cvd_range_breakout_check.isChecked()
         self._persist_setup_values()
         if self._breakout_min_consolidation_minutes > 0 or self._breakout_min_consolidation_adx > 0:
             self._load_and_plot(force=True)

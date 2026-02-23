@@ -246,6 +246,7 @@ def is_chop_regime(
     chop_filter_atr_reversal: bool = True,
     chop_filter_ema_cross: bool = True,
     chop_filter_atr_divergence: bool = True,
+    chop_filter_cvd_range_breakout: bool = False,  # default OFF — low-ADX consolidation IS the setup
 ) -> bool:
     """
     Strategy-aware chop regime detection.
@@ -253,11 +254,21 @@ def is_chop_regime(
     Accepts pre-computed arrays so callers avoid redundant recalculation
     on every bar. Call this once per bar using cached indicator arrays.
 
-    - range_breakout: NEVER filtered — chop is its setup.
-    - ema_cross / atr_divergence / atr_reversal: filtered per toggle flags.
+    - range_breakout / open_drive  : NEVER filtered — chop is their setup.
+    - cvd_range_breakout           : exempt by default (False). Low-ADX consolidation
+                                     is the precondition for CVD breakout signals —
+                                     filtering on chop would eat the best setups.
+                                     Set chop_filter_cvd_range_breakout=True only if
+                                     you want to require a trending market first.
+    - atr_reversal / ema_cross / atr_divergence : filtered per toggle flags.
     """
     if strategy_type in {"range_breakout", "open_drive"}:
         return False
+
+    if strategy_type == "cvd_range_breakout":
+        if not chop_filter_cvd_range_breakout:
+            return False
+        # Falls through to ADX/slope check when user explicitly opts in
 
     if strategy_type == "atr_reversal" and not chop_filter_atr_reversal:
         return False

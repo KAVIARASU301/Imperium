@@ -524,6 +524,7 @@ class SimulatorMixin:
                     chop_filter_atr_reversal=getattr(self, "_chop_filter_atr_reversal", True),
                     chop_filter_ema_cross=getattr(self, "_chop_filter_ema_cross", True),
                     chop_filter_atr_divergence=getattr(self, "_chop_filter_atr_divergence", True),
+                    chop_filter_cvd_range_breakout=getattr(self, "_chop_filter_cvd_range_breakout", False),
             ):
                 result["skipped"] += 1
                 result["skipped_x"].append(float(x_arr[idx]))
