@@ -147,8 +147,8 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self._window_bg_image_path = ""
         self._chart_bg_image_path = ""
         self._show_cpr = True
-        self._cpr_narrow_threshold = 10.0
-        self._cpr_wide_multiplier = 1.5
+        self._cpr_narrow_threshold = 150.0
+        self._cpr_wide_threshold = 200.0
         self._cpr_lines = []
         self._cpr_labels = []
         self._latest_previous_day_cpr: dict | None = None
@@ -1033,7 +1033,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self.vwap_checkbox.blockSignals(True)
         self.show_cpr_check.blockSignals(True)
         self.cpr_narrow_threshold_input.blockSignals(True)
-        self.cpr_wide_multiplier_input.blockSignals(True)
+        self.cpr_wide_threshold_input.blockSignals(True)
         for cb in self.setup_ema_default_checks.values():
             cb.blockSignals(True)
 
@@ -1190,12 +1190,12 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self.cpr_narrow_threshold_input.setValue(
             _read_setting("cpr_narrow_threshold", self._cpr_narrow_threshold, float)
         )
-        self.cpr_wide_multiplier_input.setValue(
-            _read_setting("cpr_wide_multiplier", self._cpr_wide_multiplier, float)
+        self.cpr_wide_threshold_input.setValue(
+            _read_setting("cpr_wide_threshold", self._cpr_wide_threshold, float)
         )
         self._show_cpr = self.show_cpr_check.isChecked()
         self._cpr_narrow_threshold = float(self.cpr_narrow_threshold_input.value())
-        self._cpr_wide_multiplier = float(self.cpr_wide_multiplier_input.value())
+        self._cpr_wide_threshold = float(self.cpr_wide_threshold_input.value())
 
         persisted_window_bg = _read_setting("window_background_image_path", "") or ""
         persisted_chart_bg = _read_setting("chart_background_image_path", "") or ""
@@ -1265,7 +1265,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self.vwap_checkbox.blockSignals(False)
         self.show_cpr_check.blockSignals(False)
         self.cpr_narrow_threshold_input.blockSignals(False)
-        self.cpr_wide_multiplier_input.blockSignals(False)
+        self.cpr_wide_threshold_input.blockSignals(False)
         for cb in self.setup_ema_default_checks.values():
             cb.blockSignals(False)
 
@@ -1339,7 +1339,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
             "show_vwap": self.vwap_checkbox.isChecked(),
             "show_cpr": self.show_cpr_check.isChecked(),
             "cpr_narrow_threshold": float(self.cpr_narrow_threshold_input.value()),
-            "cpr_wide_multiplier": float(self.cpr_wide_multiplier_input.value()),
+            "cpr_wide_threshold": float(self.cpr_wide_threshold_input.value()),
 
         }
 
@@ -1456,7 +1456,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
     def _on_cpr_settings_changed(self, *_):
         self._show_cpr = self.show_cpr_check.isChecked()
         self._cpr_narrow_threshold = float(self.cpr_narrow_threshold_input.value())
-        self._cpr_wide_multiplier = max(1.05, float(self.cpr_wide_multiplier_input.value()))
+        self._cpr_wide_threshold = float(self.cpr_wide_threshold_input.value())
         if hasattr(self, "chart_line_width_input"):
             self._persist_setup_values()
         self._render_cpr_levels()
@@ -2153,10 +2153,10 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
 
     def _classify_cpr_width(self, width: float) -> tuple[str, str]:
         narrow = max(0.0, self._cpr_narrow_threshold)
-        wide_cutoff = narrow * max(1.05, self._cpr_wide_multiplier)
-        if width <= narrow:
+        wide_cutoff = max(0.0, self._cpr_wide_threshold)
+        if width < narrow:
             return "Narrow CPR", "#00E676"
-        if width >= wide_cutoff:
+        if width > wide_cutoff:
             return "Wide CPR", "#FF5252"
         return "Neutral CPR", "#FFD54F"
 

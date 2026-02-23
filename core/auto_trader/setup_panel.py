@@ -643,28 +643,28 @@ class SetupPanelMixin:
         self.cpr_narrow_threshold_input = QDoubleSpinBox()
         self.cpr_narrow_threshold_input.setRange(0.1, 10000.0)
         self.cpr_narrow_threshold_input.setDecimals(2)
-        self.cpr_narrow_threshold_input.setSingleStep(0.1)
-        self.cpr_narrow_threshold_input.setValue(10.0)
+        self.cpr_narrow_threshold_input.setSingleStep(1.0)
+        self.cpr_narrow_threshold_input.setValue(150.0)
         self.cpr_narrow_threshold_input.setStyleSheet(compact_spinbox_style)
         _w(self.cpr_narrow_threshold_input)
         self.cpr_narrow_threshold_input.setToolTip(
-            "If CPR width (TC - BC) is <= this value, it is marked as Narrow CPR."
+            "If CPR width (TC - BC) is < this value, it is marked as Narrow CPR."
         )
         self.cpr_narrow_threshold_input.valueChanged.connect(self._on_cpr_settings_changed)
         cpr_frm.addRow("Narrow Width", self.cpr_narrow_threshold_input)
 
-        self.cpr_wide_multiplier_input = QDoubleSpinBox()
-        self.cpr_wide_multiplier_input.setRange(1.05, 5.0)
-        self.cpr_wide_multiplier_input.setDecimals(2)
-        self.cpr_wide_multiplier_input.setSingleStep(0.05)
-        self.cpr_wide_multiplier_input.setValue(1.5)
-        self.cpr_wide_multiplier_input.setStyleSheet(compact_spinbox_style)
-        _w(self.cpr_wide_multiplier_input)
-        self.cpr_wide_multiplier_input.setToolTip(
-            "CPR width >= (Narrow Width × this factor) is marked as Wide CPR."
+        self.cpr_wide_threshold_input = QDoubleSpinBox()
+        self.cpr_wide_threshold_input.setRange(0.1, 10000.0)
+        self.cpr_wide_threshold_input.setDecimals(2)
+        self.cpr_wide_threshold_input.setSingleStep(1.0)
+        self.cpr_wide_threshold_input.setValue(200.0)
+        self.cpr_wide_threshold_input.setStyleSheet(compact_spinbox_style)
+        _w(self.cpr_wide_threshold_input)
+        self.cpr_wide_threshold_input.setToolTip(
+            "If CPR width (TC - BC) is > this value, it is marked as Wide CPR."
         )
-        self.cpr_wide_multiplier_input.valueChanged.connect(self._on_cpr_settings_changed)
-        cpr_frm.addRow("Wide Factor", self.cpr_wide_multiplier_input)
+        self.cpr_wide_threshold_input.valueChanged.connect(self._on_cpr_settings_changed)
+        cpr_frm.addRow("Wide Width", self.cpr_wide_threshold_input)
         cpr_col.addWidget(cpr_grp)
         cpr_col.addStretch()
 
