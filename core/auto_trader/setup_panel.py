@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QColorDialog,
     QFileDialog,
     QGraphicsPixmapItem,
+    QTabWidget,
 )
 
 
@@ -628,13 +629,71 @@ class SetupPanelMixin:
         c4.addStretch()
 
         # ══════════════════════════════════════════════════════════════════
-        # Assemble
+        # CPR
         # ══════════════════════════════════════════════════════════════════
+        cpr_col = _col()
+        cpr_grp, cpr_frm = _group("Central Pivot Range (CPR)")
+        cpr_frm.addRow(_note("CPR for each session is calculated using previous-day OHLC."))
+
+        self.show_cpr_check = QCheckBox("Show CPR lines and labels on price chart")
+        self.show_cpr_check.setChecked(True)
+        self.show_cpr_check.toggled.connect(self._on_cpr_settings_changed)
+        cpr_frm.addRow("Display", self.show_cpr_check)
+
+        self.cpr_narrow_threshold_input = QDoubleSpinBox()
+        self.cpr_narrow_threshold_input.setRange(0.1, 10000.0)
+        self.cpr_narrow_threshold_input.setDecimals(2)
+        self.cpr_narrow_threshold_input.setSingleStep(0.1)
+        self.cpr_narrow_threshold_input.setValue(10.0)
+        self.cpr_narrow_threshold_input.setStyleSheet(compact_spinbox_style)
+        _w(self.cpr_narrow_threshold_input)
+        self.cpr_narrow_threshold_input.setToolTip(
+            "If CPR width (TC - BC) is <= this value, it is marked as Narrow CPR."
+        )
+        self.cpr_narrow_threshold_input.valueChanged.connect(self._on_cpr_settings_changed)
+        cpr_frm.addRow("Narrow Width", self.cpr_narrow_threshold_input)
+
+        self.cpr_wide_multiplier_input = QDoubleSpinBox()
+        self.cpr_wide_multiplier_input.setRange(1.05, 5.0)
+        self.cpr_wide_multiplier_input.setDecimals(2)
+        self.cpr_wide_multiplier_input.setSingleStep(0.05)
+        self.cpr_wide_multiplier_input.setValue(1.5)
+        self.cpr_wide_multiplier_input.setStyleSheet(compact_spinbox_style)
+        _w(self.cpr_wide_multiplier_input)
+        self.cpr_wide_multiplier_input.setToolTip(
+            "CPR width >= (Narrow Width × this factor) is marked as Wide CPR."
+        )
+        self.cpr_wide_multiplier_input.valueChanged.connect(self._on_cpr_settings_changed)
+        cpr_frm.addRow("Wide Factor", self.cpr_wide_multiplier_input)
+        cpr_col.addWidget(cpr_grp)
+        cpr_col.addStretch()
+
+        # ══════════════════════════════════════════════════════════════════
+        # Assemble (Tabbed)
+        # ══════════════════════════════════════════════════════════════════
+        tabs = QTabWidget(self.setup_dialog)
+        tabs.setDocumentMode(True)
+
+        general_tab = QWidget()
+        general_layout = QVBoxLayout(general_tab)
+        general_layout.setContentsMargins(0, 0, 0, 0)
+        general_layout.setSpacing(0)
+
         cols_row = QHBoxLayout()
         cols_row.setSpacing(_COL_SPACING)
         for col in (c1, c2, c3, c4):
             cols_row.addLayout(col, 1)
-        root.addLayout(cols_row, 1)
+        general_layout.addLayout(cols_row, 1)
+
+        cpr_tab = QWidget()
+        cpr_layout = QHBoxLayout(cpr_tab)
+        cpr_layout.setContentsMargins(6, 6, 6, 6)
+        cpr_layout.setSpacing(_COL_SPACING)
+        cpr_layout.addLayout(cpr_col, 1)
+
+        tabs.addTab(general_tab, "General")
+        tabs.addTab(cpr_tab, "CPR")
+        root.addWidget(tabs, 1)
 
         # ── Close bar ─────────────────────────────────────────────────────
         close_row = QHBoxLayout()

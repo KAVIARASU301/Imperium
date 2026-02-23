@@ -31,6 +31,7 @@ from core.auto_trader.simulator import SimulatorMixin
 from core.auto_trader.indicators import calculate_ema, calculate_vwap, calculate_atr, compute_adx, build_slope_direction_masks, is_chop_regime
 from core.auto_trader.signal_governance import SignalGovernance
 from core.auto_trader.stacker import StackerState
+from utils.cpr_calculator import CPRCalculator
 logger = logging.getLogger(__name__)
 
 
@@ -145,6 +146,11 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self._ema_line_opacity = 0.85
         self._window_bg_image_path = ""
         self._chart_bg_image_path = ""
+        self._show_cpr = True
+        self._cpr_narrow_threshold = 10.0
+        self._cpr_wide_multiplier = 1.5
+        self._cpr_lines = []
+        self._cpr_labels = []
 
         # 🆕 Strategy-aware chop filter defaults
         self._chop_filter_atr_reversal = True
@@ -1024,6 +1030,9 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self.chart_bg_upload_btn.blockSignals(True)
         self.chart_bg_clear_btn.blockSignals(True)
         self.vwap_checkbox.blockSignals(True)
+        self.show_cpr_check.blockSignals(True)
+        self.cpr_narrow_threshold_input.blockSignals(True)
+        self.cpr_wide_multiplier_input.blockSignals(True)
         for cb in self.setup_ema_default_checks.values():
             cb.blockSignals(True)
 
@@ -1176,6 +1185,17 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
             _read_setting("show_vwap", self.vwap_checkbox.isChecked(), bool)
         )
 
+        self.show_cpr_check.setChecked(_read_setting("show_cpr", self._show_cpr, bool))
+        self.cpr_narrow_threshold_input.setValue(
+            _read_setting("cpr_narrow_threshold", self._cpr_narrow_threshold, float)
+        )
+        self.cpr_wide_multiplier_input.setValue(
+            _read_setting("cpr_wide_multiplier", self._cpr_wide_multiplier, float)
+        )
+        self._show_cpr = self.show_cpr_check.isChecked()
+        self._cpr_narrow_threshold = float(self.cpr_narrow_threshold_input.value())
+        self._cpr_wide_multiplier = float(self.cpr_wide_multiplier_input.value())
+
         persisted_window_bg = _read_setting("window_background_image_path", "") or ""
         persisted_chart_bg = _read_setting("chart_background_image_path", "") or ""
 
@@ -1242,6 +1262,9 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self.chart_bg_upload_btn.blockSignals(False)
         self.chart_bg_clear_btn.blockSignals(False)
         self.vwap_checkbox.blockSignals(False)
+        self.show_cpr_check.blockSignals(False)
+        self.cpr_narrow_threshold_input.blockSignals(False)
+        self.cpr_wide_multiplier_input.blockSignals(False)
         for cb in self.setup_ema_default_checks.values():
             cb.blockSignals(False)
 
@@ -1313,6 +1336,9 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
             "window_background_image_path": self._window_bg_image_path,
             "chart_background_image_path": self._chart_bg_image_path,
             "show_vwap": self.vwap_checkbox.isChecked(),
+            "show_cpr": self.show_cpr_check.isChecked(),
+            "cpr_narrow_threshold": float(self.cpr_narrow_threshold_input.value()),
+            "cpr_wide_multiplier": float(self.cpr_wide_multiplier_input.value()),
 
         }
 
@@ -1425,6 +1451,14 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         if not checked:
             self.price_vwap_curve.clear()
         self._refresh_plot_only()
+
+    def _on_cpr_settings_changed(self, *_):
+        self._show_cpr = self.show_cpr_check.isChecked()
+        self._cpr_narrow_threshold = float(self.cpr_narrow_threshold_input.value())
+        self._cpr_wide_multiplier = max(1.05, float(self.cpr_wide_multiplier_input.value()))
+        if hasattr(self, "chart_line_width_input"):
+            self._persist_setup_values()
+        self._render_cpr_levels()
 
     def _on_focus_mode_changed(self, enabled: bool):
         self.btn_focus.setText("2D" if enabled else "1D")
@@ -1942,6 +1976,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self.cvd_atr_below_markers.clear()
         self._clear_simulation_markers()
         self._clear_confluence_lines()
+        self._clear_cpr_levels()
 
         # Clear EMA curves
         self.cvd_ema10_curve.clear()
@@ -2104,6 +2139,85 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
             self.plot.enableAutoRange(axis=pg.ViewBox.XAxis)
             self.price_plot.enableAutoRange(axis=pg.ViewBox.XAxis)
 
+    def _clear_cpr_levels(self):
+        for line in self._cpr_lines:
+            with suppress(Exception):
+                self.price_plot.removeItem(line)
+        for label in self._cpr_labels:
+            with suppress(Exception):
+                self.price_plot.removeItem(label)
+        self._cpr_lines = []
+        self._cpr_labels = []
+
+    def _classify_cpr_width(self, width: float) -> tuple[str, str]:
+        narrow = max(0.0, self._cpr_narrow_threshold)
+        wide_cutoff = narrow * max(1.05, self._cpr_wide_multiplier)
+        if width <= narrow:
+            return "Narrow CPR", "#00E676"
+        if width >= wide_cutoff:
+            return "Wide CPR", "#FF5252"
+        return "Neutral CPR", "#FFD54F"
+
+    def _render_cpr_levels(self):
+        self._clear_cpr_levels()
+        if not self._show_cpr or not self.all_timestamps or not self.all_price_data:
+            return
+
+        data = pd.DataFrame({
+            "timestamp": self.all_timestamps,
+            "close": self.all_price_data,
+            "high": self.all_price_high_data,
+            "low": self.all_price_low_data,
+        })
+        data["session"] = pd.to_datetime(data["timestamp"]).dt.date
+
+        focus_mode = not self.btn_focus.isChecked()
+        sessions = list(dict.fromkeys(data["session"].tolist()))
+        for idx, session in enumerate(sessions):
+            if idx == 0:
+                continue
+            prev_session = sessions[idx - 1]
+            prev_day = data[data["session"] == prev_session]
+            cpr = CPRCalculator.get_previous_day_cpr(prev_day)
+            if not cpr:
+                continue
+
+            session_rows = data[data["session"] == session]
+            if session_rows.empty:
+                continue
+
+            session_start_pos = int(session_rows.index[0])
+            x_anchor = self._time_to_session_index(session_rows.iloc[0]["timestamp"]) if focus_mode else session_start_pos
+
+            levels = (("TC", cpr["tc"]), ("Pivot", cpr["pivot"]), ("BC", cpr["bc"]))
+            for level_name, y_val in levels:
+                line = pg.InfiniteLine(
+                    pos=float(y_val),
+                    angle=0,
+                    movable=False,
+                    pen=pg.mkPen("#90CAF9", width=1.2, style=Qt.DashLine),
+                )
+                line.setZValue(20)
+                self.price_plot.addItem(line)
+                self._cpr_lines.append(line)
+
+                txt = TextItem(f"{level_name}: {float(y_val):.2f}", color="#90CAF9", anchor=(0, 1))
+                txt.setPos(float(x_anchor), float(y_val))
+                txt.setZValue(21)
+                self.price_plot.addItem(txt)
+                self._cpr_labels.append(txt)
+
+            classification, color = self._classify_cpr_width(float(cpr["range_width"]))
+            class_label = TextItem(
+                f"{classification} (W={float(cpr['range_width']):.2f})",
+                color=color,
+                anchor=(0, 0),
+            )
+            class_label.setPos(float(x_anchor), float(cpr["tc"]) + 0.2)
+            class_label.setZValue(22)
+            self.price_plot.addItem(class_label)
+            self._cpr_labels.append(class_label)
+
     def _refresh_plot_only(self):
         """Refresh chart overlays from in-memory data without reloading sessions or touching trade state."""
         if not self.all_timestamps or not self.all_cvd_data or not self.all_price_data:
@@ -2173,6 +2287,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
 
         self._update_atr_reversal_markers()
         self._update_ema_legends()
+        self._render_cpr_levels()
 
     def _update_ema_legends(self):
         """EMA legends are disabled to keep chart area unobstructed."""
