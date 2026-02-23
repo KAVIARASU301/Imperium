@@ -449,13 +449,21 @@ class SimulatorMixin:
                 exit_now = False
                 if hit_stop:
                     exit_now = True
-                elif active_strategy_type in max_profit_giveback_strategies and max_favorable_points > 0:
+                elif max_favorable_points > 0:
+                    use_open_drive_override = (
+                        active_strategy_type == "open_drive"
+                        and open_drive_max_profit_giveback_points > 0
+                    )
                     effective_giveback_points = (
                         open_drive_max_profit_giveback_points
-                        if active_strategy_type == "open_drive" and open_drive_max_profit_giveback_points > 0
+                        if use_open_drive_override
                         else max_profit_giveback_points
                     )
-                    if effective_giveback_points > 0:
+                    giveback_enabled_for_strategy = (
+                        use_open_drive_override
+                        or active_strategy_type in max_profit_giveback_strategies
+                    )
+                    if giveback_enabled_for_strategy and effective_giveback_points > 0:
                         giveback_points = max_favorable_points - favorable_move
                         exit_now = giveback_points >= effective_giveback_points
                 elif active_strategy_type == "ema_cross":

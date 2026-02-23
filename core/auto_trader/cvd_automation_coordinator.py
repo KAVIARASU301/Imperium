@@ -396,16 +396,19 @@ class CvdAutomationCoordinator:
         cvd_cross_above_ema51 = all(v is not None for v in (prev_cvd, prev_cvd_ema51)) and cvd_ema51 != 0 and prev_cvd <= prev_cvd_ema51 and cvd_close > cvd_ema51
         cvd_cross_below_ema51 = all(v is not None for v in (prev_cvd, prev_cvd_ema51)) and cvd_ema51 != 0 and prev_cvd >= prev_cvd_ema51 and cvd_close < cvd_ema51
 
+        use_open_drive_override = strategy_type == "open_drive" and (open_drive_max_profit_giveback_points or 0.0) > 0
         effective_giveback_points = (
-            open_drive_max_profit_giveback_points
-            if strategy_type == "open_drive" and (open_drive_max_profit_giveback_points or 0.0) > 0
-            else max_profit_giveback_points
+            open_drive_max_profit_giveback_points if use_open_drive_override else max_profit_giveback_points
+        )
+        giveback_enabled_for_strategy = (
+            use_open_drive_override
+            or strategy_type in max_profit_giveback_strategies
         )
 
         exit_reason = None
         if hit_stop:
             exit_reason = "AUTO_SL"
-        elif strategy_type in max_profit_giveback_strategies and effective_giveback_points > 0 and max_favorable_points and (max_favorable_points - favorable_move) >= effective_giveback_points:
+        elif giveback_enabled_for_strategy and effective_giveback_points > 0 and max_favorable_points and (max_favorable_points - favorable_move) >= effective_giveback_points:
             exit_reason = "AUTO_MAX_PROFIT_GIVEBACK"
         elif strategy_type == "ema_cross" and ((signal_side == "long" and cvd_cross_below_ema10) or (signal_side == "short" and cvd_cross_above_ema10)):
             exit_reason = "AUTO_EMA10_CROSS"
