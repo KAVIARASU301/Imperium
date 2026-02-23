@@ -396,7 +396,7 @@ class CvdAutomationCoordinator:
         exit_reason = None
         if hit_stop:
             exit_reason = "AUTO_SL"
-        elif strategy_type in max_profit_giveback_strategies and max_profit_giveback_points > 0 and max_favorable_points and (max_favorable_points - favorable_move) >= max_profit_giveback_points:
+        elif strategy_type != "open_drive" and strategy_type in max_profit_giveback_strategies and max_profit_giveback_points > 0 and max_favorable_points and (max_favorable_points - favorable_move) >= max_profit_giveback_points:
             exit_reason = "AUTO_MAX_PROFIT_GIVEBACK"
         elif strategy_type == "ema_cross" and ((signal_side == "long" and cvd_cross_below_ema10) or (signal_side == "short" and cvd_cross_above_ema10)):
             exit_reason = "AUTO_EMA10_CROSS"

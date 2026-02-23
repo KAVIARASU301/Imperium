@@ -449,6 +449,8 @@ class SimulatorMixin:
                 if hit_stop:
                     exit_now = True
                 elif (
+                    active_strategy_type != "open_drive"
+                    and
                     active_strategy_type in max_profit_giveback_strategies
                     and max_profit_giveback_points > 0
                     and max_favorable_points > 0
