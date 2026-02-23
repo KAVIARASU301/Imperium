@@ -1670,10 +1670,15 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self.x_time_label.show()
 
     def eventFilter(self, obj, event):
-        if event.type() == QEvent.Type.MouseButtonPress:
-            combo = self._resolve_signal_filter_combo_from_object(obj)
-            if combo is not None and obj is combo.lineEdit():
-                QTimer.singleShot(0, combo.showPopup)
+        combo = self._resolve_signal_filter_combo_from_object(obj)
+        if combo is not None:
+            if event.type() == QEvent.Type.MouseButtonPress and obj is combo.lineEdit():
+                combo.showPopup()
+                return True
+
+            # Keep the checkable popup open while users tick/untick options.
+            # We handle state changes ourselves through `view().pressed`.
+            if event.type() == QEvent.Type.MouseButtonRelease and obj is combo.view().viewport():
                 return True
         return super().eventFilter(obj, event)
 
@@ -1689,6 +1694,9 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
                 return combo
             line_edit = combo.lineEdit()
             if line_edit is not None and obj is line_edit:
+                return combo
+            view = combo.view()
+            if view is not None and (obj is view or obj is view.viewport()):
                 return combo
         return None
 
@@ -1739,7 +1747,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
             combo.model().setData(idx, Qt.Checked, Qt.CheckStateRole)
 
         combo.lineEdit().installEventFilter(self)
-        combo.installEventFilter(self)
+        combo.view().viewport().installEventFilter(self)
         combo.view().pressed.connect(lambda index, c=combo: self._toggle_signal_filter_item(c, index))
         combo.view().setMinimumWidth(max(combo.width() + 70, 230))
         self._refresh_signal_filter_combo_text(combo)
@@ -1753,19 +1761,11 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
             for i in range(combo.count()):
                 idx = combo.model().index(i, 0)
                 combo.model().setData(idx, next_state, Qt.CheckStateRole)
-            if next_state == Qt.Unchecked:
-                combo.model().setData(combo.model().index(1, 0), Qt.Checked, Qt.CheckStateRole)
         else:
             combo.model().setData(index, next_state, Qt.CheckStateRole)
-
-            # Keep at least one strategy selected.
-            if not self._checked_signal_filters(combo):
-                combo.model().setData(index, Qt.Checked, Qt.CheckStateRole)
-
             self._sync_select_all_check_state(combo)
 
         self._refresh_signal_filter_combo_text(combo)
-        QTimer.singleShot(0, combo.showPopup)
         if combo is self.signal_filter_combo:
             self._on_signal_filter_changed()
         elif combo is getattr(self, "setup_signal_filter_combo", None):
@@ -1801,8 +1801,6 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
                 continue
             combo.model().setData(idx, Qt.Checked if value in selected_set else Qt.Unchecked, Qt.CheckStateRole)
 
-        if not self._checked_signal_filters(combo) and combo.count() > 1:
-            combo.model().setData(combo.model().index(1, 0), Qt.Checked, Qt.CheckStateRole)
         self._sync_select_all_check_state(combo)
         self._refresh_signal_filter_combo_text(combo)
 
@@ -1811,6 +1809,8 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         total = len(self._strategy_filter_values())
         if len(selected) == total:
             text = "All Signals"
+        elif not selected:
+            text = "No Signals Selected"
         elif len(selected) == 1:
             idx = combo.findData(selected[0])
             text = combo.itemText(idx) if idx >= 0 else "1 selected"
@@ -1833,11 +1833,11 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         if isinstance(value, (list, tuple, set)):
             valid = set(self._strategy_filter_values())
             selected = [str(v) for v in value if str(v) in valid]
-            return selected or self._strategy_filter_values()
+            return selected
         value_str = str(value)
         if value_str == self.SIGNAL_FILTER_ALL:
             return self._strategy_filter_values()
-        return [value_str]
+        return [value_str] if value_str in set(self._strategy_filter_values()) else []
 
     def _selected_signal_filter(self) -> str:
         selected = self._selected_signal_filters()
