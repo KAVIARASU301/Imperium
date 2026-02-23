@@ -61,6 +61,9 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
     ATR_MARKER_RED_ONLY = "red_only"
     ATR_MARKER_HIDE_ALL = "hide_all"
 
+    CVD_VALUE_MODE_RAW = "raw"
+    CVD_VALUE_MODE_NORMALIZED = "normalized"
+
     BREAKOUT_SWITCH_KEEP = "keep_breakout"
     BREAKOUT_SWITCH_PREFER_ATR = "prefer_atr_reversal"
     BREAKOUT_SWITCH_ADAPTIVE = "adaptive"
@@ -112,6 +115,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self._current_session_x_base: float = 0.0
         self._live_cvd_offset: float | None = None
         self._current_session_last_cvd_value: float | None = None
+        self._current_session_volume_scale: float = 1.0
         self._is_loading = False
         self._last_live_refresh_minute: datetime | None = None
 
@@ -979,6 +983,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self.signal_filter_combo.blockSignals(True)
         self.atr_marker_filter_combo.blockSignals(True)
         self.setup_signal_filter_combo.blockSignals(True)
+        self.setup_cvd_value_mode_combo.blockSignals(True)
         self.setup_atr_marker_filter_combo.blockSignals(True)
         self.range_lookback_input.blockSignals(True)  # 🆕 NEW
         self.breakout_switch_mode_combo.blockSignals(True)
@@ -1047,6 +1052,11 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         )
         self.cvd_ema_gap_input.setValue(
             _read_setting("cvd_ema_gap", self.cvd_ema_gap_input.value(), int)
+        )
+        _apply_combo_value(
+            self.setup_cvd_value_mode_combo,
+            _read_setting("cvd_value_mode", self.setup_cvd_value_mode_combo.currentData() or self.CVD_VALUE_MODE_RAW),
+            fallback_index=0,
         )
 
         signal_filters_value = _read_setting(
@@ -1176,6 +1186,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self.atr_distance_input.blockSignals(False)
         self.cvd_atr_distance_input.blockSignals(False)
         self.cvd_ema_gap_input.blockSignals(False)
+        self.setup_cvd_value_mode_combo.blockSignals(False)
         self.signal_filter_combo.blockSignals(False)
         self.atr_marker_filter_combo.blockSignals(False)
         self.setup_signal_filter_combo.blockSignals(False)
@@ -1233,6 +1244,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
             "atr_distance": float(self.atr_distance_input.value()),
             "cvd_atr_distance": float(self.cvd_atr_distance_input.value()),
             "cvd_ema_gap": int(self.cvd_ema_gap_input.value()),
+            "cvd_value_mode": self.setup_cvd_value_mode_combo.currentData() or self.CVD_VALUE_MODE_RAW,
             "signal_filter": self._selected_signal_filter(),
             "signal_filters": self._selected_signal_filters(),
             "atr_marker_filter": self.atr_marker_filter_combo.currentData() or self.ATR_MARKER_CONFLUENCE_ONLY,
@@ -1352,6 +1364,11 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         # Force reload to apply new range lookback
         self._load_and_plot(force=True)
 
+    def _on_cvd_value_mode_changed(self, *_):
+        """Toggle between raw and session-volume-normalized CVD series."""
+        self._persist_setup_values()
+        self._load_and_plot(force=True)
+
     def _on_governance_settings_changed(self, *_):
         self.signal_governance.deploy_mode = self.deploy_mode_combo.currentData() or "canary"
         self.signal_governance.min_confidence_for_live = float(self.min_confidence_input.value())
@@ -1402,6 +1419,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self._live_price_points.clear()
         self._live_cvd_offset = None
         self._current_session_last_cvd_value = None
+        self._current_session_volume_scale = 1.0
         self.all_timestamps.clear()
         self._load_and_plot(force=True)
 
@@ -1444,6 +1462,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self._live_price_points.clear()
         self._live_cvd_offset = None
         self._current_session_last_cvd_value = None
+        self._current_session_volume_scale = 1.0
         self._last_plot_x_indices = []
         self._load_and_plot(force=True)
 
@@ -1910,20 +1929,31 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         x_offset = 0
         sessions = sorted(cvd_df["session"].unique())
         self._current_session_last_cvd_value = None
+        self._current_session_volume_scale = 1.0
         self._live_cvd_offset = None
 
         for i, sess in enumerate(sessions):
             df_cvd_sess = cvd_df[cvd_df["session"] == sess]
             df_price_sess = price_df[price_df["session"] == sess]
 
-            cvd_y_raw = df_cvd_sess["close"].values
-            cvd_high_raw = df_cvd_sess["high"].values if "high" in df_cvd_sess.columns else cvd_y_raw
-            cvd_low_raw = df_cvd_sess["low"].values if "low" in df_cvd_sess.columns else cvd_y_raw
+            cvd_y_raw = df_cvd_sess["close"].to_numpy(dtype=float)
+            cvd_high_raw = df_cvd_sess["high"].to_numpy(dtype=float) if "high" in df_cvd_sess.columns else cvd_y_raw
+            cvd_low_raw = df_cvd_sess["low"].to_numpy(dtype=float) if "low" in df_cvd_sess.columns else cvd_y_raw
             price_y_raw = df_price_sess["close"].values
             price_high_raw = df_price_sess["high"].values
             price_low_raw = df_price_sess["low"].values
             volume_raw = df_price_sess["volume"].values if "volume" in df_price_sess.columns else np.ones_like(
                 price_y_raw)  # 🆕 NEW
+            cumulative_volume = np.cumsum(volume_raw.astype(float)) if len(volume_raw) else np.array([], dtype=float)
+
+            cvd_mode = self.setup_cvd_value_mode_combo.currentData() or self.CVD_VALUE_MODE_RAW
+            if cvd_mode == self.CVD_VALUE_MODE_NORMALIZED and len(cvd_y_raw):
+                safe_denominator = np.where(cumulative_volume > 0, cumulative_volume, 1.0)
+                cvd_y_raw = cvd_y_raw / safe_denominator
+                cvd_high_raw = cvd_high_raw / safe_denominator
+                cvd_low_raw = cvd_low_raw / safe_denominator
+                if i == 0 and len(sessions) == 2 and self.btn_focus.isChecked():
+                    prev_close = float(cvd_y_raw[-1])
 
             # Rebasing logic for CVD
             if i == 0 and len(sessions) == 2 and self.btn_focus.isChecked():
@@ -1954,6 +1984,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
                 self._current_session_start_ts = df_cvd_sess.index[0]
                 self._current_session_x_base = float(xs[0]) if xs else 0.0
                 self._current_session_last_cvd_value = float(cvd_y[-1]) if len(cvd_y) else None
+                self._current_session_volume_scale = float(cumulative_volume[-1]) if len(cumulative_volume) else 1.0
 
             self.all_timestamps.extend(df_cvd_sess.index.tolist())
             self.all_cvd_data.extend(cvd_y.tolist())
@@ -2244,14 +2275,19 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         if ts.time() < TRADING_START or ts.time() > TRADING_END:
             return
 
+        cvd_mode = self.setup_cvd_value_mode_combo.currentData() or self.CVD_VALUE_MODE_RAW
+        transformed_cvd = float(cvd_value)
+        if cvd_mode == self.CVD_VALUE_MODE_NORMALIZED:
+            transformed_cvd = transformed_cvd / max(float(self._current_session_volume_scale), 1.0)
+
         # Align live tick CVD level with historical curve to avoid visual jump.
         if self._live_cvd_offset is None:
             if self._current_session_last_cvd_value is not None:
-                self._live_cvd_offset = float(self._current_session_last_cvd_value) - float(cvd_value)
+                self._live_cvd_offset = float(self._current_session_last_cvd_value) - transformed_cvd
             else:
                 self._live_cvd_offset = 0.0
 
-        plotted_cvd = float(cvd_value) + float(self._live_cvd_offset)
+        plotted_cvd = transformed_cvd + float(self._live_cvd_offset)
         current_price = float(last_price)
 
         # 🔥 SMART TICK FILTERING - Only append if price/CVD changed meaningfully

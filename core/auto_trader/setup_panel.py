@@ -145,6 +145,19 @@ class SetupPanelMixin:
         )
         signal_form.addRow("Signal Filter", self.setup_signal_filter_combo)
 
+        self.setup_cvd_value_mode_combo = QComboBox()
+        self.setup_cvd_value_mode_combo.setStyleSheet(compact_combo_style)
+        _set_combo_w(self.setup_cvd_value_mode_combo)
+        self.setup_cvd_value_mode_combo.addItem("Raw CVD", self.CVD_VALUE_MODE_RAW)
+        self.setup_cvd_value_mode_combo.addItem("Normalized CVD", self.CVD_VALUE_MODE_NORMALIZED)
+        self.setup_cvd_value_mode_combo.setToolTip(
+            "CVD feed mode for charting and strategy signals.\n"
+            "• Raw CVD: absolute cumulative delta.\n"
+            "• Normalized CVD: CVD ÷ cumulative session volume."
+        )
+        self.setup_cvd_value_mode_combo.currentIndexChanged.connect(self._on_cvd_value_mode_changed)
+        signal_form.addRow("CVD Mode", self.setup_cvd_value_mode_combo)
+
         self.setup_atr_marker_filter_combo = QComboBox()
         self.setup_atr_marker_filter_combo.setStyleSheet(compact_combo_style)
         _set_combo_w(self.setup_atr_marker_filter_combo)
