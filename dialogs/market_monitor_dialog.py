@@ -234,19 +234,45 @@ class MarketChartWidget(QWidget):
         self._data_is_dirty = True
 
     def _draw_cpr(self):
-        """Draw ONLY the CPR center (Pivot) line - very subtle"""
+        """Draw CPR band + levels so they remain visible on dense charts."""
         if not self.cpr_levels:
             return
 
         pivot = self.cpr_levels.get("pivot")
+        tc = self.cpr_levels.get("tc")
+        bc = self.cpr_levels.get("bc")
         if pivot is None:
             return
 
-        # Very subtle pivot line - thin, low opacity, no label
+        if tc is not None and bc is not None:
+            cpr_region = pg.LinearRegionItem(
+                values=[bc, tc],
+                orientation='horizontal',
+                brush=pg.mkBrush(240, 118, 55, 24),
+                pen=pg.mkPen(240, 118, 55, 0),
+                movable=False,
+            )
+            self.plot_widget.addItem(cpr_region)
+
+            self.plot_widget.addItem(
+                pg.InfiniteLine(
+                    pos=tc,
+                    angle=0,
+                    pen=pg.mkPen(color='#F07637', width=1),
+                )
+            )
+            self.plot_widget.addItem(
+                pg.InfiniteLine(
+                    pos=bc,
+                    angle=0,
+                    pen=pg.mkPen(color='#F07637', width=1),
+                )
+            )
+
         inf_line = pg.InfiniteLine(
             pos=pivot,
             angle=0,
-            pen=pg.mkPen(color='#F07637', width=1, style=Qt.DotLine),
+            pen=pg.mkPen(color='#F39C12', width=1.5, style=Qt.DotLine),
         )
         self.plot_widget.addItem(inf_line)
 
@@ -551,10 +577,15 @@ class MarketMonitorDialog(QDialog):
         try:
             tf = self.timeframe_combo.currentText()
 
-            # Use navigator dates if in historical mode
+            # Always include previous trading day + current day in one request,
+            # so CPR can be calculated from previous day even in live mode.
             if self.live_mode:
-                to_date = datetime.now()
-                from_date = to_date - timedelta(days=2)
+                current_trading_day = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+                previous_trading_day = self._get_previous_trading_day(current_trading_day)
+
+                # Give small forward buffer to include the latest intraday bars.
+                from_date = previous_trading_day
+                to_date = datetime.now() + timedelta(minutes=1)
             else:
                 # Historical mode - use navigator dates
                 to_date = self.current_date + timedelta(days=1)
@@ -579,6 +610,12 @@ class MarketMonitorDialog(QDialog):
             cpr_levels, day_separator_pos = None, None
 
             if len(unique_dates) < 2:
+                logger.warning(
+                    "MarketMonitor: CPR unavailable for %s - expected 2 sessions, got %s (%s)",
+                    symbol,
+                    len(unique_dates),
+                    unique_dates,
+                )
                 chart.set_data(symbol, df)
                 return
 
@@ -593,6 +630,13 @@ class MarketMonitorDialog(QDialog):
         except Exception as e:
             logger.error(f"Failed to fetch/plot data for {symbol}: {e}", exc_info=True)
             chart.show_message(f"[{symbol}] DATA ERROR", "Could not load data.")
+
+    @staticmethod
+    def _get_previous_trading_day(date: datetime) -> datetime:
+        prev = date - timedelta(days=1)
+        while prev.weekday() >= 5:
+            prev -= timedelta(days=1)
+        return prev
 
     def _connect_signals(self):
         self.load_button.clicked.connect(self._load_charts_data)

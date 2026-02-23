@@ -34,28 +34,31 @@ class CPRCalculator:
     @staticmethod
     def get_previous_day_cpr(data: pd.DataFrame) -> Optional[Dict[str, float]]:
         """
-        Calculates CPR levels from the provided day's data.
-        It assumes the input DataFrame contains the data for the single day
-        (i.e., the previous trading day) needed for the calculation.
+        Calculates CPR levels from one complete previous-session dataframe.
         """
         if data.empty:
             logger.warning("CPR calculation failed: Input DataFrame is empty.")
             return None
 
-        # Check for required columns
-        if not all(col in data.columns for col in ['high', 'low', 'close']):
-            logger.warning("CPR calculation failed: DataFrame missing 'high', 'low', or 'close' columns.")
+        required_cols = {'high', 'low', 'close'}
+        if not required_cols.issubset(data.columns):
+            logger.warning("CPR calculation failed: DataFrame missing required columns %s", required_cols)
             return None
 
         try:
-            # Calculate HLC from the entire provided dataframe
-            day_high = data['high'].max()
-            day_low = data['low'].min()
-            day_close = data['close'].iloc[-1]
+            day_data = data.sort_index()
+            day_high = pd.to_numeric(day_data['high'], errors='coerce').max()
+            day_low = pd.to_numeric(day_data['low'], errors='coerce').min()
+            close_series = pd.to_numeric(day_data['close'], errors='coerce').dropna()
 
-            return CPRCalculator.calculate_cpr_levels(day_high, day_low, day_close)
+            if pd.isna(day_high) or pd.isna(day_low) or close_series.empty:
+                logger.warning("CPR calculation failed: Invalid HLC values after numeric normalization.")
+                return None
 
-        except (IndexError, KeyError) as e:
+            day_close = float(close_series.iloc[-1])
+            return CPRCalculator.calculate_cpr_levels(float(day_high), float(day_low), day_close)
+
+        except (IndexError, KeyError, ValueError, TypeError) as e:
             logger.error(f"Could not calculate CPR due to a data issue: {e}")
             return None
         except Exception as e:
