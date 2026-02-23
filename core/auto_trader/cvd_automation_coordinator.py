@@ -444,7 +444,10 @@ class CvdAutomationCoordinator:
                 or (signal_side == "short" and (price_close > ema10 or cvd_close > cvd_ema10))
         ):
             exit_reason = "AUTO_OPEN_DRIVE_FAST_EMA_CLOSE_EXIT"
-        elif strategy_type == "atr_reversal" and ((signal_side == "long" and (price_cross_above_ema51 or cvd_cross_above_ema51)) or (signal_side == "short" and (price_cross_below_ema51 or cvd_cross_below_ema51))):
+        elif strategy_type == "atr_reversal" and ema51 > 0 and (
+                (signal_side == "long" and price_close >= ema51)
+                or (signal_side == "short" and price_close <= ema51)
+        ):
             exit_reason = "AUTO_ATR_REVERSAL_EXIT"
 
         if exit_reason:
