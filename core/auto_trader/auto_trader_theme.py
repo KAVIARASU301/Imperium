@@ -484,6 +484,7 @@ class SignalFeedSidebar(QWidget):
         "atr_reversal":   ("ATR REVERSAL",   C["teal"]),
         "ema_cross":      ("EMA CROSS",       C["blue"]),
         "range_breakout": ("BREAKOUT",        C["amber"]),
+        "cvd_range_breakout": ("CVD BREAKOUT", "#FFC107"),
         "atr_divergence": ("ATR DIVERGE",     "#FF9800"),
     }
 

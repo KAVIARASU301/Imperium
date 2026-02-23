@@ -91,6 +91,7 @@ class SimulatorMixin:
             "atr_reversal": 1,
             "atr_divergence": 2,
             "ema_cross": 3,
+            "cvd_range_breakout": 3.5,
             "range_breakout": 4,
             "open_drive": 5,
         }
@@ -104,7 +105,7 @@ class SimulatorMixin:
 
         side_masks = strategy_masks.get(side, {})
         # Higher-priority strategies first.
-        for strategy_type in ("open_drive", "range_breakout", "ema_cross", "atr_divergence", "atr_reversal"):
+        for strategy_type in ("open_drive", "range_breakout", "cvd_range_breakout", "ema_cross", "atr_divergence", "atr_reversal"):
             mask = side_masks.get(strategy_type)
             if mask is not None and idx < len(mask) and bool(mask[idx]):
                 return strategy_type
@@ -400,7 +401,7 @@ class SimulatorMixin:
                         trail_steps = int(max(0.0, favorable_move) // atr_trailing_step_points)
                         if trail_steps > 0:
                             trail_offset = trail_steps * atr_trailing_step_points
-                elif active_trade.get("strategy_type") in {"ema_cross", "range_breakout"}:
+                elif active_trade.get("strategy_type") in {"ema_cross", "range_breakout", "cvd_range_breakout"}:
                     initial_trigger_points = 200.0
                     incremental_trigger_points = 100.0
                     trail_step_points = 100.0
@@ -470,7 +471,7 @@ class SimulatorMixin:
                     exit_now = (signal_side == "long" and cvd_cross_below_ema10) or (signal_side == "short" and cvd_cross_above_ema10)
                 elif active_strategy_type == "atr_divergence":
                     exit_now = (signal_side == "long" and price_cross_above_ema51) or (signal_side == "short" and price_cross_below_ema51)
-                elif active_strategy_type == "range_breakout":
+                elif active_strategy_type in {"range_breakout", "cvd_range_breakout"}:
                     exit_now = (signal_side == "long" and (price_cross_below_ema10 or price_cross_below_ema51)) or (signal_side == "short" and (price_cross_above_ema10 or price_cross_above_ema51))
                 elif active_strategy_type == "open_drive":
                     exit_now = (

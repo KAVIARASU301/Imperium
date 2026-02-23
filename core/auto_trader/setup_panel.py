@@ -394,6 +394,68 @@ class SetupPanelMixin:
         consol_form.addRow("Max ADX", self.breakout_min_consol_adx_input)
         col2.addWidget(consol_group)
 
+        # ── CVD Range Breakout (orderflow-led breakout) ─────────────────────
+        cvd_breakout_group, cvd_breakout_form = _compact_form("CVD Range Breakout")
+
+        cvd_breakout_note = QLabel("CVD breaks its own range first; price slope confirms.")
+        cvd_breakout_note.setStyleSheet("color:#8A9BA8; font-size:10px;")
+        cvd_breakout_form.addRow(cvd_breakout_note)
+
+        self.cvd_range_lookback_input = QSpinBox()
+        self.cvd_range_lookback_input.setRange(5, 120)
+        self.cvd_range_lookback_input.setSingleStep(1)
+        self.cvd_range_lookback_input.setValue(30)
+        self.cvd_range_lookback_input.setStyleSheet(compact_spinbox_style)
+        _set_input_w(self.cvd_range_lookback_input)
+        self.cvd_range_lookback_input.setToolTip("Lookback bars used to build the CVD consolidation range.")
+        self.cvd_range_lookback_input.valueChanged.connect(self._on_chop_filter_settings_changed)
+        cvd_breakout_form.addRow("Lookback", self.cvd_range_lookback_input)
+
+        self.cvd_breakout_buffer_input = QDoubleSpinBox()
+        self.cvd_breakout_buffer_input.setRange(0.0, 1.0)
+        self.cvd_breakout_buffer_input.setDecimals(2)
+        self.cvd_breakout_buffer_input.setSingleStep(0.01)
+        self.cvd_breakout_buffer_input.setValue(0.10)
+        self.cvd_breakout_buffer_input.setStyleSheet(compact_spinbox_style)
+        _set_input_w(self.cvd_breakout_buffer_input)
+        self.cvd_breakout_buffer_input.setToolTip("Extra breakout extension beyond CVD range edge (fraction of range size).")
+        self.cvd_breakout_buffer_input.valueChanged.connect(self._on_chop_filter_settings_changed)
+        cvd_breakout_form.addRow("Buffer", self.cvd_breakout_buffer_input)
+
+        self.cvd_min_consol_bars_input = QSpinBox()
+        self.cvd_min_consol_bars_input.setRange(1, 120)
+        self.cvd_min_consol_bars_input.setSingleStep(1)
+        self.cvd_min_consol_bars_input.setValue(15)
+        self.cvd_min_consol_bars_input.setStyleSheet(compact_spinbox_style)
+        _set_input_w(self.cvd_min_consol_bars_input)
+        self.cvd_min_consol_bars_input.setToolTip("Minimum consecutive CVD compression bars before breakout is valid.")
+        self.cvd_min_consol_bars_input.valueChanged.connect(self._on_chop_filter_settings_changed)
+        cvd_breakout_form.addRow("Min Consol", self.cvd_min_consol_bars_input)
+
+        self.cvd_max_range_ratio_input = QDoubleSpinBox()
+        self.cvd_max_range_ratio_input.setRange(0.05, 3.0)
+        self.cvd_max_range_ratio_input.setDecimals(2)
+        self.cvd_max_range_ratio_input.setSingleStep(0.05)
+        self.cvd_max_range_ratio_input.setValue(0.80)
+        self.cvd_max_range_ratio_input.setStyleSheet(compact_spinbox_style)
+        _set_input_w(self.cvd_max_range_ratio_input)
+        self.cvd_max_range_ratio_input.setToolTip("Compression threshold: CVD range must be <= avg_range × this ratio.")
+        self.cvd_max_range_ratio_input.valueChanged.connect(self._on_chop_filter_settings_changed)
+        cvd_breakout_form.addRow("Max Ratio", self.cvd_max_range_ratio_input)
+
+        self.cvd_breakout_min_adx_input = QDoubleSpinBox()
+        self.cvd_breakout_min_adx_input.setRange(0.0, 60.0)
+        self.cvd_breakout_min_adx_input.setDecimals(1)
+        self.cvd_breakout_min_adx_input.setSingleStep(0.5)
+        self.cvd_breakout_min_adx_input.setValue(15.0)
+        self.cvd_breakout_min_adx_input.setStyleSheet(compact_spinbox_style)
+        _set_input_w(self.cvd_breakout_min_adx_input)
+        self.cvd_breakout_min_adx_input.setToolTip("Require ADX > this level OR enough CVD consolidation bars. 0 disables ADX gate.")
+        self.cvd_breakout_min_adx_input.valueChanged.connect(self._on_chop_filter_settings_changed)
+        cvd_breakout_form.addRow("Min ADX", self.cvd_breakout_min_adx_input)
+
+        col2.addWidget(cvd_breakout_group)
+
         col2.addStretch()
 
         # ══════════════════════════════════════════════════════════════════════

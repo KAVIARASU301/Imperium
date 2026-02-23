@@ -220,6 +220,7 @@ class StrategySignalDetector:
 
     def detect_ema_cvd_cross_strategy(
             self,
+            timestamps: list,
             price_data: np.ndarray,
             price_ema10: np.ndarray,
             price_ema51: np.ndarray,
@@ -233,7 +234,21 @@ class StrategySignalDetector:
         - Price already above/below both EMA10 and EMA51
         - CVD already above/below its EMA10
         - CVD crosses above/below its EMA51 → SIGNAL
+        - Parent timeframe filter: 5m EMA10 must be above/below EMA51 and
+          both slopes must confirm trend direction.
         """
+
+        length = min(
+            len(timestamps), len(price_data), len(price_ema10), len(price_ema51),
+            len(cvd_data), len(cvd_ema10), len(cvd_ema51),
+        )
+        if length <= 0:
+            return np.array([], dtype=bool), np.array([], dtype=bool)
+
+        parent_long_mask, parent_short_mask = self._build_parent_5m_trend_masks(
+            timestamps=timestamps[:length],
+            price_data=price_data[:length],
+        )
 
         # Price position checks
         price_above_both_emas = (price_data > price_ema10) & (price_data > price_ema51)
@@ -266,7 +281,8 @@ class StrategySignalDetector:
                 cvd_above_ema10 &
                 cvd_cross_above_ema51 &
                 price_up_slope &
-                cvd_up_slope
+                cvd_up_slope &
+                parent_long_mask
         )
 
         # SHORT signals: Everything bearish
@@ -275,10 +291,67 @@ class StrategySignalDetector:
                 cvd_below_ema10 &
                 cvd_cross_below_ema51 &
                 price_down_slope &
-                cvd_down_slope
+                cvd_down_slope &
+                parent_short_mask
         )
 
         return short_ema_cross, long_ema_cross
+
+    def _build_parent_5m_trend_masks(
+            self,
+            timestamps: list,
+            price_data: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Build 5m parent-trend masks and map them back to base bars."""
+        length = min(len(timestamps), len(price_data))
+        if length == 0:
+            return np.array([], dtype=bool), np.array([], dtype=bool)
+
+        ts_index = pd.to_datetime(pd.Index(timestamps[:length]))
+        base_frame = pd.DataFrame(
+            {
+                "timestamp": ts_index,
+                "price": np.asarray(price_data[:length], dtype=float),
+            }
+        ).dropna(subset=["timestamp", "price"])
+
+        if base_frame.empty:
+            neutral = np.ones(length, dtype=bool)
+            return neutral.copy(), neutral
+
+        base_frame = base_frame.set_index("timestamp").sort_index()
+        parent_close = base_frame["price"].resample("5min").last().dropna()
+        if parent_close.empty:
+            neutral = np.ones(length, dtype=bool)
+            return neutral.copy(), neutral
+
+        parent_ema10 = parent_close.ewm(span=10, adjust=False).mean()
+        parent_ema51 = parent_close.ewm(span=51, adjust=False).mean()
+
+        ema10_up = parent_ema10 > parent_ema10.shift(1)
+        ema51_up = parent_ema51 > parent_ema51.shift(1)
+        ema10_down = parent_ema10 < parent_ema10.shift(1)
+        ema51_down = parent_ema51 < parent_ema51.shift(1)
+
+        parent_long = (parent_ema10 > parent_ema51) & ema10_up & ema51_up
+        parent_short = (parent_ema10 < parent_ema51) & ema10_down & ema51_down
+
+        parent_signal = pd.DataFrame(
+            {
+                "parent_long": parent_long.fillna(False),
+                "parent_short": parent_short.fillna(False),
+            },
+            index=parent_close.index,
+        )
+
+        expanded = parent_signal.reindex(base_frame.index, method="ffill").fillna(False)
+        long_lookup = expanded["parent_long"].to_dict()
+        short_lookup = expanded["parent_short"].to_dict()
+
+        base_timestamps = pd.to_datetime(pd.Index(timestamps[:length]))
+        parent_long_mask = np.array([bool(long_lookup.get(ts, False)) for ts in base_timestamps], dtype=bool)
+        parent_short_mask = np.array([bool(short_lookup.get(ts, False)) for ts in base_timestamps], dtype=bool)
+        return parent_long_mask, parent_short_mask
 
     def detect_open_drive_strategy(
             self,
@@ -672,6 +745,102 @@ class StrategySignalDetector:
                     short_breakout[i] = True
 
         return long_breakout, short_breakout, range_highs, range_lows
+
+    def detect_cvd_range_breakout_strategy(
+            self,
+            price_high: np.ndarray,
+            price_low: np.ndarray,
+            price_close: np.ndarray,
+            price_ema10: np.ndarray,
+            cvd_data: np.ndarray,
+            cvd_ema10: np.ndarray,
+            cvd_range_lookback_bars: int = 30,
+            cvd_breakout_buffer: float = 0.10,
+            cvd_min_consol_bars: int = 15,
+            cvd_max_range_ratio: float = 0.80,
+            min_consolidation_adx: float = 15.0,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """
+        CVD RANGE BREAKOUT STRATEGY:
+
+        - Detect CVD compression over a rolling lookback window
+        - Trigger when CVD breaks its own range with a buffer
+        - Confirm direction with price slope and EMA10 side
+        - Optionally require ADX > threshold OR a minimum consolidation run
+        """
+        length = min(
+            len(price_high), len(price_low), len(price_close), len(price_ema10),
+            len(cvd_data), len(cvd_ema10)
+        )
+        long_breakout = np.zeros(length, dtype=bool)
+        short_breakout = np.zeros(length, dtype=bool)
+
+        if length < 3:
+            return short_breakout, long_breakout
+
+        lookback = max(3, int(cvd_range_lookback_bars))
+        min_consol = max(1, int(cvd_min_consol_bars))
+        ratio_limit = max(0.05, float(cvd_max_range_ratio))
+        breakout_buffer = max(0.0, float(cvd_breakout_buffer))
+        min_adx = max(0.0, float(min_consolidation_adx))
+
+        cvd_diff = np.abs(np.diff(cvd_data[:length], prepend=cvd_data[0]))
+        cvd_avg_range = pd.Series(cvd_diff).rolling(lookback, min_periods=2).mean().to_numpy()
+        cvd_ema_up, cvd_ema_down = self._calculate_slope_masks(cvd_ema10[:length])
+        price_up_slope, price_down_slope = self._calculate_slope_masks(price_close[:length])
+        adx_series = self._compute_adx_simple(price_high[:length], price_low[:length], price_close[:length], period=14)
+
+        consol_run = 0
+        for i in range(lookback, length):
+            start_idx = max(0, i - lookback)
+            cvd_window = cvd_data[start_idx:i]
+            if len(cvd_window) < 2:
+                continue
+
+            range_high = float(np.max(cvd_window))
+            range_low = float(np.min(cvd_window))
+            range_size = range_high - range_low
+            if range_size <= 1e-9:
+                continue
+
+            avg_range = float(cvd_avg_range[i])
+            if not np.isfinite(avg_range) or avg_range <= 1e-9:
+                continue
+
+            is_consolidating = range_size <= (avg_range * ratio_limit)
+            consol_run = (consol_run + 1) if is_consolidating else 0
+            if not is_consolidating:
+                continue
+
+            adx_ok = min_adx <= 0 or float(adx_series[i]) > min_adx
+            consol_ok = consol_run >= min_consol
+            if not (adx_ok or consol_ok):
+                continue
+
+            ext = range_size * breakout_buffer
+            cvd_value = float(cvd_data[i])
+
+            long_break = cvd_value > (range_high + ext)
+            short_break = cvd_value < (range_low - ext)
+
+            if long_break:
+                if (
+                    price_up_slope[i]
+                    and price_close[i] > price_ema10[i]
+                    and cvd_data[i] > cvd_ema10[i]
+                    and cvd_ema_up[i]
+                ):
+                    long_breakout[i] = True
+            elif short_break:
+                if (
+                    price_down_slope[i]
+                    and price_close[i] < price_ema10[i]
+                    and cvd_data[i] < cvd_ema10[i]
+                    and cvd_ema_down[i]
+                ):
+                    short_breakout[i] = True
+
+        return short_breakout, long_breakout
 
     def _compute_squeeze_ratio(
             self,

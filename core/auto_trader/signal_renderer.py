@@ -334,6 +334,7 @@ class SignalRendererMixin:
         price_fast_filter, price_slow_filter = calculate_regime_trend_filter(price_data)
 
         short_ema_cross, long_ema_cross = self.strategy_detector.detect_ema_cvd_cross_strategy(
+            timestamps=self.all_timestamps,
             price_data=price_data,
             price_ema10=price_fast_filter,
             price_ema51=price_slow_filter,
@@ -372,6 +373,20 @@ class SignalRendererMixin:
                 range_lookback_minutes=self.range_lookback_input.value(),
                 breakout_threshold_multiplier=1.5
             )
+
+        short_cvd_range_breakout, long_cvd_range_breakout = self.strategy_detector.detect_cvd_range_breakout_strategy(
+            price_high=price_high,
+            price_low=price_low,
+            price_close=price_data,
+            price_ema10=price_fast_filter,
+            cvd_data=cvd_data,
+            cvd_ema10=cvd_fast_filter,
+            cvd_range_lookback_bars=int(self.cvd_range_lookback_input.value()),
+            cvd_breakout_buffer=float(self.cvd_breakout_buffer_input.value()),
+            cvd_min_consol_bars=int(self.cvd_min_consol_bars_input.value()),
+            cvd_max_range_ratio=float(self.cvd_max_range_ratio_input.value()),
+            min_consolidation_adx=float(self.cvd_breakout_min_adx_input.value()),
+        )
 
         session_keys = [ts.date() for ts in self.all_timestamps]
         price_vwap = calculate_vwap(price_data, volume_data, session_keys)
@@ -432,8 +447,8 @@ class SignalRendererMixin:
         }
 
         if selected_filters >= all_filters:
-            short_mask = short_atr_reversal | short_ema_cross | short_divergence | short_breakout | short_open_drive
-            long_mask = long_atr_reversal | long_ema_cross | long_divergence | long_breakout | long_open_drive
+            short_mask = short_atr_reversal | short_ema_cross | short_divergence | short_breakout | short_cvd_range_breakout | short_open_drive
+            long_mask = long_atr_reversal | long_ema_cross | long_divergence | long_breakout | long_cvd_range_breakout | long_open_drive
         else:
             short_mask = np.zeros_like(short_atr_reversal, dtype=bool)
             long_mask = np.zeros_like(long_atr_reversal, dtype=bool)
@@ -445,8 +460,8 @@ class SignalRendererMixin:
                 short_mask |= short_ema_cross
                 long_mask |= long_ema_cross
             if self.SIGNAL_FILTER_BREAKOUT_ONLY in selected_filters:
-                short_mask |= short_breakout
-                long_mask |= long_breakout
+                short_mask |= short_breakout | short_cvd_range_breakout
+                long_mask |= long_breakout | long_cvd_range_breakout
             if self.SIGNAL_FILTER_OTHERS in selected_filters:
                 short_mask |= short_divergence
                 long_mask |= long_divergence
@@ -473,6 +488,7 @@ class SignalRendererMixin:
                 "atr_divergence": short_divergence[:length],
                 "ema_cross": short_ema_cross[:length],
                 "range_breakout": short_breakout[:length],
+                "cvd_range_breakout": short_cvd_range_breakout[:length],
                 "open_drive": short_open_drive[:length],
             },
             "long": {
@@ -480,6 +496,7 @@ class SignalRendererMixin:
                 "atr_divergence": long_divergence[:length],
                 "ema_cross": long_ema_cross[:length],
                 "range_breakout": long_breakout[:length],
+                "cvd_range_breakout": long_cvd_range_breakout[:length],
                 "open_drive": long_open_drive[:length],
             },
         }
@@ -499,7 +516,7 @@ class SignalRendererMixin:
         # any strategy already drew at that bar, open_drive was silently skipped.
         def _resolve_strategy_at(idx: int, side: str) -> str:
             side_masks = strategy_masks.get(side, {})
-            for st in ("open_drive", "range_breakout", "ema_cross", "atr_divergence", "atr_reversal"):
+            for st in ("open_drive", "range_breakout", "cvd_range_breakout", "ema_cross", "atr_divergence", "atr_reversal"):
                 m = side_masks.get(st)
                 if m is not None and idx < len(m) and bool(m[idx]):
                     return st

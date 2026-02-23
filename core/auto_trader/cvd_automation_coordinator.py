@@ -124,9 +124,10 @@ class CvdAutomationCoordinator:
                     "ema_cross": "ema_cross",
                     "atr_divergence": "atr_divergence",
                     "range_breakout": "range_breakout",
+                    "cvd_range_breakout": "cvd_range_breakout",
                     "open_drive": "open_drive",
                 }.get(incoming_signal_type, "atr_reversal")
-                strategy_priority = {"atr_reversal": 1, "atr_divergence": 2, "ema_cross": 3, "range_breakout": 4, "open_drive": 5}
+                strategy_priority = {"atr_reversal": 1, "atr_divergence": 2, "ema_cross": 3, "cvd_range_breakout": 3.5, "range_breakout": 4, "open_drive": 5}
                 if strategy_priority.get(incoming_strategy, 0) <= strategy_priority.get(active_strategy, 0):
                     logger.info("[AUTO] Ignoring opposite lower-priority signal for token=%s (%s/%s kept over %s/%s).", token, active_side, active_strategy, signal_side, incoming_strategy)
                     return
@@ -152,13 +153,13 @@ class CvdAutomationCoordinator:
         stoploss_points = float(payload.get("stoploss_points") or state.get("stoploss_points") or 50.0)
         max_profit_giveback_points = float(payload.get("max_profit_giveback_points") or state.get("max_profit_giveback_points") or 0.0)
         open_drive_max_profit_giveback_points = float(payload.get("open_drive_max_profit_giveback_points") or state.get("open_drive_max_profit_giveback_points") or 0.0)
-        max_profit_giveback_strategies = payload.get("max_profit_giveback_strategies") or state.get("max_profit_giveback_strategies") or ["atr_reversal", "ema_cross", "atr_divergence", "range_breakout", "open_drive"]
+        max_profit_giveback_strategies = payload.get("max_profit_giveback_strategies") or state.get("max_profit_giveback_strategies") or ["atr_reversal", "ema_cross", "atr_divergence", "cvd_range_breakout", "range_breakout", "open_drive"]
         if not isinstance(max_profit_giveback_strategies, (list, tuple, set)):
-            max_profit_giveback_strategies = ["atr_reversal", "ema_cross", "atr_divergence", "range_breakout", "open_drive"]
+            max_profit_giveback_strategies = ["atr_reversal", "ema_cross", "atr_divergence", "cvd_range_breakout", "range_breakout", "open_drive"]
 
         entry_underlying = float(payload.get("price_close") or state.get("price_close") or 0.0)
         signal_type = payload.get("signal_type") or state.get("signal_filter")
-        strategy_type = {"ema_cross": "ema_cross", "atr_divergence": "atr_divergence", "range_breakout": "range_breakout", "open_drive": "open_drive"}.get(signal_type, "atr_reversal")
+        strategy_type = {"ema_cross": "ema_cross", "atr_divergence": "atr_divergence", "range_breakout": "range_breakout", "cvd_range_breakout": "cvd_range_breakout", "open_drive": "open_drive"}.get(signal_type, "atr_reversal")
         if float(contract.ltp or 0.0) <= 0 or entry_underlying <= 0:
             return
 
@@ -356,7 +357,7 @@ class CvdAutomationCoordinator:
         stoploss_points = _to_finite_float(active_trade.get("stoploss_points"), 0.0)
         max_profit_giveback_points = _to_finite_float(active_trade.get("max_profit_giveback_points"), 0.0)
         open_drive_max_profit_giveback_points = _to_finite_float(active_trade.get("open_drive_max_profit_giveback_points"), 0.0)
-        max_profit_giveback_strategies = set(active_trade.get("max_profit_giveback_strategies") or ["atr_reversal", "ema_cross", "atr_divergence", "range_breakout", "open_drive"])
+        max_profit_giveback_strategies = set(active_trade.get("max_profit_giveback_strategies") or ["atr_reversal", "ema_cross", "atr_divergence", "cvd_range_breakout", "range_breakout", "open_drive"])
         atr_trailing_step_points = _to_finite_float(active_trade.get("atr_trailing_step_points"), 10.0)
         entry_underlying = _to_finite_float(active_trade.get("entry_underlying"), 0.0)
         max_favorable_points = _to_finite_float(active_trade.get("max_favorable_points"), 0.0)
@@ -376,7 +377,7 @@ class CvdAutomationCoordinator:
                 trail_steps = int(max(0.0, favorable_move) // atr_trailing_step_points)
                 if trail_steps > 0:
                     trail_offset = trail_steps * atr_trailing_step_points
-            elif strategy_type in {"ema_cross", "range_breakout", "open_drive"} and favorable_move >= 200.0:
+            elif strategy_type in {"ema_cross", "range_breakout", "cvd_range_breakout", "open_drive"} and favorable_move >= 200.0:
                 trail_offset = (1 + int((favorable_move - 200.0) // 100.0)) * 100.0
             if trail_offset > 0:
                 new_sl = (entry_underlying - stoploss_points + trail_offset) if signal_side == "long" else (entry_underlying + stoploss_points - trail_offset)
@@ -414,7 +415,7 @@ class CvdAutomationCoordinator:
             exit_reason = "AUTO_EMA10_CROSS"
         elif strategy_type == "atr_divergence" and ((signal_side == "long" and price_cross_above_ema51) or (signal_side == "short" and price_cross_below_ema51)):
             exit_reason = "AUTO_EMA51_CROSS"
-        elif strategy_type == "range_breakout" and ((signal_side == "long" and (price_cross_below_ema10 or price_cross_below_ema51)) or (signal_side == "short" and (price_cross_above_ema10 or price_cross_above_ema51))):
+        elif strategy_type in {"range_breakout", "cvd_range_breakout"} and ((signal_side == "long" and (price_cross_below_ema10 or price_cross_below_ema51)) or (signal_side == "short" and (price_cross_above_ema10 or price_cross_above_ema51))):
             exit_reason = "AUTO_BREAKOUT_EXIT"
         elif strategy_type == "open_drive" and (
                 (signal_side == "long" and (price_close < ema10 or cvd_close < cvd_ema10))

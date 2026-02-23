@@ -72,6 +72,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
     MAX_GIVEBACK_STRATEGY_EMA_CROSS = "ema_cross"
     MAX_GIVEBACK_STRATEGY_ATR_DIVERGENCE = "atr_divergence"
     MAX_GIVEBACK_STRATEGY_RANGE_BREAKOUT = "range_breakout"
+    MAX_GIVEBACK_STRATEGY_CVD_RANGE_BREAKOUT = "cvd_range_breakout"
     MAX_GIVEBACK_STRATEGY_OPEN_DRIVE = "open_drive"
 
     ROUTE_BUY_EXIT_PANEL = "buy_exit_panel"
@@ -1005,6 +1006,11 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self.open_drive_max_profit_giveback_input.blockSignals(True)
         self.breakout_min_consol_input.blockSignals(True)
         self.breakout_min_consol_adx_input.blockSignals(True)
+        self.cvd_range_lookback_input.blockSignals(True)
+        self.cvd_breakout_buffer_input.blockSignals(True)
+        self.cvd_min_consol_bars_input.blockSignals(True)
+        self.cvd_max_range_ratio_input.blockSignals(True)
+        self.cvd_breakout_min_adx_input.blockSignals(True)
         self.chart_line_width_input.blockSignals(True)
         self.chart_line_opacity_input.blockSignals(True)
         self.confluence_line_width_input.blockSignals(True)
@@ -1127,6 +1133,11 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self.breakout_min_consol_adx_input.setValue(_read_setting("breakout_min_consolidation_adx", 0.0, float))
         self._breakout_min_consolidation_minutes = self.breakout_min_consol_input.value()
         self._breakout_min_consolidation_adx = float(self.breakout_min_consol_adx_input.value())
+        self.cvd_range_lookback_input.setValue(_read_setting("cvd_range_lookback_bars", 30, int))
+        self.cvd_breakout_buffer_input.setValue(_read_setting("cvd_breakout_buffer", 0.10, float))
+        self.cvd_min_consol_bars_input.setValue(_read_setting("cvd_min_consol_bars", 15, int))
+        self.cvd_max_range_ratio_input.setValue(_read_setting("cvd_max_range_ratio", 0.80, float))
+        self.cvd_breakout_min_adx_input.setValue(_read_setting("cvd_breakout_min_adx", 15.0, float))
         self.chart_line_width_input.setValue(
             _read_setting("chart_line_width", self.chart_line_width_input.value(), float)
         )
@@ -1208,6 +1219,11 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self.open_drive_max_profit_giveback_input.blockSignals(False)
         self.breakout_min_consol_input.blockSignals(False)
         self.breakout_min_consol_adx_input.blockSignals(False)
+        self.cvd_range_lookback_input.blockSignals(False)
+        self.cvd_breakout_buffer_input.blockSignals(False)
+        self.cvd_min_consol_bars_input.blockSignals(False)
+        self.cvd_max_range_ratio_input.blockSignals(False)
+        self.cvd_breakout_min_adx_input.blockSignals(False)
         self.chart_line_width_input.blockSignals(False)
         self.chart_line_opacity_input.blockSignals(False)
         self.confluence_line_width_input.blockSignals(False)
@@ -1271,6 +1287,11 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
             # 🆕 Breakout consolidation
             "breakout_min_consolidation_minutes": int(self.breakout_min_consol_input.value()),
             "breakout_min_consolidation_adx": float(self.breakout_min_consol_adx_input.value()),
+            "cvd_range_lookback_bars": int(self.cvd_range_lookback_input.value()),
+            "cvd_breakout_buffer": float(self.cvd_breakout_buffer_input.value()),
+            "cvd_min_consol_bars": int(self.cvd_min_consol_bars_input.value()),
+            "cvd_max_range_ratio": float(self.cvd_max_range_ratio_input.value()),
+            "cvd_breakout_min_adx": float(self.cvd_breakout_min_adx_input.value()),
             "chart_line_width": float(self.chart_line_width_input.value()),
             "chart_line_opacity": float(self.chart_line_opacity_input.value()),
             "confluence_line_width": float(self.confluence_line_width_input.value()),
@@ -1716,6 +1737,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
             cls.MAX_GIVEBACK_STRATEGY_EMA_CROSS,
             cls.MAX_GIVEBACK_STRATEGY_ATR_DIVERGENCE,
             cls.MAX_GIVEBACK_STRATEGY_RANGE_BREAKOUT,
+            cls.MAX_GIVEBACK_STRATEGY_CVD_RANGE_BREAKOUT,
         )
 
     def _selected_max_giveback_strategies(self) -> list[str]:
@@ -1728,6 +1750,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
             selected.append(self.MAX_GIVEBACK_STRATEGY_ATR_DIVERGENCE)
         if self.max_giveback_range_breakout_check.isChecked():
             selected.append(self.MAX_GIVEBACK_STRATEGY_RANGE_BREAKOUT)
+            selected.append(self.MAX_GIVEBACK_STRATEGY_CVD_RANGE_BREAKOUT)
         return selected
 
     def _apply_max_giveback_strategy_selection(self, strategies: list[str]):
@@ -1742,7 +1765,8 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
             self.MAX_GIVEBACK_STRATEGY_ATR_DIVERGENCE in selected
         )
         self.max_giveback_range_breakout_check.setChecked(
-            self.MAX_GIVEBACK_STRATEGY_RANGE_BREAKOUT in selected
+            (self.MAX_GIVEBACK_STRATEGY_RANGE_BREAKOUT in selected)
+            or (self.MAX_GIVEBACK_STRATEGY_CVD_RANGE_BREAKOUT in selected)
         )
 
     def _enabled_ema_periods(self) -> set[int]:
