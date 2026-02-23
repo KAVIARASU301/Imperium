@@ -80,6 +80,29 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
     ROUTE_BUY_EXIT_PANEL = "buy_exit_panel"
     ROUTE_DIRECT = "direct"
 
+    STRATEGY_PRIORITY_KEYS = (
+        "atr_reversal",
+        "atr_divergence",
+        "ema_cross",
+        "cvd_range_breakout",
+        "range_breakout",
+        "open_drive",
+    )
+    STRATEGY_PRIORITY_LABELS = {
+        "atr_reversal": "ATR Reversal",
+        "atr_divergence": "ATR Divergence",
+        "ema_cross": "EMA Cross",
+        "cvd_range_breakout": "CVD Range Breakout",
+        "range_breakout": "Range Breakout",
+        "open_drive": "Open Drive",
+    }
+    CPR_PRIORITY_LIST_LABELS = {
+        "narrow": "Narrow CPR",
+        "neutral": "Neutral CPR",
+        "wide": "Wide CPR",
+        "fallback": "Fallback",
+    }
+
     BG_TARGET_NONE = "none"
     BG_TARGET_CHART = "chart"
     BG_TARGET_WINDOW = "window"
@@ -153,6 +176,9 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self._cpr_lines = []
         self._cpr_labels = []
         self._latest_previous_day_cpr: dict | None = None
+        self._cpr_strategy_priorities = self._default_cpr_strategy_priorities()
+        self._active_priority_list_key = "fallback"
+        self._last_logged_priority_list_key: str | None = None
 
         # 🆕 Strategy-aware chop filter defaults
         self._chop_filter_atr_reversal = True
@@ -1036,6 +1062,8 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self.show_cpr_labels_check.blockSignals(True)
         self.cpr_narrow_threshold_input.blockSignals(True)
         self.cpr_wide_threshold_input.blockSignals(True)
+        for spin in getattr(self, "cpr_priority_inputs", {}).values():
+            spin.blockSignals(True)
         for cb in self.setup_ema_default_checks.values():
             cb.blockSignals(True)
 
@@ -1179,7 +1207,6 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self._price_line_color = _read_setting("price_line_color", self._price_line_color)
         self._confluence_short_color = _read_setting("confluence_short_color", self._confluence_short_color)
         self._confluence_long_color = _read_setting("confluence_long_color", self._confluence_long_color)
-
         for period, cb in self.setup_ema_default_checks.items():
             default_enabled = (period == 51)
             cb.setChecked(_read_setting(f"ema_default_{period}", default_enabled, bool))
@@ -1201,6 +1228,21 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self._show_cpr_labels = self.show_cpr_labels_check.isChecked()
         self._cpr_narrow_threshold = float(self.cpr_narrow_threshold_input.value())
         self._cpr_wide_threshold = float(self.cpr_wide_threshold_input.value())
+
+        defaults = self._default_cpr_strategy_priorities()
+        self._cpr_strategy_priorities = {}
+        for list_key in self.CPR_PRIORITY_LIST_LABELS.keys():
+            self._cpr_strategy_priorities[list_key] = {}
+            for strategy_key in self.STRATEGY_PRIORITY_KEYS:
+                value = _read_setting(
+                    f"cpr_priority_{list_key}_{strategy_key}",
+                    defaults[list_key][strategy_key],
+                    int,
+                )
+                self._cpr_strategy_priorities[list_key][strategy_key] = int(value)
+                spin = self.cpr_priority_inputs.get((list_key, strategy_key))
+                if spin is not None:
+                    spin.setValue(int(value))
 
         persisted_window_bg = _read_setting("window_background_image_path", "") or ""
         persisted_chart_bg = _read_setting("chart_background_image_path", "") or ""
@@ -1272,6 +1314,8 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self.show_cpr_labels_check.blockSignals(False)
         self.cpr_narrow_threshold_input.blockSignals(False)
         self.cpr_wide_threshold_input.blockSignals(False)
+        for spin in getattr(self, "cpr_priority_inputs", {}).values():
+            spin.blockSignals(False)
         for cb in self.setup_ema_default_checks.values():
             cb.blockSignals(False)
 
@@ -1279,6 +1323,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self._update_atr_reversal_markers()
         self._setup_values_ready = True
         self._on_automation_settings_changed()
+        self._log_active_priority_list_if_needed()
 
     def _persist_setup_values(self):
         if not getattr(self, "_setup_values_ready", False):
@@ -1351,6 +1396,10 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
 
         }
 
+        for list_key, strategy_map in self._cpr_strategy_priorities.items():
+            for strategy_key, priority_value in strategy_map.items():
+                values_to_persist[f"cpr_priority_{list_key}_{strategy_key}"] = int(priority_value)
+
         for period, cb in self.setup_ema_default_checks.items():
             values_to_persist[f"ema_default_{period}"] = cb.isChecked()
 
@@ -1376,6 +1425,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
 
     def _on_automation_settings_changed(self, *_):
         self._persist_setup_values()
+        active_priority_list, strategy_priorities = self._active_strategy_priorities()
         self.automation_state_signal.emit({
             "instrument_token": self.instrument_token,
             "symbol": self.symbol,
@@ -1387,6 +1437,8 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
             "route": self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL,
             "signal_filter": self._selected_signal_filter(),
             "signal_filters": self._selected_signal_filters(),
+            "priority_list": active_priority_list,
+            "strategy_priorities": strategy_priorities,
         })
         self._live_stacker_state = None
 
@@ -1468,7 +1520,21 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self._cpr_wide_threshold = float(self.cpr_wide_threshold_input.value())
         if hasattr(self, "chart_line_width_input"):
             self._persist_setup_values()
+        self._log_active_priority_list_if_needed()
         self._render_cpr_levels()
+        self._on_automation_settings_changed()
+
+    def _on_cpr_priorities_changed(self, *_):
+        updated: dict[str, dict[str, int]] = {}
+        for list_key in self.CPR_PRIORITY_LIST_LABELS.keys():
+            updated[list_key] = {}
+            for strategy_key in self.STRATEGY_PRIORITY_KEYS:
+                spin = self.cpr_priority_inputs.get((list_key, strategy_key))
+                value = int(spin.value()) if spin is not None else 0
+                updated[list_key][strategy_key] = value
+        self._cpr_strategy_priorities = updated
+        self._persist_setup_values()
+        self._on_automation_settings_changed()
 
     def _on_focus_mode_changed(self, enabled: bool):
         self.btn_focus.setText("2D" if enabled else "1D")
@@ -1892,6 +1958,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
     def _on_fetch_result(self, cvd_df, price_df, prev_close, previous_day_cpr):
         self._is_loading = False
         self._latest_previous_day_cpr = previous_day_cpr
+        self._log_active_priority_list_if_needed()
         self._plot_data(cvd_df, price_df, prev_close)
 
         self._historical_loaded_once = True
@@ -2159,6 +2226,72 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
                 self.price_plot.removeItem(label)
         self._cpr_lines = []
         self._cpr_labels = []
+
+    def _default_cpr_strategy_priorities(self) -> dict[str, dict[str, int]]:
+        return {
+            "narrow": {
+                "atr_reversal": 1,
+                "atr_divergence": 3,
+                "ema_cross": 4,
+                "cvd_range_breakout": 5,
+                "range_breakout": 6,
+                "open_drive": 2,
+            },
+            "neutral": {
+                "atr_reversal": 1,
+                "atr_divergence": 2,
+                "ema_cross": 3,
+                "cvd_range_breakout": 4,
+                "range_breakout": 5,
+                "open_drive": 6,
+            },
+            "wide": {
+                "atr_reversal": 6,
+                "atr_divergence": 5,
+                "ema_cross": 4,
+                "cvd_range_breakout": 2,
+                "range_breakout": 1,
+                "open_drive": 3,
+            },
+            "fallback": {
+                "atr_reversal": 1,
+                "atr_divergence": 2,
+                "ema_cross": 3,
+                "cvd_range_breakout": 4,
+                "range_breakout": 5,
+                "open_drive": 6,
+            },
+        }
+
+    def _active_cpr_priority_list_key(self) -> str:
+        cpr = self._latest_previous_day_cpr or {}
+        width = cpr.get("range_width")
+        if width is None:
+            return "fallback"
+        classification, _ = self._classify_cpr_width(float(width))
+        return {
+            "Narrow CPR": "narrow",
+            "Neutral CPR": "neutral",
+            "Wide CPR": "wide",
+        }.get(classification, "fallback")
+
+    def _active_strategy_priorities(self) -> tuple[str, dict[str, int]]:
+        key = self._active_cpr_priority_list_key()
+        priorities = self._cpr_strategy_priorities.get(key) or self._cpr_strategy_priorities.get("fallback", {})
+        return key, dict(priorities)
+
+    def _log_active_priority_list_if_needed(self):
+        key, priorities = self._active_strategy_priorities()
+        self._active_priority_list_key = key
+        if self._last_logged_priority_list_key == key:
+            return
+        self._last_logged_priority_list_key = key
+        logger.info(
+            "[AUTO] CPR priority list for %s (%s): %s",
+            self.symbol,
+            self.CPR_PRIORITY_LIST_LABELS.get(key, key.title()),
+            priorities,
+        )
 
     def _classify_cpr_width(self, width: float) -> tuple[str, str]:
         narrow = max(0.0, self._cpr_narrow_threshold)
@@ -2734,12 +2867,15 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         to_unwind = state.stacks_to_unwind(current_price)
         if to_unwind:
             for entry in to_unwind:
+                active_priority_list, strategy_priorities = self._active_strategy_priorities()
                 unwind_ts = f"{closed_bar_ts}_unwind{entry.stack_number}"
                 unwind_payload = {
                     "instrument_token": self.instrument_token,
                     "symbol": self.symbol,
                     "signal_side": side,
                     "signal_type": strategy_type,
+                    "priority_list": active_priority_list,
+                    "strategy_priorities": strategy_priorities,
                     "signal_x": x_arr_val,
                     "price_close": current_price,
                     "stoploss_points": float(self.automation_stoploss_input.value()),
@@ -2769,11 +2905,14 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
 
             stack_ts = f"{closed_bar_ts}_stack{stack_num}"
 
+            active_priority_list, strategy_priorities = self._active_strategy_priorities()
             payload = {
                 "instrument_token": self.instrument_token,
                 "symbol": self.symbol,
                 "signal_side": side,
                 "signal_type": strategy_type,
+                "priority_list": active_priority_list,
+                "strategy_priorities": strategy_priorities,
                 "signal_x": x_arr_val,
                 "price_close": current_price,
                 "stoploss_points": float(self.automation_stoploss_input.value()),

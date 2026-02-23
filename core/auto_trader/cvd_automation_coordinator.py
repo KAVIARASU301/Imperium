@@ -127,9 +127,24 @@ class CvdAutomationCoordinator:
                     "cvd_range_breakout": "cvd_range_breakout",
                     "open_drive": "open_drive",
                 }.get(incoming_signal_type, "atr_reversal")
-                strategy_priority = {"atr_reversal": 1, "atr_divergence": 2, "ema_cross": 3, "cvd_range_breakout": 3.5, "range_breakout": 4, "open_drive": 5}
+                strategy_priority = payload.get("strategy_priorities") or state.get("strategy_priorities") or {}
+                try:
+                    strategy_priority = {str(k): int(v) for k, v in dict(strategy_priority).items()}
+                except Exception:
+                    strategy_priority = {}
+                if not strategy_priority:
+                    strategy_priority = {"atr_reversal": 1, "atr_divergence": 2, "ema_cross": 3, "cvd_range_breakout": 4, "range_breakout": 5, "open_drive": 6}
                 if strategy_priority.get(incoming_strategy, 0) <= strategy_priority.get(active_strategy, 0):
-                    logger.info("[AUTO] Ignoring opposite lower-priority signal for token=%s (%s/%s kept over %s/%s).", token, active_side, active_strategy, signal_side, incoming_strategy)
+                    logger.info(
+                        "[AUTO] Ignoring opposite lower-priority signal for token=%s (%s list=%s kept %s/%s over %s/%s).",
+                        token,
+                        state.get("symbol") or token,
+                        payload.get("priority_list") or state.get("priority_list") or "fallback",
+                        active_side,
+                        active_strategy,
+                        signal_side,
+                        incoming_strategy,
+                    )
                     return
 
                 active_symbols = active_trade.get("tradingsymbols") or [active_trade.get("tradingsymbol")]

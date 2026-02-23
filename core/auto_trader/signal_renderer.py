@@ -221,6 +221,8 @@ class SignalRendererMixin:
             return
         self._last_emitted_state_key = state_key
 
+        active_priority_list, strategy_priorities = self._active_strategy_priorities()
+        self._log_active_priority_list_if_needed()
         self.automation_state_signal.emit({
             "instrument_token": self.instrument_token,
             "symbol": self.symbol,
@@ -231,6 +233,8 @@ class SignalRendererMixin:
             "open_drive_max_profit_giveback_points": float(self.open_drive_max_profit_giveback_input.value()),
             "route": self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL,
             "signal_filter": self._selected_signal_filter(),
+            "priority_list": active_priority_list,
+            "strategy_priorities": strategy_priorities,
             "bar_x": float(x_arr[idx]),
             "price_close": new_price_close,
             "ema10": new_ema10,
@@ -520,7 +524,13 @@ class SignalRendererMixin:
         # any strategy already drew at that bar, open_drive was silently skipped.
         def _resolve_strategy_at(idx: int, side: str) -> str:
             side_masks = strategy_masks.get(side, {})
-            for st in ("open_drive", "range_breakout", "cvd_range_breakout", "ema_cross", "atr_divergence", "atr_reversal"):
+            _, priorities = self._active_strategy_priorities()
+            ordered_strategies = sorted(
+                priorities.keys(),
+                key=lambda strategy_key: priorities.get(strategy_key, 0),
+                reverse=True,
+            )
+            for st in ordered_strategies:
                 m = side_masks.get(st)
                 if m is not None and idx < len(m) and bool(m[idx]):
                     return st
@@ -582,11 +592,14 @@ class SignalRendererMixin:
 
         self._last_emitted_closed_bar_ts = closed_bar_ts
 
+        active_priority_list, strategy_priorities = self._active_strategy_priorities()
         payload = {
             "instrument_token": self.instrument_token,
             "symbol": self.symbol,
             "signal_side": side,
             "signal_type": strategy_type,
+            "priority_list": active_priority_list,
+            "strategy_priorities": strategy_priorities,
             "signal_x": float(x_arr[closed_idx]),
             "price_close": float(self.all_price_data[closed_idx]),
             "stoploss_points": float(self.automation_stoploss_input.value()),

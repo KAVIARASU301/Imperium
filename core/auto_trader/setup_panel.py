@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QGraphicsPixmapItem,
     QTabWidget,
+    QGridLayout,
 )
 
 
@@ -674,6 +675,34 @@ class SetupPanelMixin:
         cpr_col.addStretch()
 
         # ══════════════════════════════════════════════════════════════════
+        # CPR Strategy Priorities
+        # ══════════════════════════════════════════════════════════════════
+        priority_tab = QWidget()
+        priority_layout = QVBoxLayout(priority_tab)
+        priority_layout.setContentsMargins(6, 6, 6, 6)
+        priority_layout.setSpacing(6)
+        priority_layout.addWidget(_note("Higher number = higher strategy priority. Auto trader uses Narrow/Neutral/Wide list based on CPR width, and Fallback when CPR is unavailable."))
+
+        columns_grid = QGridLayout()
+        columns_grid.setHorizontalSpacing(_COL_SPACING)
+        columns_grid.setVerticalSpacing(_GRP_SPACING)
+        self.cpr_priority_inputs = {}
+
+        for col_idx, list_key in enumerate(("narrow", "neutral", "wide", "fallback")):
+            grp, frm = _group(f"{self.CPR_PRIORITY_LIST_LABELS.get(list_key, list_key.title())} Priority")
+            for strategy_key in self.STRATEGY_PRIORITY_KEYS:
+                spin = QSpinBox()
+                spin.setRange(0, 99)
+                spin.setStyleSheet(compact_spinbox_style)
+                _w(spin)
+                spin.valueChanged.connect(self._on_cpr_priorities_changed)
+                frm.addRow(self.STRATEGY_PRIORITY_LABELS.get(strategy_key, strategy_key), spin)
+                self.cpr_priority_inputs[(list_key, strategy_key)] = spin
+            columns_grid.addWidget(grp, 0, col_idx)
+
+        priority_layout.addLayout(columns_grid, 1)
+
+        # ══════════════════════════════════════════════════════════════════
         # Assemble (Tabbed)
         # ══════════════════════════════════════════════════════════════════
         tabs = QTabWidget(self.setup_dialog)
@@ -698,6 +727,7 @@ class SetupPanelMixin:
 
         tabs.addTab(general_tab, "General")
         tabs.addTab(cpr_tab, "CPR")
+        tabs.addTab(priority_tab, "Priorities")
         root.addWidget(tabs, 1)
 
         # ── Close bar ─────────────────────────────────────────────────────

@@ -87,15 +87,8 @@ class SimulatorMixin:
 
 
     def _strategy_priority(self, strategy_type: str) -> int:
-        priorities = {
-            "atr_reversal": 1,
-            "atr_divergence": 2,
-            "ema_cross": 3,
-            "cvd_range_breakout": 3.5,
-            "range_breakout": 4,
-            "open_drive": 5,
-        }
-        return priorities.get(strategy_type or "", 0)
+        _, priorities = self._active_strategy_priorities()
+        return int(priorities.get(strategy_type or "", 0))
 
 
 
@@ -104,8 +97,13 @@ class SimulatorMixin:
             return None
 
         side_masks = strategy_masks.get(side, {})
-        # Higher-priority strategies first.
-        for strategy_type in ("open_drive", "range_breakout", "cvd_range_breakout", "ema_cross", "atr_divergence", "atr_reversal"):
+        _, priorities = self._active_strategy_priorities()
+        ordered_strategies = sorted(
+            priorities.keys(),
+            key=lambda strategy_key: priorities.get(strategy_key, 0),
+            reverse=True,
+        )
+        for strategy_type in ordered_strategies:
             mask = side_masks.get(strategy_type)
             if mask is not None and idx < len(mask) and bool(mask[idx]):
                 return strategy_type
