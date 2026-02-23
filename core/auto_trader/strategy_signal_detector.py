@@ -280,6 +280,80 @@ class StrategySignalDetector:
 
         return short_ema_cross, long_ema_cross
 
+    def detect_open_drive_strategy(
+            self,
+            timestamps: list,
+            price_data: np.ndarray,
+            price_ema10: np.ndarray,
+            price_ema51: np.ndarray,
+            price_vwap: np.ndarray,
+            cvd_data: np.ndarray,
+            cvd_ema10: np.ndarray,
+            trigger_hour: int,
+            trigger_minute: int,
+            enabled: bool = True,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Open Drive Model:
+        Trigger only at configured time (default 09:17), once per session date.
+
+        LONG:
+            price > EMA10 > EMA51
+            price > VWAP
+            CVD > CVD EMA10
+
+        SHORT (vice versa):
+            price < EMA10 < EMA51
+            price < VWAP
+            CVD < CVD EMA10
+        """
+        length = min(
+            len(timestamps), len(price_data), len(price_ema10), len(price_ema51),
+            len(price_vwap), len(cvd_data), len(cvd_ema10),
+        )
+        long_open_drive = np.zeros(length, dtype=bool)
+        short_open_drive = np.zeros(length, dtype=bool)
+
+        if not enabled or length == 0:
+            return short_open_drive, long_open_drive
+
+        fired_dates: set = set()
+
+        for idx in range(length):
+            ts = timestamps[idx]
+            with suppress(Exception):
+                if ts.hour != trigger_hour or ts.minute != trigger_minute:
+                    continue
+            try:
+                session_date = ts.date()
+            except Exception:
+                session_date = idx
+
+            if session_date in fired_dates:
+                continue
+
+            price = float(price_data[idx])
+            ema10 = float(price_ema10[idx])
+            ema51 = float(price_ema51[idx])
+            vwap = float(price_vwap[idx])
+            cvd = float(cvd_data[idx])
+            cvd_fast = float(cvd_ema10[idx])
+
+            if not np.isfinite([price, ema10, ema51, vwap, cvd, cvd_fast]).all():
+                continue
+
+            long_cond = (price > ema10 > ema51) and (price > vwap) and (cvd > cvd_fast)
+            short_cond = (price < ema10 < ema51) and (price < vwap) and (cvd < cvd_fast)
+
+            if long_cond:
+                long_open_drive[idx] = True
+                fired_dates.add(session_date)
+            elif short_cond:
+                short_open_drive[idx] = True
+                fired_dates.add(session_date)
+
+        return short_open_drive, long_open_drive
+
     def detect_atr_cvd_divergence_strategy(
             self,
             price_atr_above: np.ndarray,  # Price ATR reversal - above EMA (potential SHORT)

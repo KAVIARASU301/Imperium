@@ -12,6 +12,7 @@ from core.auto_trader.indicators import (
     compute_adx,
     is_chop_regime,
     calculate_regime_trend_filter,
+    calculate_vwap,
 )
 from core.auto_trader.stacker import StackerState
 
@@ -370,6 +371,21 @@ class SignalRendererMixin:
                 range_lookback_minutes=self.range_lookback_input.value(),
                 breakout_threshold_multiplier=1.5
             )
+        session_keys = [ts.date() for ts in self.all_timestamps]
+        price_vwap = calculate_vwap(price_data, volume_data, session_keys)
+        short_open_drive, long_open_drive = self.strategy_detector.detect_open_drive_strategy(
+            timestamps=self.all_timestamps,
+            price_data=price_data,
+            price_ema10=price_fast_filter,
+            price_ema51=price_slow_filter,
+            price_vwap=price_vwap,
+            cvd_data=cvd_data,
+            cvd_ema10=cvd_fast_filter,
+            trigger_hour=int(self.open_drive_time_hour_input.value()),
+            trigger_minute=int(self.open_drive_time_minute_input.value()),
+            enabled=bool(self.open_drive_enabled_check.isChecked()),
+        )
+
 
         breakout_long_context, breakout_short_context = self.strategy_detector.build_breakout_context_masks(
             long_breakout=long_breakout,
@@ -416,8 +432,8 @@ class SignalRendererMixin:
             short_mask = short_divergence
             long_mask = long_divergence
         else:
-            short_mask = short_atr_reversal | short_ema_cross | short_divergence | short_breakout
-            long_mask = long_atr_reversal | long_ema_cross | long_divergence | long_breakout
+            short_mask = short_atr_reversal | short_ema_cross | short_divergence | short_breakout | short_open_drive
+            long_mask = long_atr_reversal | long_ema_cross | long_divergence | long_breakout | long_open_drive
 
         length = min(len(x_arr), len(short_mask), len(long_mask))
         x_arr = x_arr[:length]
@@ -430,12 +446,14 @@ class SignalRendererMixin:
                 "atr_divergence": short_divergence[:length],
                 "ema_cross": short_ema_cross[:length],
                 "range_breakout": short_breakout[:length],
+                "open_drive": short_open_drive[:length],
             },
             "long": {
                 "atr_reversal": long_atr_reversal[:length],
                 "atr_divergence": long_divergence[:length],
                 "ema_cross": long_ema_cross[:length],
                 "range_breakout": long_breakout[:length],
+                "open_drive": long_open_drive[:length],
             },
         }
 
@@ -517,7 +535,11 @@ class SignalRendererMixin:
         QTimer.singleShot(0, lambda p=payload: self.automation_signal.emit(p))
 
         # ───────────────────────── STACKER INIT ─────────────────────────
-        if getattr(self, "stacker_enabled_check", None) and self.stacker_enabled_check.isChecked():
+        stacker_allowed = bool(getattr(self, "stacker_enabled_check", None) and self.stacker_enabled_check.isChecked())
+        if strategy_type == "open_drive":
+            stacker_allowed = stacker_allowed and bool(getattr(self, "open_drive_stack_enabled_check", None) and self.open_drive_stack_enabled_check.isChecked())
+
+        if stacker_allowed:
             self._live_stacker_state = StackerState(
                 anchor_entry_price=float(self.all_price_data[closed_idx]),
                 anchor_bar_idx=closed_idx,

@@ -248,6 +248,53 @@ class SetupPanelMixin:
 
         col2.addWidget(governance_group)
 
+        # ── Open Drive Model ─────────────────────────────────────────────────
+        open_drive_group, open_drive_form = _compact_form("Open Drive Model")
+
+        self.open_drive_enabled_check = QCheckBox("Enable Open Drive")
+        self.open_drive_enabled_check.setChecked(False)
+        self.open_drive_enabled_check.setToolTip(
+            "Enable Open Drive strategy. Fires only at configured time when\n"
+            "Price/EMA/VWAP/CVD conditions align."
+        )
+        self.open_drive_enabled_check.toggled.connect(self._on_open_drive_settings_changed)
+        open_drive_form.addRow("Enable", self.open_drive_enabled_check)
+
+        open_drive_time_row = QWidget()
+        open_drive_time_layout = QHBoxLayout(open_drive_time_row)
+        open_drive_time_layout.setContentsMargins(0, 0, 0, 0)
+        open_drive_time_layout.setSpacing(4)
+
+        self.open_drive_time_hour_input = QSpinBox()
+        self.open_drive_time_hour_input.setRange(0, 23)
+        self.open_drive_time_hour_input.setValue(9)
+        self.open_drive_time_hour_input.setStyleSheet(compact_spinbox_style)
+        _set_input_w(self.open_drive_time_hour_input, w=50)
+        self.open_drive_time_hour_input.valueChanged.connect(self._on_open_drive_settings_changed)
+
+        self.open_drive_time_minute_input = QSpinBox()
+        self.open_drive_time_minute_input.setRange(0, 59)
+        self.open_drive_time_minute_input.setValue(17)
+        self.open_drive_time_minute_input.setStyleSheet(compact_spinbox_style)
+        _set_input_w(self.open_drive_time_minute_input, w=50)
+        self.open_drive_time_minute_input.valueChanged.connect(self._on_open_drive_settings_changed)
+
+        open_drive_time_layout.addWidget(self.open_drive_time_hour_input)
+        open_drive_time_layout.addWidget(QLabel(":"))
+        open_drive_time_layout.addWidget(self.open_drive_time_minute_input)
+        open_drive_time_layout.addStretch()
+        open_drive_form.addRow("Entry Time", open_drive_time_row)
+
+        self.open_drive_stack_enabled_check = QCheckBox("Stack continuation")
+        self.open_drive_stack_enabled_check.setChecked(True)
+        self.open_drive_stack_enabled_check.setToolTip(
+            "Allow Stacker continuation specifically for Open Drive entries."
+        )
+        self.open_drive_stack_enabled_check.toggled.connect(self._on_open_drive_settings_changed)
+        open_drive_form.addRow("Stack", self.open_drive_stack_enabled_check)
+
+        col2.addWidget(open_drive_group)
+
         # ── Chop Filter (per strategy) ────────────────────────────────────────
         chop_group, chop_form = _compact_form("Chop Filter")
 

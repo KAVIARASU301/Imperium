@@ -256,7 +256,7 @@ def is_chop_regime(
     - range_breakout: NEVER filtered — chop is its setup.
     - ema_cross / atr_divergence / atr_reversal: filtered per toggle flags.
     """
-    if strategy_type == "range_breakout":
+    if strategy_type in {"range_breakout", "open_drive"}:
         return False
 
     if strategy_type == "atr_reversal" and not chop_filter_atr_reversal:

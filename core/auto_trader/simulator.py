@@ -92,6 +92,7 @@ class SimulatorMixin:
             "atr_divergence": 2,
             "ema_cross": 3,
             "range_breakout": 4,
+            "open_drive": 5,
         }
         return priorities.get(strategy_type or "", 0)
 
@@ -103,7 +104,7 @@ class SimulatorMixin:
 
         side_masks = strategy_masks.get(side, {})
         # Higher-priority strategies first.
-        for strategy_type in ("range_breakout", "ema_cross", "atr_divergence", "atr_reversal"):
+        for strategy_type in ("open_drive", "range_breakout", "ema_cross", "atr_divergence", "atr_reversal"):
             mask = side_masks.get(strategy_type)
             if mask is not None and idx < len(mask) and bool(mask[idx]):
                 return strategy_type
@@ -261,6 +262,10 @@ class SimulatorMixin:
         stacker_enabled = bool(
             getattr(self, "stacker_enabled_check", None)
             and self.stacker_enabled_check.isChecked()
+        )
+        open_drive_stack_enabled = bool(
+            getattr(self, "open_drive_stack_enabled_check", None)
+            and self.open_drive_stack_enabled_check.isChecked()
         )
         stacker_step = float(self.stacker_step_input.value()) \
             if hasattr(self, "stacker_step_input") else 20.0
@@ -456,6 +461,8 @@ class SimulatorMixin:
                     exit_now = (signal_side == "long" and price_cross_above_ema51) or (signal_side == "short" and price_cross_below_ema51)
                 elif active_strategy_type == "range_breakout":
                     exit_now = (signal_side == "long" and (price_cross_below_ema10 or price_cross_below_ema51)) or (signal_side == "short" and (price_cross_above_ema10 or price_cross_above_ema51))
+                elif active_strategy_type == "open_drive":
+                    exit_now = (signal_side == "long" and price_close < ema10[idx]) or (signal_side == "short" and price_close > ema10[idx])
                 else:
                     exit_now = (signal_side == "long" and (price_cross_above_ema51 or cvd_cross_above_ema51)) or (signal_side == "short" and (price_cross_below_ema51 or cvd_cross_below_ema51))
 
@@ -580,7 +587,8 @@ class SimulatorMixin:
                 "last_cvd_ema51": float(cvd_ema51[idx]),
             }
 
-            if stacker_enabled:
+            stacker_allowed_for_trade = stacker_enabled and (signal_strategy != "open_drive" or open_drive_stack_enabled)
+            if stacker_allowed_for_trade:
                 sim_stacker = StackerState(
                     anchor_entry_price=entry_price,
                     anchor_bar_idx=idx,

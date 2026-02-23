@@ -68,6 +68,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
     MAX_GIVEBACK_STRATEGY_EMA_CROSS = "ema_cross"
     MAX_GIVEBACK_STRATEGY_ATR_DIVERGENCE = "atr_divergence"
     MAX_GIVEBACK_STRATEGY_RANGE_BREAKOUT = "range_breakout"
+    MAX_GIVEBACK_STRATEGY_OPEN_DRIVE = "open_drive"
 
     ROUTE_BUY_EXIT_PANEL = "buy_exit_panel"
     ROUTE_DIRECT = "direct"
@@ -996,6 +997,10 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self.stacker_enabled_check.setChecked(_read_setting("stacker_enabled", False, bool))
         self.stacker_step_input.setValue(_read_setting("stacker_step_points", 20, int))
         self.stacker_max_input.setValue(_read_setting("stacker_max_stacks", 2, int))
+        self.open_drive_enabled_check.blockSignals(True)
+        self.open_drive_time_hour_input.blockSignals(True)
+        self.open_drive_time_minute_input.blockSignals(True)
+        self.open_drive_stack_enabled_check.blockSignals(True)
         self.breakout_min_consol_input.blockSignals(True)
         self.breakout_min_consol_adx_input.blockSignals(True)
         self.chart_line_width_input.blockSignals(True)
@@ -1089,6 +1094,10 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self.hide_simulator_btn_check.setChecked(
             _read_setting("hide_simulator_button", False, bool)
         )
+        self.open_drive_enabled_check.setChecked(_read_setting("open_drive_enabled", False, bool))
+        self.open_drive_time_hour_input.setValue(_read_setting("open_drive_entry_hour", 9, int))
+        self.open_drive_time_minute_input.setValue(_read_setting("open_drive_entry_minute", 17, int))
+        self.open_drive_stack_enabled_check.setChecked(_read_setting("open_drive_stack_enabled", True, bool))
         # 🆕 Load chop filter settings
         self.chop_filter_atr_reversal_check.setChecked(_read_setting("chop_filter_atr_reversal", True, bool))
         self.chop_filter_ema_cross_check.setChecked(_read_setting("chop_filter_ema_cross", True, bool))
@@ -1174,6 +1183,10 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self.chop_filter_atr_reversal_check.blockSignals(False)
         self.chop_filter_ema_cross_check.blockSignals(False)
         self.chop_filter_atr_divergence_check.blockSignals(False)
+        self.open_drive_enabled_check.blockSignals(False)
+        self.open_drive_time_hour_input.blockSignals(False)
+        self.open_drive_time_minute_input.blockSignals(False)
+        self.open_drive_stack_enabled_check.blockSignals(False)
         self.breakout_min_consol_input.blockSignals(False)
         self.breakout_min_consol_adx_input.blockSignals(False)
         self.chart_line_width_input.blockSignals(False)
@@ -1225,6 +1238,10 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
             "stacker_enabled": self.stacker_enabled_check.isChecked(),
             "stacker_step_points": int(self.stacker_step_input.value()),
             "stacker_max_stacks": int(self.stacker_max_input.value()),
+            "open_drive_enabled": self.open_drive_enabled_check.isChecked(),
+            "open_drive_entry_hour": int(self.open_drive_time_hour_input.value()),
+            "open_drive_entry_minute": int(self.open_drive_time_minute_input.value()),
+            "open_drive_stack_enabled": self.open_drive_stack_enabled_check.isChecked(),
             # 🆕 Chop filter per-strategy
             "chop_filter_atr_reversal": self.chop_filter_atr_reversal_check.isChecked(),
             "chop_filter_ema_cross": self.chop_filter_ema_cross_check.isChecked(),
@@ -1263,6 +1280,10 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
     # =========================================================================
     def _on_stacker_settings_changed(self, *_):
         """Persist stacker settings and reset any live stacker state."""
+        self._live_stacker_state = None
+        self._persist_setup_values()
+
+    def _on_open_drive_settings_changed(self, *_):
         self._live_stacker_state = None
         self._persist_setup_values()
 
