@@ -486,7 +486,14 @@ class SimulatorMixin:
             if signal_side is None:
                 continue
 
-            if ts.time() < time(9, 20) or ts.time() >= time(15, 0):
+            open_drive_entry_time = time(
+                int(getattr(self, "open_drive_time_hour_input", None).value())
+                if getattr(self, "open_drive_time_hour_input", None) is not None else 9,
+                int(getattr(self, "open_drive_time_minute_input", None).value())
+                if getattr(self, "open_drive_time_minute_input", None) is not None else 17,
+            )
+            intraday_start_time = open_drive_entry_time if signal_strategy == "open_drive" else time(9, 20)
+            if ts.time() < intraday_start_time or ts.time() >= time(15, 0):
                 continue
 
             if signal_strategy is None:
