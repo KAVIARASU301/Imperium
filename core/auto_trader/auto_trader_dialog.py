@@ -1673,7 +1673,13 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         combo = self._resolve_signal_filter_combo_from_object(obj)
         if combo is not None:
             if event.type() == QEvent.Type.MouseButtonPress and obj is combo.lineEdit():
-                combo.showPopup()
+                if not combo.view().isVisible():
+                    combo.showPopup()
+                return True
+
+            # Swallow release on the line edit so Qt doesn't immediately
+            # re-handle the same click and collapse the popup.
+            if event.type() == QEvent.Type.MouseButtonRelease and obj is combo.lineEdit():
                 return True
 
             # Keep the checkable popup open while users tick/untick options.
