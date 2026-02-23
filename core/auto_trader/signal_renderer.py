@@ -422,23 +422,37 @@ class SignalRendererMixin:
                 breakout_switch_mode=self._selected_breakout_switch_mode(),
             )
 
-        signal_filter = self._selected_signal_filter()
+        selected_filters = set(self._selected_signal_filters())
+        all_filters = {
+            self.SIGNAL_FILTER_ATR_ONLY,
+            self.SIGNAL_FILTER_EMA_CROSS_ONLY,
+            self.SIGNAL_FILTER_BREAKOUT_ONLY,
+            self.SIGNAL_FILTER_OTHERS,
+            self.SIGNAL_FILTER_OPEN_DRIVE_ONLY,
+        }
 
-        if signal_filter == self.SIGNAL_FILTER_ATR_ONLY:
-            short_mask = short_atr_reversal
-            long_mask = long_atr_reversal
-        elif signal_filter == self.SIGNAL_FILTER_EMA_CROSS_ONLY:
-            short_mask = short_ema_cross
-            long_mask = long_ema_cross
-        elif signal_filter == self.SIGNAL_FILTER_BREAKOUT_ONLY:
-            short_mask = short_breakout
-            long_mask = long_breakout
-        elif signal_filter == self.SIGNAL_FILTER_OTHERS:
-            short_mask = short_divergence
-            long_mask = long_divergence
-        else:
+        if selected_filters >= all_filters:
             short_mask = short_atr_reversal | short_ema_cross | short_divergence | short_breakout | short_open_drive
             long_mask = long_atr_reversal | long_ema_cross | long_divergence | long_breakout | long_open_drive
+        else:
+            short_mask = np.zeros_like(short_atr_reversal, dtype=bool)
+            long_mask = np.zeros_like(long_atr_reversal, dtype=bool)
+
+            if self.SIGNAL_FILTER_ATR_ONLY in selected_filters:
+                short_mask |= short_atr_reversal
+                long_mask |= long_atr_reversal
+            if self.SIGNAL_FILTER_EMA_CROSS_ONLY in selected_filters:
+                short_mask |= short_ema_cross
+                long_mask |= long_ema_cross
+            if self.SIGNAL_FILTER_BREAKOUT_ONLY in selected_filters:
+                short_mask |= short_breakout
+                long_mask |= long_breakout
+            if self.SIGNAL_FILTER_OTHERS in selected_filters:
+                short_mask |= short_divergence
+                long_mask |= long_divergence
+            if self.SIGNAL_FILTER_OPEN_DRIVE_ONLY in selected_filters:
+                short_mask |= short_open_drive
+                long_mask |= long_open_drive
 
         # ── FIX: Open drive lines must ALWAYS draw when enabled, regardless
         # of the active signal_filter. They represent a time-specific trigger

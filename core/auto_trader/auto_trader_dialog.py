@@ -53,6 +53,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
     SIGNAL_FILTER_EMA_CROSS_ONLY = "ema_cross_only"
     SIGNAL_FILTER_BREAKOUT_ONLY = "breakout_only"
     SIGNAL_FILTER_OTHERS = "others"
+    SIGNAL_FILTER_OPEN_DRIVE_ONLY = "open_drive_only"
 
     ATR_MARKER_SHOW_ALL = "show_all"
     ATR_MARKER_CONFLUENCE_ONLY = "confluence_only"
@@ -580,14 +581,9 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         ema_bar.addWidget(signal_filter_label)
 
         self.signal_filter_combo = QComboBox()
-        self.signal_filter_combo.setFixedWidth(160)
+        self.signal_filter_combo.setFixedWidth(180)
         self.signal_filter_combo.setStyleSheet(compact_combo_style)
-        self.signal_filter_combo.addItem("All Signals", self.SIGNAL_FILTER_ALL)
-        self.signal_filter_combo.addItem("ATR Reversal Only", self.SIGNAL_FILTER_ATR_ONLY)
-        self.signal_filter_combo.addItem("EMA Cross Only", self.SIGNAL_FILTER_EMA_CROSS_ONLY)
-        self.signal_filter_combo.addItem("Range Breakout Only", self.SIGNAL_FILTER_BREAKOUT_ONLY)  # 🆕 NEW
-        self.signal_filter_combo.addItem("ATR Divergence", self.SIGNAL_FILTER_OTHERS)
-        self.signal_filter_combo.currentIndexChanged.connect(self._on_signal_filter_changed)
+        self._init_signal_filter_combo(self.signal_filter_combo)
         ema_bar.addWidget(self.signal_filter_combo)
 
         atr_marker_label = QLabel("ATR Markers")
@@ -1053,12 +1049,21 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
             _read_setting("cvd_ema_gap", self.cvd_ema_gap_input.value(), int)
         )
 
-        signal_filter_value = _read_setting(
-            "signal_filter",
-            self.signal_filter_combo.currentData() or self.SIGNAL_FILTER_ALL,
+        signal_filters_value = _read_setting(
+            "signal_filters",
+            None,
         )
-        _apply_combo_value(self.signal_filter_combo, signal_filter_value, fallback_index=0)
-        _apply_combo_value(self.setup_signal_filter_combo, signal_filter_value, fallback_index=0)
+        if isinstance(signal_filters_value, (list, tuple, set)):
+            selected_signal_filters = [str(v) for v in signal_filters_value]
+        else:
+            legacy_signal_filter = _read_setting(
+                "signal_filter",
+                self.SIGNAL_FILTER_ALL,
+            )
+            selected_signal_filters = self._coerce_signal_filters(legacy_signal_filter)
+
+        self._set_checked_signal_filters(self.signal_filter_combo, selected_signal_filters)
+        self._set_checked_signal_filters(self.setup_signal_filter_combo, selected_signal_filters)
 
         marker_filter_value = _read_setting(
             "atr_marker_filter",
@@ -1229,6 +1234,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
             "cvd_atr_distance": float(self.cvd_atr_distance_input.value()),
             "cvd_ema_gap": int(self.cvd_ema_gap_input.value()),
             "signal_filter": self._selected_signal_filter(),
+            "signal_filters": self._selected_signal_filters(),
             "atr_marker_filter": self.atr_marker_filter_combo.currentData() or self.ATR_MARKER_CONFLUENCE_ONLY,
             # 🆕 Persist range breakout settings
             "range_lookback": int(self.range_lookback_input.value()),
@@ -1304,6 +1310,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
             "open_drive_max_profit_giveback_points": float(self.open_drive_max_profit_giveback_input.value()),
             "route": self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL,
             "signal_filter": self._selected_signal_filter(),
+            "signal_filters": self._selected_signal_filters(),
         })
         self._live_stacker_state = None
 
@@ -1315,17 +1322,16 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
             self.instrument_token,
         )
     def _on_signal_filter_changed(self, *_):
-        if hasattr(self, "setup_signal_filter_combo"):
-            self.setup_signal_filter_combo.blockSignals(True)
-            self.setup_signal_filter_combo.setCurrentIndex(self.signal_filter_combo.currentIndex())
-            self.setup_signal_filter_combo.blockSignals(False)
+        if getattr(self, "_syncing_signal_filters", False):
+            return
+        self._sync_signal_filter_combos(self.signal_filter_combo, self.setup_signal_filter_combo)
         self._update_atr_reversal_markers()
         self._on_automation_settings_changed()
 
     def _on_setup_signal_filter_changed(self, *_):
-        self.signal_filter_combo.blockSignals(True)
-        self.signal_filter_combo.setCurrentIndex(self.setup_signal_filter_combo.currentIndex())
-        self.signal_filter_combo.blockSignals(False)
+        if getattr(self, "_syncing_signal_filters", False):
+            return
+        self._sync_signal_filter_combos(self.setup_signal_filter_combo, self.signal_filter_combo)
         self._update_atr_reversal_markers()
         self._on_automation_settings_changed()
 
@@ -1504,12 +1510,182 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self.x_time_label.setPos(x, y_pos_cvd)
         self.x_time_label.show()
 
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.MouseButtonPress:
+            combo = self._resolve_signal_filter_combo_from_object(obj)
+            if combo is not None:
+                QTimer.singleShot(0, combo.showPopup)
+                return True
+        return super().eventFilter(obj, event)
+
+    def _resolve_signal_filter_combo_from_object(self, obj):
+        combos = [
+            getattr(self, "signal_filter_combo", None),
+            getattr(self, "setup_signal_filter_combo", None),
+        ]
+        for combo in combos:
+            if combo is None:
+                continue
+            if obj is combo:
+                return combo
+            line_edit = combo.lineEdit()
+            if line_edit is not None and obj is line_edit:
+                return combo
+        return None
+
     # =========================================================================
     # SECTION 5: SETTINGS HELPERS & STRATEGY SELECTORS
     # =========================================================================
 
+    def _signal_filter_options(self) -> list[tuple[str, str]]:
+        return [
+            ("Select All", self.SIGNAL_FILTER_ALL),
+            ("ATR Reversal", self.SIGNAL_FILTER_ATR_ONLY),
+            ("EMA Cross", self.SIGNAL_FILTER_EMA_CROSS_ONLY),
+            ("Range Breakout", self.SIGNAL_FILTER_BREAKOUT_ONLY),
+            ("ATR Divergence", self.SIGNAL_FILTER_OTHERS),
+            ("Open Drive", self.SIGNAL_FILTER_OPEN_DRIVE_ONLY),
+        ]
+
+    def _strategy_filter_values(self) -> list[str]:
+        return [
+            self.SIGNAL_FILTER_ATR_ONLY,
+            self.SIGNAL_FILTER_EMA_CROSS_ONLY,
+            self.SIGNAL_FILTER_BREAKOUT_ONLY,
+            self.SIGNAL_FILTER_OTHERS,
+            self.SIGNAL_FILTER_OPEN_DRIVE_ONLY,
+        ]
+
+    def _init_signal_filter_combo(self, combo: QComboBox):
+        combo.setEditable(True)
+        combo.lineEdit().setReadOnly(True)
+        combo.lineEdit().setAlignment(Qt.AlignLeft)
+        combo.clear()
+        combo.setStyleSheet(combo.styleSheet() + """
+            QComboBox {
+                min-height: 28px;
+                padding: 2px 10px;
+            }
+            QComboBox QAbstractItemView::item {
+                min-height: 30px;
+                padding: 6px 10px;
+            }
+        """)
+
+        for label, value in self._signal_filter_options():
+            combo.addItem(label, value)
+            idx = combo.model().index(combo.count() - 1, 0)
+            combo.model().setData(idx, Qt.Checked, Qt.CheckStateRole)
+
+        combo.lineEdit().installEventFilter(self)
+        combo.installEventFilter(self)
+        combo.view().pressed.connect(lambda index, c=combo: self._toggle_signal_filter_item(c, index))
+        combo.view().setMinimumWidth(max(combo.width() + 70, 230))
+        self._refresh_signal_filter_combo_text(combo)
+
+    def _toggle_signal_filter_item(self, combo: QComboBox, index):
+        value = combo.itemData(index.row())
+        state = combo.model().data(index, Qt.CheckStateRole)
+        next_state = Qt.Unchecked if state == Qt.Checked else Qt.Checked
+
+        if value == self.SIGNAL_FILTER_ALL:
+            for i in range(combo.count()):
+                idx = combo.model().index(i, 0)
+                combo.model().setData(idx, next_state, Qt.CheckStateRole)
+            if next_state == Qt.Unchecked:
+                combo.model().setData(combo.model().index(1, 0), Qt.Checked, Qt.CheckStateRole)
+        else:
+            combo.model().setData(index, next_state, Qt.CheckStateRole)
+
+            # Keep at least one strategy selected.
+            if not self._checked_signal_filters(combo):
+                combo.model().setData(index, Qt.Checked, Qt.CheckStateRole)
+
+            self._sync_select_all_check_state(combo)
+
+        self._refresh_signal_filter_combo_text(combo)
+        QTimer.singleShot(0, combo.showPopup)
+        if combo is self.signal_filter_combo:
+            self._on_signal_filter_changed()
+        elif combo is getattr(self, "setup_signal_filter_combo", None):
+            self._on_setup_signal_filter_changed()
+
+    def _sync_select_all_check_state(self, combo: QComboBox):
+        all_idx = combo.findData(self.SIGNAL_FILTER_ALL)
+        if all_idx < 0:
+            return
+        all_selected = len(self._checked_signal_filters(combo)) == len(self._strategy_filter_values())
+        combo.model().setData(
+            combo.model().index(all_idx, 0),
+            Qt.Checked if all_selected else Qt.Unchecked,
+            Qt.CheckStateRole,
+        )
+
+    def _checked_signal_filters(self, combo: QComboBox) -> list[str]:
+        selected: list[str] = []
+        for i in range(combo.count()):
+            idx = combo.model().index(i, 0)
+            if combo.model().data(idx, Qt.CheckStateRole) == Qt.Checked:
+                value = combo.itemData(i)
+                if value and value != self.SIGNAL_FILTER_ALL:
+                    selected.append(value)
+        return selected
+
+    def _set_checked_signal_filters(self, combo: QComboBox, selected_filters: list[str]):
+        selected_set = set(selected_filters)
+        for i in range(combo.count()):
+            idx = combo.model().index(i, 0)
+            value = combo.itemData(i)
+            if value == self.SIGNAL_FILTER_ALL:
+                continue
+            combo.model().setData(idx, Qt.Checked if value in selected_set else Qt.Unchecked, Qt.CheckStateRole)
+
+        if not self._checked_signal_filters(combo) and combo.count() > 1:
+            combo.model().setData(combo.model().index(1, 0), Qt.Checked, Qt.CheckStateRole)
+        self._sync_select_all_check_state(combo)
+        self._refresh_signal_filter_combo_text(combo)
+
+    def _refresh_signal_filter_combo_text(self, combo: QComboBox):
+        selected = self._checked_signal_filters(combo)
+        total = len(self._strategy_filter_values())
+        if len(selected) == total:
+            text = "All Signals"
+        elif len(selected) == 1:
+            idx = combo.findData(selected[0])
+            text = combo.itemText(idx) if idx >= 0 else "1 selected"
+        else:
+            idx = combo.findData(selected[0]) if selected else -1
+            first = combo.itemText(idx) if idx >= 0 else "Strategies"
+            text = f"{first} +..."
+        combo.lineEdit().setText(text)
+
+    def _sync_signal_filter_combos(self, source: QComboBox, target: QComboBox):
+        self._syncing_signal_filters = True
+        try:
+            self._set_checked_signal_filters(target, self._checked_signal_filters(source))
+        finally:
+            self._syncing_signal_filters = False
+
+    def _coerce_signal_filters(self, value) -> list[str]:
+        if value in (None, "", self.SIGNAL_FILTER_ALL):
+            return self._strategy_filter_values()
+        if isinstance(value, (list, tuple, set)):
+            valid = set(self._strategy_filter_values())
+            selected = [str(v) for v in value if str(v) in valid]
+            return selected or self._strategy_filter_values()
+        value_str = str(value)
+        if value_str == self.SIGNAL_FILTER_ALL:
+            return self._strategy_filter_values()
+        return [value_str]
+
     def _selected_signal_filter(self) -> str:
-        return self.signal_filter_combo.currentData() or self.SIGNAL_FILTER_ALL
+        selected = self._selected_signal_filters()
+        if len(selected) == 1:
+            return selected[0]
+        return self.SIGNAL_FILTER_ALL
+
+    def _selected_signal_filters(self) -> list[str]:
+        return self._checked_signal_filters(self.signal_filter_combo)
 
     def _selected_breakout_switch_mode(self) -> str:
         return self.breakout_switch_mode_combo.currentData() or self.BREAKOUT_SWITCH_ADAPTIVE

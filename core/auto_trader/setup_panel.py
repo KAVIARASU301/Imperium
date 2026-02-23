@@ -138,13 +138,11 @@ class SetupPanelMixin:
         self.setup_signal_filter_combo = QComboBox()
         self.setup_signal_filter_combo.setStyleSheet(compact_combo_style)
         _set_combo_w(self.setup_signal_filter_combo)
-        self.setup_signal_filter_combo.addItem("All Signals",         self.SIGNAL_FILTER_ALL)
-        self.setup_signal_filter_combo.addItem("ATR Reversal Only",   self.SIGNAL_FILTER_ATR_ONLY)
-        self.setup_signal_filter_combo.addItem("EMA Cross Only",      self.SIGNAL_FILTER_EMA_CROSS_ONLY)
-        self.setup_signal_filter_combo.addItem("Range Breakout Only", self.SIGNAL_FILTER_BREAKOUT_ONLY)
-        self.setup_signal_filter_combo.addItem("ATR Divergence",      self.SIGNAL_FILTER_OTHERS)
-        self.setup_signal_filter_combo.setCurrentIndex(self.signal_filter_combo.currentIndex())
-        self.setup_signal_filter_combo.currentIndexChanged.connect(self._on_setup_signal_filter_changed)
+        self._init_signal_filter_combo(self.setup_signal_filter_combo)
+        self._set_checked_signal_filters(
+            self.setup_signal_filter_combo,
+            self._checked_signal_filters(self.signal_filter_combo),
+        )
         signal_form.addRow("Signal Filter", self.setup_signal_filter_combo)
 
         self.setup_atr_marker_filter_combo = QComboBox()
