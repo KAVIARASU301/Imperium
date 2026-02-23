@@ -146,7 +146,8 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self._ema_line_opacity = 0.85
         self._window_bg_image_path = ""
         self._chart_bg_image_path = ""
-        self._show_cpr = True
+        self._show_cpr_lines = True
+        self._show_cpr_labels = True
         self._cpr_narrow_threshold = 150.0
         self._cpr_wide_threshold = 200.0
         self._cpr_lines = []
@@ -1031,7 +1032,8 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self.chart_bg_upload_btn.blockSignals(True)
         self.chart_bg_clear_btn.blockSignals(True)
         self.vwap_checkbox.blockSignals(True)
-        self.show_cpr_check.blockSignals(True)
+        self.show_cpr_lines_check.blockSignals(True)
+        self.show_cpr_labels_check.blockSignals(True)
         self.cpr_narrow_threshold_input.blockSignals(True)
         self.cpr_wide_threshold_input.blockSignals(True)
         for cb in self.setup_ema_default_checks.values():
@@ -1186,14 +1188,17 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
             _read_setting("show_vwap", self.vwap_checkbox.isChecked(), bool)
         )
 
-        self.show_cpr_check.setChecked(_read_setting("show_cpr", self._show_cpr, bool))
+        show_cpr_default = _read_setting("show_cpr", True, bool)
+        self.show_cpr_lines_check.setChecked(_read_setting("show_cpr_lines", show_cpr_default, bool))
+        self.show_cpr_labels_check.setChecked(_read_setting("show_cpr_labels", show_cpr_default, bool))
         self.cpr_narrow_threshold_input.setValue(
             _read_setting("cpr_narrow_threshold", self._cpr_narrow_threshold, float)
         )
         self.cpr_wide_threshold_input.setValue(
             _read_setting("cpr_wide_threshold", self._cpr_wide_threshold, float)
         )
-        self._show_cpr = self.show_cpr_check.isChecked()
+        self._show_cpr_lines = self.show_cpr_lines_check.isChecked()
+        self._show_cpr_labels = self.show_cpr_labels_check.isChecked()
         self._cpr_narrow_threshold = float(self.cpr_narrow_threshold_input.value())
         self._cpr_wide_threshold = float(self.cpr_wide_threshold_input.value())
 
@@ -1263,7 +1268,8 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self.chart_bg_upload_btn.blockSignals(False)
         self.chart_bg_clear_btn.blockSignals(False)
         self.vwap_checkbox.blockSignals(False)
-        self.show_cpr_check.blockSignals(False)
+        self.show_cpr_lines_check.blockSignals(False)
+        self.show_cpr_labels_check.blockSignals(False)
         self.cpr_narrow_threshold_input.blockSignals(False)
         self.cpr_wide_threshold_input.blockSignals(False)
         for cb in self.setup_ema_default_checks.values():
@@ -1337,7 +1343,9 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
             "window_background_image_path": self._window_bg_image_path,
             "chart_background_image_path": self._chart_bg_image_path,
             "show_vwap": self.vwap_checkbox.isChecked(),
-            "show_cpr": self.show_cpr_check.isChecked(),
+            "show_cpr": self.show_cpr_lines_check.isChecked() and self.show_cpr_labels_check.isChecked(),
+            "show_cpr_lines": self.show_cpr_lines_check.isChecked(),
+            "show_cpr_labels": self.show_cpr_labels_check.isChecked(),
             "cpr_narrow_threshold": float(self.cpr_narrow_threshold_input.value()),
             "cpr_wide_threshold": float(self.cpr_wide_threshold_input.value()),
 
@@ -1454,7 +1462,8 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self._refresh_plot_only()
 
     def _on_cpr_settings_changed(self, *_):
-        self._show_cpr = self.show_cpr_check.isChecked()
+        self._show_cpr_lines = self.show_cpr_lines_check.isChecked()
+        self._show_cpr_labels = self.show_cpr_labels_check.isChecked()
         self._cpr_narrow_threshold = float(self.cpr_narrow_threshold_input.value())
         self._cpr_wide_threshold = float(self.cpr_wide_threshold_input.value())
         if hasattr(self, "chart_line_width_input"):
@@ -2162,7 +2171,11 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
 
     def _render_cpr_levels(self):
         self._clear_cpr_levels()
-        if not self._show_cpr or not self.all_timestamps or not self.all_price_data:
+        if (
+            (not self._show_cpr_lines and not self._show_cpr_labels)
+            or not self.all_timestamps
+            or not self.all_price_data
+        ):
             return
 
         data = pd.DataFrame({
@@ -2236,25 +2249,32 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
                 pen=pg.mkPen("#90CAF9", width=1.2, style=Qt.DashLine),
             )
             line.setZValue(20)
-            self.price_plot.addItem(line)
-            self._cpr_lines.append(line)
+            if self._show_cpr_lines:
+                self.price_plot.addItem(line)
+                self._cpr_lines.append(line)
 
             txt = TextItem(f"{level_name}: {float(y_val):.2f}", color="#90CAF9", anchor=(0, 1))
             txt.setPos(float(x_anchor), float(y_val))
             txt.setZValue(21)
-            self.price_plot.addItem(txt)
-            self._cpr_labels.append(txt)
+            if self._show_cpr_labels:
+                self.price_plot.addItem(txt)
+                self._cpr_labels.append(txt)
 
-        classification, color = self._classify_cpr_width(float(cpr["range_width"]))
+        cpr_width = float(cpr["range_width"])
+        classification, color = self._classify_cpr_width(cpr_width)
         class_label = TextItem(
-            f"{classification} (W={float(cpr['range_width']):.2f})",
+            f"{classification} (W={cpr_width:.2f})",
             color=color,
-            anchor=(0, 0),
+            anchor=(1, 0),
         )
-        class_label.setPos(float(x_anchor), float(cpr["tc"]) + 0.2)
+        # Keep CPR classification away from TC/Pivot/BC labels drawn at x_start.
+        # Place it at x_end and offset above TC by a dynamic gap so it does not overlap.
+        class_label_y = float(cpr["tc"]) + max(2.0, abs(cpr_width) * 0.35)
+        class_label.setPos(float(x_end), class_label_y)
         class_label.setZValue(22)
-        self.price_plot.addItem(class_label)
-        self._cpr_labels.append(class_label)
+        if self._show_cpr_labels:
+            self.price_plot.addItem(class_label)
+            self._cpr_labels.append(class_label)
 
     def _refresh_plot_only(self):
         """Refresh chart overlays from in-memory data without reloading sessions or touching trade state."""

@@ -635,10 +635,15 @@ class SetupPanelMixin:
         cpr_grp, cpr_frm = _group("Central Pivot Range (CPR)")
         cpr_frm.addRow(_note("CPR for each session is calculated using previous-day OHLC."))
 
-        self.show_cpr_check = QCheckBox("Show CPR lines and labels on price chart")
-        self.show_cpr_check.setChecked(True)
-        self.show_cpr_check.toggled.connect(self._on_cpr_settings_changed)
-        cpr_frm.addRow("Display", self.show_cpr_check)
+        self.show_cpr_lines_check = QCheckBox("Show CPR lines on price chart")
+        self.show_cpr_lines_check.setChecked(True)
+        self.show_cpr_lines_check.toggled.connect(self._on_cpr_settings_changed)
+        cpr_frm.addRow("Lines", self.show_cpr_lines_check)
+
+        self.show_cpr_labels_check = QCheckBox("Show CPR labels on price chart")
+        self.show_cpr_labels_check.setChecked(True)
+        self.show_cpr_labels_check.toggled.connect(self._on_cpr_settings_changed)
+        cpr_frm.addRow("Labels", self.show_cpr_labels_check)
 
         self.cpr_narrow_threshold_input = QDoubleSpinBox()
         self.cpr_narrow_threshold_input.setRange(0.1, 10000.0)
