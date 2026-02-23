@@ -2187,14 +2187,25 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
                 continue
 
             session_start_pos = int(session_rows.index[0])
-            x_anchor = self._time_to_session_index(session_rows.iloc[0]["timestamp"]) if focus_mode else session_start_pos
+            session_end_pos = int(session_rows.index[-1])
+            if focus_mode:
+                x_start = float(self._time_to_session_index(session_rows.iloc[0]["timestamp"]))
+                x_end = float(self._time_to_session_index(session_rows.iloc[-1]["timestamp"]))
+            else:
+                x_start = float(session_start_pos)
+                x_end = float(session_end_pos)
+
+            # Ensure short sessions still render at least a tiny visible segment.
+            if x_end <= x_start:
+                x_end = x_start + 0.5
+
+            x_anchor = x_start
 
             levels = (("TC", cpr["tc"]), ("Pivot", cpr["pivot"]), ("BC", cpr["bc"]))
             for level_name, y_val in levels:
-                line = pg.InfiniteLine(
-                    pos=float(y_val),
-                    angle=0,
-                    movable=False,
+                line = pg.PlotDataItem(
+                    [x_start, x_end],
+                    [float(y_val), float(y_val)],
                     pen=pg.mkPen("#90CAF9", width=1.2, style=Qt.DashLine),
                 )
                 line.setZValue(20)
