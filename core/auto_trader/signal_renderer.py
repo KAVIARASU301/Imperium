@@ -442,6 +442,7 @@ class SignalRendererMixin:
             self.SIGNAL_FILTER_ATR_ONLY,
             self.SIGNAL_FILTER_EMA_CROSS_ONLY,
             self.SIGNAL_FILTER_BREAKOUT_ONLY,
+            self.SIGNAL_FILTER_CVD_BREAKOUT_ONLY,
             self.SIGNAL_FILTER_OTHERS,
             self.SIGNAL_FILTER_OPEN_DRIVE_ONLY,
         }
@@ -460,8 +461,11 @@ class SignalRendererMixin:
                 short_mask |= short_ema_cross
                 long_mask |= long_ema_cross
             if self.SIGNAL_FILTER_BREAKOUT_ONLY in selected_filters:
-                short_mask |= short_breakout | short_cvd_range_breakout
-                long_mask |= long_breakout | long_cvd_range_breakout
+                short_mask |= short_breakout
+                long_mask |= long_breakout
+            if self.SIGNAL_FILTER_CVD_BREAKOUT_ONLY in selected_filters:
+                short_mask |= short_cvd_range_breakout
+                long_mask |= long_cvd_range_breakout
             if self.SIGNAL_FILTER_OTHERS in selected_filters:
                 short_mask |= short_divergence
                 long_mask |= long_divergence

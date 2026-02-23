@@ -52,6 +52,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
     SIGNAL_FILTER_ATR_ONLY = "atr_only"
     SIGNAL_FILTER_EMA_CROSS_ONLY = "ema_cross_only"
     SIGNAL_FILTER_BREAKOUT_ONLY = "breakout_only"
+    SIGNAL_FILTER_CVD_BREAKOUT_ONLY = "cvd_breakout_only"
     SIGNAL_FILTER_OTHERS = "others"
     SIGNAL_FILTER_OPEN_DRIVE_ONLY = "open_drive_only"
 
@@ -1583,6 +1584,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
             ("ATR Reversal", self.SIGNAL_FILTER_ATR_ONLY),
             ("EMA Cross", self.SIGNAL_FILTER_EMA_CROSS_ONLY),
             ("Range Breakout", self.SIGNAL_FILTER_BREAKOUT_ONLY),
+            ("CVD Range Breakout", self.SIGNAL_FILTER_CVD_BREAKOUT_ONLY),
             ("ATR Divergence", self.SIGNAL_FILTER_OTHERS),
             ("Open Drive", self.SIGNAL_FILTER_OPEN_DRIVE_ONLY),
         ]
@@ -1592,6 +1594,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
             self.SIGNAL_FILTER_ATR_ONLY,
             self.SIGNAL_FILTER_EMA_CROSS_ONLY,
             self.SIGNAL_FILTER_BREAKOUT_ONLY,
+            self.SIGNAL_FILTER_CVD_BREAKOUT_ONLY,
             self.SIGNAL_FILTER_OTHERS,
             self.SIGNAL_FILTER_OPEN_DRIVE_ONLY,
         ]
