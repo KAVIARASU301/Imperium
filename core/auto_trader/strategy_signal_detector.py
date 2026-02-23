@@ -298,11 +298,11 @@ class StrategySignalDetector:
         Trigger only at configured time (default 09:17), once per session date.
 
         LONG:
-            price > EMA10 > EMA51
+            price > EMA10 and price > EMA51
             CVD > CVD EMA10
 
-        SHORT (vice versa):
-            price < EMA10 < EMA51
+        SHORT:
+            price < EMA10 and price < EMA51
             CVD < CVD EMA10
 
         FIX 1: Removed `with suppress(Exception)` around the time-check `continue`.
@@ -383,8 +383,16 @@ class StrategySignalDetector:
                 )
                 continue
 
-            long_cond = (price > ema10 > ema51) and (cvd > cvd_fast)
-            short_cond = (price < ema10 < ema51) and (cvd < cvd_fast)
+            price_above_both = (price > ema10) and (price > ema51)
+            price_below_both = (price < ema10) and (price < ema51)
+            cvd_bullish = cvd > cvd_fast
+            cvd_bearish = cvd < cvd_fast
+
+            # Open Drive should reflect clear directional alignment at trigger time.
+            # We only require price to be above/below BOTH EMAs (not EMA10 > EMA51 ordering),
+            # which avoids missing otherwise clear setups early in the session.
+            long_cond = price_above_both and cvd_bullish
+            short_cond = price_below_both and cvd_bearish
 
             # ── FIX 3: always mark session fired after checking trigger bar ──
             fired_dates.add(session_date)
@@ -421,7 +429,9 @@ class StrategySignalDetector:
             # no signal fires. Never chase later bars.
             else:
                 logger.info(
-                    "Open Drive @ %s %02d:%02d -> NO TRADE | price=%.2f ema10=%.2f ema51=%.2f vwap=%.2f cvd=%.2f cvd_ema10=%.2f",
+                    "Open Drive @ %s %02d:%02d -> NO TRADE | "
+                    "price=%.2f ema10=%.2f ema51=%.2f vwap=%.2f cvd=%.2f cvd_ema10=%.2f "
+                    "flags(price>both=%s price<both=%s cvd>ema10=%s cvd<ema10=%s)",
                     session_date,
                     int(trigger_hour),
                     int(trigger_minute),
@@ -431,6 +441,10 @@ class StrategySignalDetector:
                     vwap,
                     cvd,
                     cvd_fast,
+                    price_above_both,
+                    price_below_both,
+                    cvd_bullish,
+                    cvd_bearish,
                 )
 
         missing_trigger_dates = sorted(session_dates_seen - session_dates_evaluated)
