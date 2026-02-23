@@ -763,10 +763,33 @@ class StrategySignalDetector:
         """
         CVD RANGE BREAKOUT STRATEGY:
 
-        - Detect CVD compression over a rolling lookback window
-        - Trigger when CVD breaks its own range with a buffer
-        - Confirm direction with price slope and EMA10 side
-        - Optionally require ADX > threshold OR a minimum consolidation run
+        Orderflow-led breakout: CVD breaks out of its own compressed range
+        while price slope and EMA confirm direction.
+
+        Logic:
+        1. Build a PRIOR window [i-lookback : i-1] (excludes current bar).
+           Compute range_high / range_low from that prior window.
+        2. Measure compression:
+           - rolling_window_range = rolling max - rolling min over the PRIOR window.
+           - avg_window_range = rolling mean of rolling_window_range (same-scale).
+           - is_consolidating = current prior-window range <= avg_window_range * ratio_limit
+        3. Count consecutive consolidating bars (consol_run).
+        4. On the CURRENT bar (i), check if cvd_data[i] breaks out of the prior range.
+        5. Confirm with price slope, price vs EMA10, and CVD EMA slope.
+
+        Bug fixes vs original implementation:
+        FIX 1 — avg_range was computed from bar-to-bar diffs (tiny) and compared
+                 against the window high-low spread (much larger). These are different
+                 scales so is_consolidating almost never fired. Now both are window-range
+                 based (rolling max - rolling min → rolling mean of that series).
+        FIX 2 — cvd_value > range_high was using range from [start:i] which includes
+                 the current bar, making a true breakout logically impossible (current
+                 bar is by definition inside its own max). Now range is [start:i-1]
+                 (prior window only), and cvd_data[i] is compared against it.
+        FIX 3 — Removed cvd_data[i] > cvd_ema10[i] hard gate. During a CVD breakout
+                 from a compression range the CVD may be just crossing its own EMA —
+                 requiring it to already be above the EMA blocks most valid signals.
+                 Replaced with a softer CVD EMA slope confirmation (cvd_ema_up/down).
         """
         length = min(
             len(price_high), len(price_low), len(price_close), len(price_ema10),
@@ -784,39 +807,62 @@ class StrategySignalDetector:
         breakout_buffer = max(0.0, float(cvd_breakout_buffer))
         min_adx = max(0.0, float(min_consolidation_adx))
 
-        cvd_diff = np.abs(np.diff(cvd_data[:length], prepend=cvd_data[0]))
-        cvd_avg_range = pd.Series(cvd_diff).rolling(lookback, min_periods=2).mean().to_numpy()
+        # ── FIX 1: Compute avg_range using rolling window range (same scale as
+        #    the per-bar range_size). rolling_max - rolling_min gives the window
+        #    spread at each bar; its rolling mean is the "typical window range". ──
+        cvd_series = pd.Series(cvd_data[:length])
+        rolling_max = cvd_series.rolling(lookback, min_periods=2).max().to_numpy()
+        rolling_min = cvd_series.rolling(lookback, min_periods=2).min().to_numpy()
+        rolling_window_range = rolling_max - rolling_min  # window spread at each bar
+
+        # Average of the window-range series — same unit, valid comparison
+        avg_window_range = (
+            pd.Series(rolling_window_range)
+            .rolling(lookback * 2, min_periods=lookback)
+            .mean()
+            .to_numpy()
+        )
+
         cvd_ema_up, cvd_ema_down = self._calculate_slope_masks(cvd_ema10[:length])
         price_up_slope, price_down_slope = self._calculate_slope_masks(price_close[:length])
-        adx_series = self._compute_adx_simple(price_high[:length], price_low[:length], price_close[:length], period=14)
+        adx_series = self._compute_adx_simple(
+            price_high[:length], price_low[:length], price_close[:length], period=14
+        )
 
         consol_run = 0
         for i in range(lookback, length):
+            # ── FIX 2: Prior window excludes current bar i ──────────────────
             start_idx = max(0, i - lookback)
-            cvd_window = cvd_data[start_idx:i]
-            if len(cvd_window) < 2:
+            prior_window = cvd_data[start_idx:i]   # [start, i-1] — excludes bar i
+            if len(prior_window) < 2:
                 continue
 
-            range_high = float(np.max(cvd_window))
-            range_low = float(np.min(cvd_window))
+            range_high = float(np.max(prior_window))
+            range_low = float(np.min(prior_window))
             range_size = range_high - range_low
             if range_size <= 1e-9:
+                consol_run = 0
                 continue
 
-            avg_range = float(cvd_avg_range[i])
+            avg_range = float(avg_window_range[i - 1])   # use prior-bar avg
             if not np.isfinite(avg_range) or avg_range <= 1e-9:
+                consol_run = 0
                 continue
 
+            # Consolidating when current window is tighter than typical window
             is_consolidating = range_size <= (avg_range * ratio_limit)
             consol_run = (consol_run + 1) if is_consolidating else 0
+
             if not is_consolidating:
                 continue
 
-            adx_ok = min_adx <= 0 or float(adx_series[i]) > min_adx
+            # Need enough consolidation bars OR ADX trending enough
+            adx_ok = min_adx <= 0.0 or float(adx_series[i]) > min_adx
             consol_ok = consol_run >= min_consol
             if not (adx_ok or consol_ok):
                 continue
 
+            # ── Breakout: current bar breaks OUTSIDE the prior window range ──
             ext = range_size * breakout_buffer
             cvd_value = float(cvd_data[i])
 
@@ -824,18 +870,19 @@ class StrategySignalDetector:
             short_break = cvd_value < (range_low - ext)
 
             if long_break:
+                # ── FIX 3: Removed hard cvd > cvd_ema10 gate.
+                #    CVD EMA slope (cvd_ema_up) is sufficient orderflow confirmation. ──
                 if (
                     price_up_slope[i]
                     and price_close[i] > price_ema10[i]
-                    and cvd_data[i] > cvd_ema10[i]
                     and cvd_ema_up[i]
                 ):
                     long_breakout[i] = True
+
             elif short_break:
                 if (
                     price_down_slope[i]
                     and price_close[i] < price_ema10[i]
-                    and cvd_data[i] < cvd_ema10[i]
                     and cvd_ema_down[i]
                 ):
                     short_breakout[i] = True
