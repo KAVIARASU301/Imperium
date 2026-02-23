@@ -53,11 +53,29 @@ from core.sound import SoundService
 
 logger = logging.getLogger(__name__)
 
+# -----------------------------
+# API Health Logger (Production Safe)
+# -----------------------------
+import os
+from pathlib import Path
+
+# Runtime data directory (outside project)
+RUNTIME_DIR = Path.home() / ".imperium_desk"
+LOG_DIR = RUNTIME_DIR / "logs"
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+LOG_FILE = LOG_DIR / "api_health.log"
+
 api_logger = logging.getLogger("api_health")
-api_handler = logging.FileHandler("logs/api_health.log")
-api_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-api_handler.setFormatter(api_formatter)
 api_logger.setLevel(logging.INFO)
+
+if not api_logger.handlers:
+    api_handler = logging.FileHandler(LOG_FILE)
+    api_formatter = logging.Formatter(
+        "%(asctime)s | %(levelname)s | %(message)s"
+    )
+    api_handler.setFormatter(api_formatter)
+    api_logger.addHandler(api_handler)
 
 
 class WebSocketState(Enum):

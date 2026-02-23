@@ -630,8 +630,8 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self.stacker_step_input.valueChanged.connect(self._on_stacker_settings_changed)
 
         self.stacker_max_input = QSpinBox()
-        self.stacker_max_input.setRange(1, 5)
-        self.stacker_max_input.setValue(2)
+        self.stacker_max_input.setRange(1, 100)
+        self.stacker_max_input.setValue(10)
         self.stacker_max_input.setSpecialValueText("1×")
         self.stacker_max_input.setStyleSheet(compact_spinbox_style)
         self.stacker_max_input.setToolTip(

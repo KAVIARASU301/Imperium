@@ -23,6 +23,9 @@ logger = logging.getLogger(__name__)
 def main():
     """Main function to run the application."""
     app = QApplication(sys.argv)
+
+    app.setApplicationName("imperium")
+    app.setDesktopFileName("imperium")  # IMPORTANT for Linux
     app.setWindowIcon(QIcon("assets/imperium_desk_icon.png"))
 
     temp_widget = QWidget()  # Temporary widget as QMessageBox parent
