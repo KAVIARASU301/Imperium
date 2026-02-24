@@ -954,7 +954,9 @@ class SetupPanelMixin:
             self.ema_checkboxes[period].setChecked(cb.isChecked())
             self._on_ema_toggled(period, cb.isChecked())
 
-        self.simulator_run_btn.setVisible(not self.hide_simulator_btn_check.isChecked())
+        show_simulator_controls = not self.hide_simulator_btn_check.isChecked()
+        self.simulator_run_btn.setVisible(show_simulator_controls)
+        self.simulator_summary_label.setVisible(show_simulator_controls)
         self._apply_background_image()
         self._recolor_existing_confluence_lines()
 
