@@ -143,6 +143,10 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self._current_session_last_price_value: float | None = None
         self._current_session_cumulative_volume: int = 0
         self._current_session_volume_scale: float = 1.0
+        self._live_cvd_offset: float = 0.0
+        self._last_live_tick_ts: datetime | None = None
+        self._last_ws_reconnect_attempt_ts: datetime | None = None
+        self._ws_status_text: str = "initializing"
         self._is_loading = False
         self._last_live_refresh_minute: datetime | None = None
 
@@ -959,6 +963,10 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
 
         self._apply_visual_settings()
 
+        self.ws_status_label = QLabel("Live feed: connecting…")
+        self.ws_status_label.setStyleSheet("color: #FFB74D; font-size: 11px; font-weight: 600;")
+        root.addWidget(self.ws_status_label)
+
     def _connect_signals(self):
         self.navigator.date_changed.connect(self._on_date_changed)
         # Internal: marshal WebSocket thread ticks to the GUI thread safely.
@@ -968,6 +976,14 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
             self.cvd_engine.cvd_updated.connect(
                 self._on_cvd_tick_update,
                 Qt.QueuedConnection
+            )
+
+        parent = self.parent()
+        market_data_worker = getattr(parent, "market_data_worker", None)
+        if market_data_worker and hasattr(market_data_worker, "connection_status_changed"):
+            market_data_worker.connection_status_changed.connect(
+                self._on_market_data_status_changed,
+                Qt.QueuedConnection,
             )
 
     # =========================================================================
@@ -1982,6 +1998,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
             self._last_live_refresh_minute = datetime.now().replace(second=0, microsecond=0)
             # 🔥 Remove live ticks that are now covered by historical data
             self._cleanup_overlapping_ticks()
+            self._recalibrate_live_cvd_offset()
 
     def _seed_live_cvd_from_historical(self):
         if not self.live_mode or not self.cvd_engine:
@@ -2059,6 +2076,50 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
 
         # 🔥 Reset offset so next tick aligns with updated historical data
         # This ensures smooth continuation after historical refresh
+
+    def _recalibrate_live_cvd_offset(self):
+        if self._current_session_last_cvd_value is None:
+            return
+        if not self._live_tick_points:
+            self._live_cvd_offset = 0.0
+            return
+
+        latest_live_raw_cvd = float(self._live_tick_points[-1][1])
+        self._live_cvd_offset = float(self._current_session_last_cvd_value) - latest_live_raw_cvd
+
+    def _downsample_live_points(self, points: list[tuple[datetime, float]]) -> list[tuple[datetime, float]]:
+        if len(points) <= self.LIVE_TICK_DOWNSAMPLE_TARGET:
+            return points
+
+        if self.LIVE_TICK_DOWNSAMPLE_TARGET <= 10:
+            step = max(1, len(points) // max(self.LIVE_TICK_DOWNSAMPLE_TARGET, 1))
+            return points[::step]
+
+        bucket_count = max(1, self.LIVE_TICK_DOWNSAMPLE_TARGET // 5)
+        bucket_size = max(1, len(points) // bucket_count)
+        price_map = {ts: px for ts, px in self._live_price_points}
+        selected: list[tuple[datetime, float]] = []
+
+        for start in range(0, len(points), bucket_size):
+            bucket = points[start:start + bucket_size]
+            if not bucket:
+                continue
+
+            bucket_extremes = [
+                bucket[0],
+                min(bucket, key=lambda item: item[1]),
+                max(bucket, key=lambda item: item[1]),
+                min(bucket, key=lambda item: price_map.get(item[0], float("inf"))),
+                max(bucket, key=lambda item: price_map.get(item[0], float("-inf"))),
+                bucket[-1],
+            ]
+            selected.extend(bucket_extremes)
+
+        selected = sorted(set(selected), key=lambda item: item[0])
+        if len(selected) > self.LIVE_TICK_DOWNSAMPLE_TARGET:
+            idx = np.linspace(0, len(selected) - 1, self.LIVE_TICK_DOWNSAMPLE_TARGET, dtype=int)
+            selected = [selected[i] for i in idx]
+        return selected
 
     # =========================================================================
     # SECTION 7: CHART RENDERING & PLOTTING
@@ -2551,16 +2612,14 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
             self.price_today_tick_curve.clear()
             return
 
-        if len(points) > self.LIVE_TICK_DOWNSAMPLE_TARGET:
-            step = max(1, len(points) // self.LIVE_TICK_DOWNSAMPLE_TARGET)
-            points = points[::step]
+        points = self._downsample_live_points(points)
 
         x_vals: list[float] = []
         y_vals: list[float] = []
         price_vals: list[float] = []
         price_map = {ts: px for ts, px in self._live_price_points}
 
-        for ts, cvd in points:
+        for ts, raw_cvd in points:
             tick_ts = _align_tick_ts(ts)
 
             if focus_mode:
@@ -2572,7 +2631,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
                 x = self._current_session_x_base + minute_offset
 
             x_vals.append(x)
-            y_vals.append(cvd)
+            y_vals.append(raw_cvd + self._live_cvd_offset)
             price_vals.append(float(price_map.get(ts, np.nan)))
 
         # Convert to numpy arrays for consistent handling
@@ -2640,6 +2699,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
     def _apply_cvd_tick(self, cvd_value: float, last_price: float):
         """Slot — always called on the GUI thread via queued signal connection."""
         ts = datetime.now()
+        self._last_live_tick_ts = ts
 
         # Freeze live-dot motion outside market hours.
         # Some feeds keep pushing ticks after 15:30; if we keep updating the
@@ -2652,7 +2712,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         if cvd_mode == self.CVD_VALUE_MODE_NORMALIZED:
             transformed_cvd = transformed_cvd / max(float(self._current_session_volume_scale), 1.0)
 
-        plotted_cvd = transformed_cvd
+        raw_cvd = transformed_cvd
         current_price = float(last_price)
 
         # 🔥 SMART TICK FILTERING - Only append if price/CVD changed meaningfully
@@ -2669,19 +2729,19 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
             # 2. OR it's been more than 1 second (to ensure minimum sampling)
             time_since_last = (ts - last_ts).total_seconds()
             price_changed = abs(current_price - last_price_val) > 0.01
-            cvd_changed = abs(plotted_cvd - last_cvd) > 1.0
+            cvd_changed = abs(raw_cvd - last_cvd) > 1.0
 
             # Append only if there's actual movement or time gap
             should_append = price_changed or cvd_changed or time_since_last > 1.0
 
         if should_append:
-            self._live_tick_points.append((ts, plotted_cvd))
+            self._live_tick_points.append((ts, raw_cvd))
             self._live_price_points.append((ts, current_price))
         else:
             # Update the last point in place (no new point, just update current value)
             # This creates a "moving dot" effect rather than drawing lines
             if self._live_tick_points:
-                self._live_tick_points[-1] = (ts, plotted_cvd)
+                self._live_tick_points[-1] = (ts, raw_cvd)
             if self._live_price_points:
                 self._live_price_points[-1] = (ts, current_price)
 
@@ -2695,6 +2755,38 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         if not self._tick_repaint_timer.isActive():
             self._tick_repaint_timer.start(self.LIVE_TICK_REPAINT_MS)
 
+    def _on_market_data_status_changed(self, status):
+        status_text = str(status).strip() if status is not None else ""
+        normalized = status_text.lower()
+        self._ws_status_text = normalized
+
+        if normalized.startswith("connected"):
+            self.ws_status_label.setText(f"Live feed: {status_text}")
+            self.ws_status_label.setStyleSheet("color: #66BB6A; font-size: 11px; font-weight: 600;")
+            return
+
+        if normalized.startswith("connecting") or normalized.startswith("reconnecting"):
+            self.ws_status_label.setText(f"Live feed: {status_text}")
+            self.ws_status_label.setStyleSheet("color: #FFB74D; font-size: 11px; font-weight: 600;")
+            return
+
+        self.ws_status_label.setText(f"Live feed issue: {status_text or 'disconnected'}")
+        self.ws_status_label.setStyleSheet("color: #EF5350; font-size: 11px; font-weight: 700;")
+        self._attempt_manual_ws_reconnect("status_change")
+
+    def _attempt_manual_ws_reconnect(self, reason: str):
+        parent = self.parent()
+        market_data_worker = getattr(parent, "market_data_worker", None)
+        if market_data_worker is None or not hasattr(market_data_worker, "manual_reconnect"):
+            return
+
+        now = datetime.now()
+        if self._last_ws_reconnect_attempt_ts and (now - self._last_ws_reconnect_attempt_ts).total_seconds() < 15:
+            return
+        self._last_ws_reconnect_attempt_ts = now
+        logger.warning("[AUTO] Manual websocket reconnect requested (%s)", reason)
+        market_data_worker.manual_reconnect()
+
     # =========================================================================
     # SECTION 9: LIVE REFRESH TIMER & DOT BLINK
     # =========================================================================
@@ -2703,6 +2795,30 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self.refresh_timer = QTimer(self)
         self.refresh_timer.timeout.connect(self._refresh_if_live)
         self.refresh_timer.start(self.REFRESH_INTERVAL_MS)
+
+        self._ws_watchdog_timer = QTimer(self)
+        self._ws_watchdog_timer.timeout.connect(self._check_live_tick_staleness)
+        self._ws_watchdog_timer.start(5000)
+
+    def _check_live_tick_staleness(self):
+        if not self.live_mode:
+            return
+
+        now = datetime.now()
+        if now.time() < TRADING_START or now.time() > TRADING_END:
+            return
+
+        if self._last_live_tick_ts is None:
+            return
+
+        stale_seconds = (now - self._last_live_tick_ts).total_seconds()
+        if stale_seconds < 25:
+            return
+
+        if self._ws_status_text.startswith("connected"):
+            self.ws_status_label.setText("Live feed stalled (>25s without ticks). Attempting reconnect…")
+            self.ws_status_label.setStyleSheet("color: #EF5350; font-size: 11px; font-weight: 700;")
+            self._attempt_manual_ws_reconnect("tick_stale")
 
     def _refresh_if_live(self):
         """
