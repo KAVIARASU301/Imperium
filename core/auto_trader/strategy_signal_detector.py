@@ -35,6 +35,8 @@ class StrategySignalDetector:
     """
 
     CONFIRMATION_WAIT_MINUTES = 5
+    ATR_EXTENSION_THRESHOLD = 1.10
+    ATR_FLAT_VELOCITY_PCT = 0.02
     BREAKOUT_SWITCH_KEEP = "keep_breakout"
     BREAKOUT_SWITCH_PREFER_ATR = "prefer_atr_reversal"
     BREAKOUT_SWITCH_ADAPTIVE = "adaptive"
@@ -110,8 +112,10 @@ class StrategySignalDetector:
         long_atr_reversal = price_atr_below[:signal_length] & cvd_long_confirmed
 
         # Adaptive volatility gating:
-        # 1) normalized ATR > 1.2 (extended regime)
+        # 1) normalized ATR > threshold (extended regime)
         # 2) ATR velocity is flattening/contracting at signal bar
+        # 3) if both price and CVD ATR reversal fire on the same bar,
+        #    allow signal even when volatility extension is marginal.
         if atr_values is not None and len(atr_values) >= signal_length:
             atr_slice = np.asarray(atr_values[:signal_length], dtype=float)
             atr_velocity = np.diff(atr_slice, prepend=atr_slice[0])
@@ -121,7 +125,7 @@ class StrategySignalDetector:
                 atr_velocity,
                 np.where(np.abs(prev_atr) > 1e-9, np.abs(prev_atr), 1.0),
             )
-            atr_flat_or_contracting = (atr_velocity <= 0.0) | (atr_velocity_pct <= 0.01)
+            atr_flat_or_contracting = (atr_velocity <= 0.0) | (atr_velocity_pct <= self.ATR_FLAT_VELOCITY_PCT)
 
             if timestamps is not None and len(timestamps) >= signal_length:
                 session_index = pd.to_datetime(pd.Series(timestamps[:signal_length])).dt.date
@@ -136,11 +140,14 @@ class StrategySignalDetector:
                 atr_slice,
                 np.where(np.abs(baseline) > 1e-9, baseline, np.nan),
             )
-            normalized_atr_extended = np.nan_to_num(normalized_atr, nan=0.0) > 1.2
+            normalized_atr_extended = np.nan_to_num(normalized_atr, nan=0.0) > self.ATR_EXTENSION_THRESHOLD
 
             atr_gate = normalized_atr_extended & atr_flat_or_contracting
-            short_atr_reversal &= atr_gate
-            long_atr_reversal &= atr_gate
+            short_same_bar_confluence = price_atr_above[:signal_length] & cvd_atr_above[:signal_length]
+            long_same_bar_confluence = price_atr_below[:signal_length] & cvd_atr_below[:signal_length]
+
+            short_atr_reversal &= (atr_gate | short_same_bar_confluence)
+            long_atr_reversal &= (atr_gate | long_same_bar_confluence)
 
         # Keep raw copies BEFORE any suppression — callers use these to count
         # how many ATR signals were skipped during an active breakout trade.
