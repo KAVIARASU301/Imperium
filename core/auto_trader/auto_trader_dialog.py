@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QFormLayout, QGroupBox, QColorDialog, QFileDialog
 )
 from PySide6.QtCore import Qt, QTimer, Signal, QEvent, QThread, QSettings
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QFontMetrics
 from pyqtgraph import AxisItem, TextItem
 
 from kiteconnect import KiteConnect
@@ -247,6 +247,13 @@ class AutoTraderDialog(RegimeTabMixin, SetupPanelMixin, SetupSettingsMigrationMi
         root.setContentsMargins(8, 4, 8, 4)
         root.setSpacing(4)
 
+        def fit_combo_to_widest_item(combo: QComboBox, extra_px: int = 34):
+            metrics = QFontMetrics(combo.font())
+            widest = 0
+            for idx in range(combo.count()):
+                widest = max(widest, metrics.horizontalAdvance(combo.itemText(idx)))
+            combo.setFixedWidth(max(84, widest + extra_px))
+
         compact_spinbox_style = """
             QSpinBox, QDoubleSpinBox {
                 background: #1B1F2B;
@@ -317,17 +324,14 @@ class AutoTraderDialog(RegimeTabMixin, SetupPanelMixin, SetupSettingsMigrationMi
             }
         """
 
-        # ================= TOP CONTROL BAR =================
-        top_bar = QHBoxLayout()
-        top_bar.setContentsMargins(0, 0, 0, 0)
-        top_bar.setSpacing(12)
+        # ================= ROW 1: DATE NAVIGATOR =================
+        navigator_row = QHBoxLayout()
+        navigator_row.setContentsMargins(0, 0, 0, 0)
+        navigator_row.setSpacing(8)
 
-        top_bar.addStretch()
-
-        # -------- Timeframe dropdown (LEFT of center) --------
+        # -------- Timeframe dropdown --------
         tf_label = QLabel("TF")
         tf_label.setStyleSheet("color: #8A9BA8; font-size: 11px; font-weight: 600;")
-        top_bar.addWidget(tf_label)
 
         self.timeframe_combo = QComboBox()
         self.timeframe_combo.setFixedHeight(24)
@@ -347,9 +351,8 @@ class AutoTraderDialog(RegimeTabMixin, SetupPanelMixin, SetupSettingsMigrationMi
         # Default select 1m
         self.timeframe_combo.setCurrentIndex(0)
         self.timeframe_combo.currentIndexChanged.connect(self._on_timeframe_combo_changed)
-        top_bar.addWidget(self.timeframe_combo)
 
-        # Navigator (CENTER)
+        # Navigator (CENTER only in row 1)
         self.navigator = DateNavigator(self)
 
         # Day View Toggle (unchecked => 1D, checked => 2D)
@@ -373,10 +376,11 @@ class AutoTraderDialog(RegimeTabMixin, SetupPanelMixin, SetupSettingsMigrationMi
         """)
         self.btn_focus.setToolTip("Toggle 2-day view")
         self.btn_focus.toggled.connect(self._on_focus_mode_changed)
-        top_bar.addWidget(self.btn_focus)
         self.btn_focus.setText("1D")
 
-        top_bar.addWidget(self.navigator)
+        navigator_row.addStretch()
+        navigator_row.addWidget(self.navigator)
+        navigator_row.addStretch()
 
         if self.cvd_engine:
             self.cvd_engine.set_mode(CVDMode.SINGLE_DAY)
@@ -405,7 +409,7 @@ class AutoTraderDialog(RegimeTabMixin, SetupPanelMixin, SetupSettingsMigrationMi
         """)
         self.simulator_run_btn.clicked.connect(self._on_simulator_run_clicked)
 
-        self.tick_upload_btn = QPushButton("Upload Tick CSV")
+        self.tick_upload_btn = QPushButton("Update CSV")
         self.tick_upload_btn.setFixedHeight(24)
         self.tick_upload_btn.setMinimumWidth(130)
         self.tick_upload_btn.setToolTip("Upload timestamp,ltp,volume tick file for back analysis")
@@ -423,7 +427,7 @@ class AutoTraderDialog(RegimeTabMixin, SetupPanelMixin, SetupSettingsMigrationMi
         """)
         self.tick_upload_btn.clicked.connect(self._on_upload_tick_csv)
 
-        self.tick_clear_btn = QPushButton("Use Live")
+        self.tick_clear_btn = QPushButton("Live Tick")
         self.tick_clear_btn.setFixedHeight(24)
         self.tick_clear_btn.setMinimumWidth(84)
         self.tick_clear_btn.setToolTip("Clear uploaded tick data and switch back to live/historical feed")
@@ -480,11 +484,6 @@ class AutoTraderDialog(RegimeTabMixin, SetupPanelMixin, SetupSettingsMigrationMi
         self.automation_route_combo.setCurrentIndex(0)
         self.automation_route_combo.currentIndexChanged.connect(self._on_automation_settings_changed)
 
-        top_bar.addWidget(self.automate_toggle)
-        top_bar.addWidget(self.simulator_run_btn)
-        top_bar.addWidget(self.tick_upload_btn)
-        top_bar.addWidget(self.tick_clear_btn)
-
         self.setup_btn = QPushButton("Setup")
         self.setup_btn.setFixedHeight(24)
         self.setup_btn.setMinimumWidth(88)
@@ -506,11 +505,9 @@ class AutoTraderDialog(RegimeTabMixin, SetupPanelMixin, SetupSettingsMigrationMi
             }
         """)
         self.setup_btn.clicked.connect(self._open_setup_dialog)
-        top_bar.addWidget(self.setup_btn)
 
         # Regime indicator (live pills)
         self.regime_indicator = RegimeIndicator()
-        top_bar.addWidget(self.regime_indicator)
 
         # Export button (compact)
         self.btn_export = QPushButton("📸")
@@ -553,19 +550,21 @@ class AutoTraderDialog(RegimeTabMixin, SetupPanelMixin, SetupSettingsMigrationMi
         """)
         self.btn_refresh_plot.clicked.connect(self._refresh_plot_only)
 
-        top_bar.addStretch()
-
-        root.addLayout(top_bar)
+        root.addLayout(navigator_row)
 
         self.navigator.btn_back.setToolTip("Previous trading day (←)")
         self.navigator.btn_forward.setToolTip("Next trading day (→)")
 
-        # ================= EMA CONTROL BAR (NEW) =================
-        ema_bar = QHBoxLayout()
-        ema_bar.setContentsMargins(0, 0, 0, 4)
-        ema_bar.setSpacing(8)
+        # ================= ROW 2+3 WRAPPER (CENTERED BLOCK) =================
+        toolbar_block = QWidget(self)
+        toolbar_block_layout = QVBoxLayout(toolbar_block)
+        toolbar_block_layout.setContentsMargins(0, 0, 0, 0)
+        toolbar_block_layout.setSpacing(0)
 
-        ema_bar.addStretch()
+        # ================= ROW 2: PRIMARY CONTROLS =================
+        controls_row = QHBoxLayout()
+        controls_row.setContentsMargins(0, 0, 0, 4)
+        controls_row.setSpacing(8)
 
         self.atr_base_ema_input = QSpinBox()
         self.atr_base_ema_input.setRange(1, 500)
@@ -635,7 +634,10 @@ class AutoTraderDialog(RegimeTabMixin, SetupPanelMixin, SetupSettingsMigrationMi
         # EMA Label
         ema_label = QLabel("EMAs:")
         ema_label.setStyleSheet("color: #B0B0B0; font-weight: 600; font-size: 12px;")
-        ema_bar.addWidget(ema_label)
+        controls_row.addWidget(tf_label)
+        controls_row.addWidget(self.timeframe_combo)
+        controls_row.addWidget(self.btn_focus)
+        controls_row.addWidget(ema_label)
 
         # EMA Checkboxes with institutional colors
         self.ema_checkboxes = {}
@@ -671,7 +673,7 @@ class AutoTraderDialog(RegimeTabMixin, SetupPanelMixin, SetupSettingsMigrationMi
             """)
             cb.toggled.connect(lambda checked, p=period: self._on_ema_toggled(p, checked))
             self.ema_checkboxes[period] = cb
-            ema_bar.addWidget(cb)
+            controls_row.addWidget(cb)
 
         self.vwap_checkbox = QCheckBox("VWAP")
         self.vwap_checkbox.setChecked(False)
@@ -694,23 +696,24 @@ class AutoTraderDialog(RegimeTabMixin, SetupPanelMixin, SetupSettingsMigrationMi
             }
         """)
         self.vwap_checkbox.toggled.connect(self._on_vwap_toggled)
-        ema_bar.addWidget(self.vwap_checkbox)
+        controls_row.addWidget(self.vwap_checkbox)
 
-        ema_bar.addSpacing(4)
+        controls_row.addSpacing(4)
 
         signal_filter_label = QLabel("Filter")
         signal_filter_label.setStyleSheet("color: #8A9BA8; font-size: 11px;")
-        ema_bar.addWidget(signal_filter_label)
+        controls_row.addWidget(signal_filter_label)
 
         self.signal_filter_combo = QComboBox()
         self.signal_filter_combo.setFixedWidth(180)
         self.signal_filter_combo.setStyleSheet(compact_combo_style)
         self._init_signal_filter_combo(self.signal_filter_combo)
-        ema_bar.addWidget(self.signal_filter_combo)
+        fit_combo_to_widest_item(self.signal_filter_combo)
+        controls_row.addWidget(self.signal_filter_combo)
 
         atr_marker_label = QLabel("ATR Markers")
         atr_marker_label.setStyleSheet("color: #8A9BA8; font-size: 11px;")
-        ema_bar.addWidget(atr_marker_label)
+        controls_row.addWidget(atr_marker_label)
 
         self.atr_marker_filter_combo = QComboBox()
         self.atr_marker_filter_combo.setFixedWidth(140)
@@ -722,11 +725,17 @@ class AutoTraderDialog(RegimeTabMixin, SetupPanelMixin, SetupSettingsMigrationMi
         self.atr_marker_filter_combo.addItem("Hide All", self.ATR_MARKER_HIDE_ALL)
         self.atr_marker_filter_combo.setCurrentIndex(1)
         self.atr_marker_filter_combo.currentIndexChanged.connect(self._on_atr_marker_filter_changed)
-        ema_bar.addWidget(self.atr_marker_filter_combo)
+        fit_combo_to_widest_item(self.atr_marker_filter_combo)
+        controls_row.addWidget(self.atr_marker_filter_combo)
+
+        controls_row.addWidget(self.simulator_run_btn)
+        controls_row.addWidget(self.setup_btn)
 
         self.simulator_summary_label = QLabel("Simulator: click Run Simulator")
         self.simulator_summary_label.setStyleSheet("color: #8A9BA8; font-size: 11px; font-weight: 600;")
-        ema_bar.addWidget(self.simulator_summary_label)
+        controls_row.addWidget(self.btn_refresh_plot)
+        controls_row.addWidget(self.btn_export)
+        controls_row.addStretch()
         # ── Stacker widgets─
         self.stacker_enabled_check = QCheckBox("Stacker")
         self.stacker_enabled_check.setChecked(False)
@@ -761,10 +770,30 @@ class AutoTraderDialog(RegimeTabMixin, SetupPanelMixin, SetupSettingsMigrationMi
 
         self._build_setup_dialog(compact_combo_style, compact_spinbox_style)
 
-        ema_bar.addWidget(self.btn_refresh_plot)
-        ema_bar.addWidget(self.btn_export)
-        ema_bar.addStretch()
-        root.addLayout(ema_bar)
+        toolbar_block_layout.addLayout(controls_row)
+
+        # ================= ROW 3: AUTOMATION + REGIME =================
+        status_row = QHBoxLayout()
+        status_row.setContentsMargins(0, 0, 0, 4)
+        status_row.setSpacing(8)
+        status_row.addWidget(self.tick_upload_btn)
+        status_row.addWidget(self.tick_clear_btn)
+        status_row.addWidget(self.automate_toggle)
+        status_row.addWidget(self.regime_indicator)
+        status_row.addWidget(self.simulator_summary_label)
+        status_row.addStretch()
+        toolbar_block_layout.addLayout(status_row)
+
+        toolbar_block.adjustSize()
+        toolbar_block.setMaximumWidth(toolbar_block.sizeHint().width())
+
+        toolbar_block_row = QHBoxLayout()
+        toolbar_block_row.setContentsMargins(0, 0, 0, 0)
+        toolbar_block_row.setSpacing(0)
+        toolbar_block_row.addStretch()
+        toolbar_block_row.addWidget(toolbar_block)
+        toolbar_block_row.addStretch()
+        root.addLayout(toolbar_block_row)
 
         # === PRICE CHART (TOP) ===
         self.price_axis = AxisItem(orientation="bottom")

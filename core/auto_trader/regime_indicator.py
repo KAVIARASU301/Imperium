@@ -2,7 +2,7 @@
 Regime Indicator Widget
 =======================
 Compact status pill shown in the AutoTraderDialog top bar.
-Shows TREND · VOL · SESSION and ADX value at a glance.
+Shows TREND · VOLATILITY · SESSION and ADX value at a glance.
 
 Usage in auto_trader_dialog.py _setup_ui():
     from core.auto_trader.regime_indicator import RegimeIndicator
@@ -64,7 +64,7 @@ class RegimeIndicator(QWidget):
         layout.setSpacing(0)
 
         self._trend_lbl = self._make_pill("— —", "#3A4458", "#8A99B3")
-        self._vol_lbl   = self._make_pill("— VOL", "#3A4458", "#8A99B3")
+        self._vol_lbl   = self._make_pill("— VOLATILITY", "#3A4458", "#8A99B3")
         self._sess_lbl  = self._make_pill("—", "#3A4458", "#8A99B3")
         self._adx_lbl   = self._make_pill("ADX —", "#3A4458", "#8A99B3")
 
