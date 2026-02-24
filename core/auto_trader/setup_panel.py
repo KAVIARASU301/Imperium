@@ -762,6 +762,7 @@ class SetupPanelMixin:
         tabs.addTab(general_tab, "General")
         tabs.addTab(cpr_tab, "CPR")
         tabs.addTab(priority_tab, "Priorities")
+        self._build_regime_tab(tabs, compact_spinbox_style, compact_combo_style)
         root.addWidget(tabs, 1)
 
         # ── Close bar ─────────────────────────────────────────────────────

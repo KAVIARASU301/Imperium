@@ -31,6 +31,9 @@ from core.auto_trader.indicators import calculate_ema, calculate_vwap, calculate
 from core.auto_trader.signal_governance import SignalGovernance
 from core.auto_trader.stacker import StackerState
 from utils.cpr_calculator import CPRCalculator
+from core.auto_trader.regime_engine import RegimeEngine, RegimeConfig
+from core.auto_trader.regime_tab_mixin import RegimeTabMixin
+from core.auto_trader.regime_indicator import RegimeIndicator
 logger = logging.getLogger(__name__)
 
 
@@ -38,7 +41,7 @@ logger = logging.getLogger(__name__)
 # Auto Trader DIalog
 # =============================================================================
 
-class AutoTraderDialog(SetupPanelMixin, SetupSettingsMigrationMixin, SignalRendererMixin, SimulatorMixin, QDialog):
+class AutoTraderDialog(RegimeTabMixin, SetupPanelMixin, SetupSettingsMigrationMixin, SignalRendererMixin, SimulatorMixin, QDialog):
     REFRESH_INTERVAL_MS = 3000
     LIVE_TICK_MAX_POINTS = 6000
     LIVE_TICK_REPAINT_MS = 80
@@ -130,6 +133,8 @@ class AutoTraderDialog(SetupPanelMixin, SetupSettingsMigrationMixin, SignalRende
         self.timeframe_minutes = 1  # default = 1 minute
         self.strategy_detector = StrategySignalDetector(timeframe_minutes=self.timeframe_minutes)
         self.signal_governance = SignalGovernance()
+        self.regime_engine = RegimeEngine()
+        self._current_regime = None
 
         self.live_mode = True
         self.current_date = None
@@ -472,6 +477,10 @@ class AutoTraderDialog(SetupPanelMixin, SetupSettingsMigrationMixin, SignalRende
         """)
         self.setup_btn.clicked.connect(self._open_setup_dialog)
         top_bar.addWidget(self.setup_btn)
+
+        # Regime indicator (live pills)
+        self.regime_indicator = RegimeIndicator()
+        top_bar.addWidget(self.regime_indicator)
 
         # Export button (compact)
         self.btn_export = QPushButton("📸")
@@ -1407,6 +1416,29 @@ class AutoTraderDialog(SetupPanelMixin, SetupSettingsMigrationMixin, SignalRende
 
         self._apply_visual_settings()
         self._update_atr_reversal_markers()
+
+        # ── Regime engine: restore persisted thresholds & strategy matrix ──
+        _regime_scalar_keys = [
+            "regime_enabled", "regime_adx_strong", "regime_adx_weak",
+            "regime_adx_confirm", "regime_atr_window", "regime_atr_high",
+            "regime_atr_low", "regime_vol_confirm",
+            "regime_open_drive_end", "regime_morning_end", "regime_midday_end",
+            "regime_afternoon_end", "regime_pre_close_end",
+        ]
+        _regime_matrix_keys = [
+            f"regime_matrix_{trend}_{strategy}"
+            for trend in ("STRONG_TREND", "WEAK_TREND", "CHOP")
+            for strategy in ("atr_reversal", "atr_divergence", "ema_cross", "range_breakout")
+        ]
+        regime_dict = {}
+        for k in _regime_scalar_keys + _regime_matrix_keys:
+            v = _read_setting(k, None)
+            if v is not None:
+                regime_dict[k] = v
+        if regime_dict:
+            self._regime_settings_from_dict(regime_dict)
+        self._apply_regime_config()
+
         self._setup_values_ready = True
         if migrated_values:
             self._persist_setup_values()
@@ -1486,7 +1518,7 @@ class AutoTraderDialog(SetupPanelMixin, SetupSettingsMigrationMixin, SignalRende
             "show_cpr_labels": self.show_cpr_labels_check.isChecked(),
             "cpr_narrow_threshold": float(self.cpr_narrow_threshold_input.value()),
             "cpr_wide_threshold": float(self.cpr_wide_threshold_input.value()),
-
+            **self._regime_settings_to_dict(),
         }
 
         for list_key, strategy_map in self._cpr_strategy_priorities.items():

@@ -51,6 +51,7 @@ class SignalGovernance:
             for name in self.STRATEGIES
         }
         self._last_edge_idx_by_strategy = {name: -1 for name in self.STRATEGIES}
+        self._regime_snapshot = None  # MarketRegime from RegimeEngine, set each redraw
         self.regime_strategy_matrix = {
             "trend": {"atr_reversal": True, "atr_divergence": True, "ema_cross": True, "range_breakout": True},
             "chop": {"atr_reversal": True, "atr_divergence": False, "ema_cross": False, "range_breakout": False},
@@ -175,6 +176,10 @@ class SignalGovernance:
         score = 0.65 * win_rate + 0.35 * np.clip((edge + 0.003) / 0.006, 0.0, 1.0)
         return float(np.clip(score, 0.0, 1.0))
 
+    def set_current_regime(self, regime) -> None:
+        """Called from the dialog on every chart redraw with the latest MarketRegime snapshot."""
+        self._regime_snapshot = regime
+
     def fuse_signal(
         self,
         strategy_type: str,
@@ -191,9 +196,26 @@ class SignalGovernance:
         self._bar_counter += 1
         reasons: list[str] = []
 
+        # ── Regime engine gate (highest priority, evaluated first) ────────────
+        regime_confidence_mult = 1.0
+        if self._regime_snapshot is not None:
+            allowed = self._regime_snapshot.allowed_strategies
+            if not allowed.get(strategy_type, True):
+                enabled_flag = False
+                reasons.append(f"regime_blocked:{strategy_type}")
+            else:
+                enabled_flag = None  # will be set by legacy matrix below
+            regime_confidence_mult = getattr(self._regime_snapshot, "confidence_multiplier", 1.0)
+        else:
+            enabled_flag = None
+
         regime = self.classify_regime(price_close, ema10, ema51, atr)
-        enabled = self.regime_strategy_matrix.get(regime, {}).get(strategy_type, True)
-        if not enabled:
+        legacy_enabled = self.regime_strategy_matrix.get(regime, {}).get(strategy_type, True)
+        if enabled_flag is None:
+            enabled = legacy_enabled
+        else:
+            enabled = enabled_flag if not enabled_flag else legacy_enabled
+        if not legacy_enabled and enabled_flag is None:
             reasons.append(f"regime_block:{regime}")
 
         realized_edge = self._build_realized_edge_series(strategy_masks, price_close)
@@ -237,7 +259,7 @@ class SignalGovernance:
             + 0.22 * health_score
             + 0.20 * (1.0 - drift_score)
         )
-        confidence = float(np.clip(confidence, 0.0, 1.0))
+        confidence = float(np.clip(confidence * regime_confidence_mult, 0.0, 1.0))
 
         if confidence < self.min_confidence_for_live:
             reasons.append("low_confidence")

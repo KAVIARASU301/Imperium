@@ -534,6 +534,41 @@ class SignalRendererMixin:
         self._latest_sim_long_mask = long_mask
         self._latest_sim_strategy_masks = strategy_masks
 
+        # ── Regime classification: classify → push to governance + top-bar ──
+        regime_engine = getattr(self, "regime_engine", None)
+        regime_enabled = (
+            regime_engine is not None
+            and hasattr(self, "regime_enabled_check")
+            and self.regime_enabled_check.isChecked()
+        )
+        if regime_enabled and self.all_timestamps:
+            adx_arr = compute_adx(
+                np.array(self.all_price_high_data, dtype=float),
+                np.array(self.all_price_low_data, dtype=float),
+                np.array(self.all_price_data, dtype=float),
+                period=14,
+            )
+            bar_time = self.all_timestamps[-1]
+            self._current_regime = regime_engine.classify(
+                adx=adx_arr,
+                atr=atr_values,
+                bar_time=bar_time,
+            )
+        else:
+            self._current_regime = None
+
+        # Push snapshot to governance (None clears it, which reverts to legacy matrix)
+        self.signal_governance.set_current_regime(self._current_regime)
+
+        # Update top-bar indicator
+        regime_indicator = getattr(self, "regime_indicator", None)
+        if regime_indicator is not None:
+            regime_indicator.update_regime(self._current_regime)
+
+        # Update regime badge in setup dialog (if open)
+        if hasattr(self, "_update_regime_badge") and self._current_regime is not None:
+            self._update_regime_badge(self._current_regime)
+
         # ───────────────────────── DRAW LINES ─────────────────────────
         new_keys = set()
 
@@ -603,6 +638,19 @@ class SignalRendererMixin:
 
         if side is None or strategy_type is None:
             return
+
+        # ── Regime gate: block automation for strategies disabled by current regime ──
+        current_regime = getattr(self, "_current_regime", None)
+        if current_regime is not None:
+            allowed = getattr(current_regime, "allowed_strategies", {})
+            if not allowed.get(strategy_type, True):
+                logger.debug(
+                    "[REGIME] Blocked automation signal: strategy=%s regime=%s/%s",
+                    strategy_type,
+                    getattr(current_regime, "trend", "?"),
+                    getattr(current_regime, "volatility", "?"),
+                )
+                return
 
         closed_bar_ts = self.all_timestamps[closed_idx].isoformat()
 
