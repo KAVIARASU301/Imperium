@@ -1,6 +1,6 @@
 # widgets/header_toolbar.py
 import logging
-from datetime import datetime, date
+from datetime import date
 from typing import List, Dict
 
 from PySide6.QtWidgets import (
@@ -59,46 +59,6 @@ class AnimatedButton(QPushButton):
         super().leaveEvent(event)
 
 
-class PulsingDot(QLabel):
-    """Animated status indicator dot."""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setFixedSize(6, 6)
-        self._opacity = 1.0
-        self._is_open = False
-        self._setup_animation()
-
-    def _setup_animation(self):
-        self.pulse_animation = QPropertyAnimation(
-            self,
-            QByteArray(b"opacity")
-        )
-        self.pulse_animation.setDuration(1200)
-        self.pulse_animation.setStartValue(1.0)
-        self.pulse_animation.setEndValue(0.4)
-        self.pulse_animation.setEasingCurve(QEasingCurve.Type.InOutSine)
-        self.pulse_animation.setLoopCount(-1)
-
-    def get_opacity(self):
-        return self._opacity
-
-    def set_opacity(self, value):
-        self._opacity = value
-        self.update()
-
-    opacity = Property(float, get_opacity, set_opacity)
-
-    def set_market_open(self, is_open: bool):
-        self._is_open = is_open
-        if is_open:
-            self.pulse_animation.start()
-        else:
-            self.pulse_animation.stop()
-            self._opacity = 1.0
-        self.update()
-
-
 class HeaderToolbar(QFrame):
     """Enhanced header toolbar with subtle improvements."""
 
@@ -114,7 +74,6 @@ class HeaderToolbar(QFrame):
 
         self._setup_ui()
         self._apply_styles()
-        self._update_market_status()
 
     def _setup_ui(self):
         """Initialize the toolbar UI."""
@@ -165,7 +124,7 @@ class HeaderToolbar(QFrame):
         self.journal_button.clicked.connect(self.journal_clicked.emit)
 
     def _create_status_layout(self) -> QVBoxLayout:
-        """Compact status display with pulsing market indicator."""
+        """Compact status display with account information."""
         status_layout = QVBoxLayout()
         status_layout.setSpacing(0)
         status_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -173,17 +132,7 @@ class HeaderToolbar(QFrame):
         self.account_label = QLabel("Account: Loading...")
         self.account_label.setObjectName("statusLabel")
 
-        market_container = QWidget()
-        market_layout = QHBoxLayout(market_container)
-        market_layout.setContentsMargins(0, 0, 0, 0)
-        market_layout.setSpacing(0)
-        market_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        self.status_dot = PulsingDot()
-        market_layout.addWidget(self.status_dot)
-
         status_layout.addWidget(self.account_label)
-        status_layout.addWidget(market_container)
 
         return status_layout
 
@@ -322,23 +271,6 @@ class HeaderToolbar(QFrame):
         else:
             self.account_label.setText(f"Account: {account_id}")
 
-    def _update_market_status(self):
-        now = datetime.now().time()
-        market_open_time = datetime.strptime("09:15", "%H:%M").time()
-        market_close_time = datetime.strptime("15:30", "%H:%M").time()
-        is_weekday = date.today().weekday() < 5
-
-        is_open = is_weekday and market_open_time <= now <= market_close_time
-
-        if is_open:
-            self.status_dot.show()
-            self.status_dot.setStyleSheet("background-color: #29C7C9; border-radius: 3px;")
-            self.status_dot.setToolTip("Market open")
-            self.status_dot.set_market_open(True)
-        else:
-            self.status_dot.set_market_open(False)
-            self.status_dot.hide()
-
     def _apply_styles(self):
         """Enhanced dark theme with subtle improvements."""
         self.setStyleSheet("""
@@ -473,20 +405,21 @@ class HeaderToolbar(QFrame):
             #dangerButton {
                 background: qlineargradient(
                     x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(248, 81, 73, 0.05),
-                    stop:1 rgba(248, 81, 73, 0)
+                    stop:0 rgba(255, 255, 255, 0.04),
+                    stop:1 rgba(255, 255, 255, 0.01)
                 );
-                color: #F85149;
-                font-weight: bold;
-                border: 1px solid #F85149;
-                border-radius: 3px;
+                color: #A9B1C3;
+                font-weight: 600;
+                border: 1px solid rgba(169, 177, 195, 0.35);
+                border-radius: 6px;
                 padding: 4px 10px;
                 font-size: 10px;
             }
 
             #dangerButton:hover {
                 background: #F85149;
-                color: white;
+                border-color: #F85149;
+                color: #FFFFFF;
             }
 
             #symbolPickerButton {

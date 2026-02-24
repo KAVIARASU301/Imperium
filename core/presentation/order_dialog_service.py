@@ -2,6 +2,7 @@ import logging
 from datetime import date
 from typing import Dict, List
 
+from PySide6.QtCore import QPoint
 from PySide6.QtWidgets import QMessageBox
 
 from dialogs.order_history_dialog import OrderHistoryDialog
@@ -54,6 +55,7 @@ class OrderDialogService:
             widget.close_widget()
 
         widgets_in_order = []
+        new_widget_ids = set()
         for order_data in pending_orders:
             order_id = order_data['order_id']
             if order_id not in w.pending_order_widgets:
@@ -61,6 +63,7 @@ class OrderDialogService:
                 widget.cancel_requested.connect(self.cancel_order_by_id)
                 widget.modify_requested.connect(w._show_modify_order_dialog)
                 w.pending_order_widgets[order_id] = widget
+                new_widget_ids.add(order_id)
 
             widgets_in_order.append(w.pending_order_widgets[order_id])
 
@@ -70,9 +73,13 @@ class OrderDialogService:
             bottom_gap = max(anchor_widget.height() // 2, 24)
 
             y_pos = screen_geometry.bottom() - bottom_gap - anchor_widget.height()
-            for widget in widgets_in_order:
+            for index, widget in enumerate(widgets_in_order):
                 x_pos = screen_geometry.right() - widget.width() - edge_margin
-                widget.move(x_pos, y_pos)
+                target_pos = QPoint(x_pos, y_pos)
+                if widget.order_id in new_widget_ids:
+                    widget.animate_in(target_pos, delay_ms=index * 45)
+                else:
+                    widget.animate_stack_to(target_pos)
                 y_pos -= widget.height() + spacing
 
         if pending_orders and not w.pending_order_refresh_timer.isActive():

@@ -4,7 +4,7 @@ import sys
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame, QApplication, \
     QGraphicsDropShadowEffect
 from PySide6.QtCore import Qt, Signal, QPropertyAnimation, QEasingCurve, QByteArray, QTimer, QParallelAnimationGroup, \
-    QPoint, Property
+    QPoint
 from PySide6.QtGui import QColor
 
 logger = logging.getLogger(__name__)
@@ -40,13 +40,13 @@ class OrderStatusWidget(QWidget):
         super().__init__(parent)
         self.order_data = order_data
         self.order_id = order_data.get("order_id")
-        self._offset = 0
+        self._position_anim_group = None
+        self._stack_anim = None
 
         self._setup_ui()
         self._apply_styles()
         self._add_shadow()
         self.show()
-        self.animate_in()
 
     @staticmethod
     def _normalize_status(raw_status: str) -> str:
@@ -194,27 +194,43 @@ class OrderStatusWidget(QWidget):
         shadow.setOffset(0, 8)
         self.setGraphicsEffect(shadow)
 
-    def animate_in(self):
-        """Slide in from right with fade"""
+    def animate_in(self, final_pos: QPoint, delay_ms: int = 0):
+        """Slide in from bottom with fade."""
+        self.setWindowOpacity(0.0)
+        self.move(final_pos.x(), final_pos.y() + 36)
+
         # Opacity animation
         opacity_anim = QPropertyAnimation(self, QByteArray(b"windowOpacity"))
-        opacity_anim.setDuration(400)
+        opacity_anim.setDuration(420)
         opacity_anim.setStartValue(0.0)
         opacity_anim.setEndValue(1.0)
-        opacity_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        opacity_anim.setEasingCurve(QEasingCurve.Type.OutQuart)
 
-        # Slide animation
-        slide_anim = QPropertyAnimation(self, b"offset")
-        slide_anim.setDuration(400)
-        slide_anim.setStartValue(50)
-        slide_anim.setEndValue(0)
-        slide_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        # Vertical slide animation
+        slide_anim = QPropertyAnimation(self, b"pos")
+        slide_anim.setDuration(420)
+        slide_anim.setStartValue(QPoint(final_pos.x(), final_pos.y() + 36))
+        slide_anim.setEndValue(final_pos)
+        slide_anim.setEasingCurve(QEasingCurve.Type.OutQuart)
 
         # Run both animations together
-        group = QParallelAnimationGroup(self)
-        group.addAnimation(opacity_anim)
-        group.addAnimation(slide_anim)
-        group.start()
+        self._position_anim_group = QParallelAnimationGroup(self)
+        self._position_anim_group.addAnimation(opacity_anim)
+        self._position_anim_group.addAnimation(slide_anim)
+
+        if delay_ms > 0:
+            QTimer.singleShot(delay_ms, self._position_anim_group.start)
+        else:
+            self._position_anim_group.start()
+
+    def animate_stack_to(self, final_pos: QPoint):
+        """Animate widget to its next stacked position."""
+        self._stack_anim = QPropertyAnimation(self, b"pos")
+        self._stack_anim.setDuration(320)
+        self._stack_anim.setStartValue(self.pos())
+        self._stack_anim.setEndValue(final_pos)
+        self._stack_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._stack_anim.start()
 
     def close_widget(self):
         """Slide out with fade"""
@@ -224,28 +240,18 @@ class OrderStatusWidget(QWidget):
         opacity_anim.setEndValue(0.0)
         opacity_anim.setEasingCurve(QEasingCurve.Type.InCubic)
 
-        slide_anim = QPropertyAnimation(self, b"offset")
+        slide_anim = QPropertyAnimation(self, b"pos")
         slide_anim.setDuration(300)
-        slide_anim.setStartValue(0)
-        slide_anim.setEndValue(50)
+        start_pos = self.pos()
+        slide_anim.setStartValue(start_pos)
+        slide_anim.setEndValue(QPoint(start_pos.x(), start_pos.y() + 30))
         slide_anim.setEasingCurve(QEasingCurve.Type.InCubic)
 
-        group = QParallelAnimationGroup(self)
-        group.addAnimation(opacity_anim)
-        group.addAnimation(slide_anim)
-        group.finished.connect(self.close)
-        group.start()
-
-    @Property(int)
-    def offset(self):
-        return self._offset
-
-    @offset.setter
-    def offset(self, value):
-        old_offset = self._offset
-        self._offset = value
-        pos = self.pos()
-        self.move(pos.x() + (value - old_offset), pos.y())
+        self._position_anim_group = QParallelAnimationGroup(self)
+        self._position_anim_group.addAnimation(opacity_anim)
+        self._position_anim_group.addAnimation(slide_anim)
+        self._position_anim_group.finished.connect(self.close)
+        self._position_anim_group.start()
 
     def _apply_styles(self):
         self.setStyleSheet("""
@@ -419,7 +425,7 @@ def usage():
         widgets.append(widget)
 
         # Stagger animations
-        QTimer.singleShot(i * 150, widget.animate_in)
+        QTimer.singleShot(i * 150, lambda w=widget, px=x, py=y: w.animate_in(QPoint(px, py)))
 
     sys.exit(app.exec())
 
