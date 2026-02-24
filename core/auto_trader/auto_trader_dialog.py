@@ -21,7 +21,7 @@ from core.cvd.cvd_historical import CVDHistoricalBuilder
 from core.cvd.cvd_mode import CVDMode
 from core.auto_trader.strategy_signal_detector import StrategySignalDetector
 from core.auto_trader.constants import TRADING_START, TRADING_END, MINUTES_PER_SESSION
-from core.auto_trader.data_worker import _DataFetchWorker
+from core.auto_trader.data_worker import _DataFetchWorker, load_tick_csv, build_price_cvd_from_ticks
 from core.auto_trader.date_navigator import DateNavigator
 from core.auto_trader.setup_panel import SetupPanelMixin
 from core.auto_trader.settings_manager import SetupSettingsMigrationMixin
@@ -158,6 +158,8 @@ class AutoTraderDialog(RegimeTabMixin, SetupPanelMixin, SetupSettingsMigrationMi
         self._is_closing = False
         self._is_loading = False
         self._last_live_refresh_minute: datetime | None = None
+        self._uploaded_tick_data: pd.DataFrame | None = None
+        self._uploaded_tick_source: str = ""
 
         # Plot caches (explicitly initialized so mixins never depend on dynamic attrs)
         self.all_timestamps: list[datetime] = []
@@ -403,6 +405,32 @@ class AutoTraderDialog(RegimeTabMixin, SetupPanelMixin, SetupSettingsMigrationMi
         """)
         self.simulator_run_btn.clicked.connect(self._on_simulator_run_clicked)
 
+        self.tick_upload_btn = QPushButton("Upload Tick CSV")
+        self.tick_upload_btn.setFixedHeight(24)
+        self.tick_upload_btn.setMinimumWidth(130)
+        self.tick_upload_btn.setToolTip("Upload timestamp,ltp,volume tick file for back analysis")
+        self.tick_upload_btn.setStyleSheet("""
+            QPushButton {
+                background:#212635;
+                border:1px solid #3A4458;
+                border-radius:0px;
+                padding:2px 8px;
+                color:#9CCAF4;
+                font-weight:600;
+            }
+            QPushButton:hover { border: 1px solid #5B9BD5; }
+            QPushButton:pressed { background:#1B1F2B; }
+        """)
+        self.tick_upload_btn.clicked.connect(self._on_upload_tick_csv)
+
+        self.tick_clear_btn = QPushButton("Use Live")
+        self.tick_clear_btn.setFixedHeight(24)
+        self.tick_clear_btn.setMinimumWidth(84)
+        self.tick_clear_btn.setToolTip("Clear uploaded tick data and switch back to live/historical feed")
+        self.tick_clear_btn.setStyleSheet(self.tick_upload_btn.styleSheet())
+        self.tick_clear_btn.clicked.connect(self._clear_uploaded_tick_data)
+        self.tick_clear_btn.setEnabled(False)
+
         self.automation_stoploss_input = QSpinBox()
         self.automation_stoploss_input.setRange(1, 1000)
         self.automation_stoploss_input.setValue(50)
@@ -454,6 +482,8 @@ class AutoTraderDialog(RegimeTabMixin, SetupPanelMixin, SetupSettingsMigrationMi
 
         top_bar.addWidget(self.automate_toggle)
         top_bar.addWidget(self.simulator_run_btn)
+        top_bar.addWidget(self.tick_upload_btn)
+        top_bar.addWidget(self.tick_clear_btn)
 
         self.setup_btn = QPushButton("Setup")
         self.setup_btn.setFixedHeight(24)
@@ -1735,6 +1765,14 @@ class AutoTraderDialog(RegimeTabMixin, SetupPanelMixin, SetupSettingsMigrationMi
         self._load_and_plot(force=True)
 
     def _on_date_changed(self, current_date: datetime, previous_date: datetime):
+        if self._uploaded_tick_data is not None:
+            self.current_date = current_date
+            self.previous_date = previous_date
+            self.live_mode = False
+            self.refresh_timer.stop()
+            self._load_and_plot(force=True)
+            return
+
         today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
 
         self.current_date = current_date
@@ -1749,6 +1787,80 @@ class AutoTraderDialog(RegimeTabMixin, SetupPanelMixin, SetupSettingsMigrationMi
             self.refresh_timer.stop()
 
         self._load_and_plot(force=True)
+
+    def _on_upload_tick_csv(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Tick CSV",
+            "",
+            "CSV Files (*.csv);;All Files (*)",
+        )
+        if not file_path:
+            return
+
+        try:
+            tick_df = load_tick_csv(file_path)
+            if tick_df.empty:
+                raise ValueError("No valid tick rows found in file.")
+
+            self._uploaded_tick_data = tick_df
+            self._uploaded_tick_source = file_path
+            self.live_mode = False
+            self.refresh_timer.stop()
+            self.tick_clear_btn.setEnabled(True)
+            self.ws_status_label.setText(f"Tick file loaded: {file_path.split('/')[-1]}")
+            self._load_and_plot(force=True)
+        except Exception as exc:
+            logger.error("Failed to load tick CSV: %s", exc)
+            self.ws_status_label.setText(f"Tick file error: {exc}")
+
+    def _clear_uploaded_tick_data(self):
+        if self._uploaded_tick_data is None:
+            return
+        self._uploaded_tick_data = None
+        self._uploaded_tick_source = ""
+        self.tick_clear_btn.setEnabled(False)
+        self._historical_loaded_once = False
+        self.current_date, self.previous_date = self.navigator.get_dates()
+        self._on_date_changed(self.current_date, self.previous_date)
+
+    def _load_from_uploaded_ticks(self):
+        if self._uploaded_tick_data is None:
+            return False
+
+        cvd_df, price_df = build_price_cvd_from_ticks(self._uploaded_tick_data, self.timeframe_minutes)
+        if cvd_df.empty or price_df.empty:
+            self._on_fetch_error("empty_df")
+            return True
+
+        cvd_df = cvd_df.copy()
+        price_df = price_df.copy()
+        cvd_df["session"] = cvd_df.index.date
+        price_df["session"] = price_df.index.date
+
+        sessions = sorted(cvd_df["session"].unique())
+        if not sessions:
+            self._on_fetch_error("no_sessions")
+            return True
+
+        focus_mode = not self.btn_focus.isChecked()
+        selected_sessions = sessions[-1:] if focus_mode else sessions[-2:]
+
+        cvd_out = cvd_df[cvd_df["session"].isin(selected_sessions)].copy()
+        price_out = price_df[price_df["session"].isin(selected_sessions)].copy()
+
+        prev_close = 0.0
+        previous_day_cpr = None
+        if len(selected_sessions) >= 2:
+            prev_data = cvd_out[cvd_out["session"] == selected_sessions[0]]
+            if not prev_data.empty:
+                prev_close = float(prev_data["close"].iloc[-1])
+            prev_price = price_out[price_out["session"] == selected_sessions[0]]
+            if not prev_price.empty:
+                previous_day_cpr = CPRCalculator.get_previous_day_cpr(prev_price)
+
+        self._on_fetch_result(cvd_out, price_out, prev_close, previous_day_cpr)
+        return True
 
     def _on_mouse_moved(self, pos):
         in_price_plot = self.price_plot.sceneBoundingRect().contains(pos)
@@ -2045,6 +2157,10 @@ class AutoTraderDialog(RegimeTabMixin, SetupPanelMixin, SetupSettingsMigrationMi
             return
 
         if self._is_loading:
+            return
+
+        if self._uploaded_tick_data is not None:
+            self._load_from_uploaded_ticks()
             return
 
         if not self.kite or not getattr(self.kite, "access_token", None):

@@ -1,10 +1,92 @@
 import time
 
+import numpy as np
 import pandas as pd
 from PySide6.QtCore import QObject, Signal
 
 from core.cvd.cvd_historical import CVDHistoricalBuilder
 from utils.cpr_calculator import CPRCalculator
+
+
+def load_tick_csv(csv_path: str) -> pd.DataFrame:
+    """Load tick CSV with columns timestamp, ltp, volume."""
+    raw = pd.read_csv(
+        csv_path,
+        header=None,
+        usecols=[0, 1, 2],
+        names=["timestamp", "ltp", "volume"],
+        skipinitialspace=True,
+        on_bad_lines="skip",
+    )
+
+    if raw.empty:
+        return pd.DataFrame(columns=["timestamp", "ltp", "volume"])
+
+    # Allow files with a header row by coercing to NaT/NaN and dropping invalid rows.
+    raw["timestamp"] = pd.to_datetime(raw["timestamp"], errors="coerce")
+    raw["ltp"] = pd.to_numeric(raw["ltp"], errors="coerce")
+    raw["volume"] = pd.to_numeric(raw["volume"], errors="coerce")
+
+    tick_df = raw.dropna(subset=["timestamp", "ltp", "volume"]).copy()
+    if tick_df.empty:
+        return tick_df
+
+    tick_df.sort_values("timestamp", inplace=True)
+    tick_df.drop_duplicates(subset=["timestamp"], keep="last", inplace=True)
+    tick_df.reset_index(drop=True, inplace=True)
+    return tick_df
+
+
+def build_price_cvd_from_ticks(tick_df: pd.DataFrame, timeframe_minutes: int) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Build timeframe OHLCV and CVD OHLC from tick data."""
+    if tick_df.empty:
+        return pd.DataFrame(), pd.DataFrame()
+
+    data = tick_df.copy()
+    data["timestamp"] = pd.to_datetime(data["timestamp"], errors="coerce")
+    data["ltp"] = pd.to_numeric(data["ltp"], errors="coerce")
+    data["volume"] = pd.to_numeric(data["volume"], errors="coerce")
+    data = data.dropna(subset=["timestamp", "ltp", "volume"]).copy()
+    if data.empty:
+        return pd.DataFrame(), pd.DataFrame()
+
+    data.sort_values("timestamp", inplace=True)
+    data.set_index("timestamp", inplace=True)
+
+    volume_diff = data["volume"].diff()
+    looks_cumulative = float((volume_diff >= 0).mean()) > 0.95
+    if looks_cumulative:
+        tick_volume = volume_diff.clip(lower=0).fillna(0.0)
+    else:
+        tick_volume = data["volume"].clip(lower=0).fillna(0.0)
+
+    price_diff = data["ltp"].diff().fillna(0.0)
+    signed_volume = np.where(price_diff > 0, tick_volume, np.where(price_diff < 0, -tick_volume, 0.0))
+
+    data["tick_volume"] = tick_volume
+    data["signed_volume"] = signed_volume
+    data["session"] = data.index.date
+    data["cvd"] = data.groupby("session")["signed_volume"].cumsum()
+
+    rule = "1min" if timeframe_minutes <= 1 else f"{timeframe_minutes}min"
+    price_df = data.resample(rule).agg(
+        open=("ltp", "first"),
+        high=("ltp", "max"),
+        low=("ltp", "min"),
+        close=("ltp", "last"),
+        volume=("tick_volume", "sum"),
+    )
+    price_df = price_df.dropna(subset=["open", "high", "low", "close"])
+
+    cvd_df = data.resample(rule).agg(
+        open=("cvd", "first"),
+        high=("cvd", "max"),
+        low=("cvd", "min"),
+        close=("cvd", "last"),
+    )
+    cvd_df = cvd_df.dropna(subset=["open", "high", "low", "close"])
+
+    return cvd_df, price_df
 
 
 class _DataFetchWorker(QObject):
