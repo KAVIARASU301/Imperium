@@ -739,6 +739,39 @@ class SetupPanelMixin:
         tabs = QTabWidget(self.setup_dialog)
         tabs.setDocumentMode(True)
 
+        strategy_tab_notes = {
+            "atr_reversal": {
+                "entry": "ATR reversal markers align with the active signal filter and ATR / Signal thresholds.",
+                "exit": "Automation stop-loss, max-giveback rules, and opposite/reversal logic close positions.",
+                "important": "Base strategy settings here are shared by ATR Divergence and EMA Cross.",
+            },
+            "atr_divergence": {
+                "entry": "Divergence-style setup confirms through ATR reversal logic using shared ATR / Signal thresholds.",
+                "exit": "Uses automation exits (stop-loss, giveback) plus opposite/reversal transitions.",
+                "important": "This tab inherits ATR / Signal controls from ATR Reversal.",
+            },
+            "ema_cross": {
+                "entry": "EMA cross direction aligns with ATR / Signal confirmation filters.",
+                "exit": "Automation risk controls and opposite-signal transitions handle exits.",
+                "important": "Shared ATR / Signal controls are configured in ATR Reversal.",
+            },
+            "cvd_range_breakout": {
+                "entry": "Consolidation completes and breakout confirms with CVD support from this tab's settings.",
+                "exit": "Automation exits apply, with breakout failure/reversal logic ending trades.",
+                "important": "Tune consolidation and CVD thresholds together to reduce false breakouts.",
+            },
+            "range_breakout": {
+                "entry": "Price breaks the configured lookback range with the selected breakout-vs-ATR behavior.",
+                "exit": "Automation rules manage risk; ATR switch/skip logic controls opposite signal handling.",
+                "important": "ATR Skip Limit and trailing step strongly affect when reversal signals are accepted.",
+            },
+            "open_drive": {
+                "entry": "Opening-session momentum and directional conditions satisfy Open Drive filters.",
+                "exit": "Automation stop-loss/giveback and open-drive invalidation conditions close trades.",
+                "important": "Best tuned around high-liquidity open; keep conservative values outside that window.",
+            },
+        }
+
         general_tab = QWidget()
         general_layout = QVBoxLayout(general_tab)
         general_layout.setContentsMargins(0, 0, 0, 0)
@@ -757,31 +790,77 @@ class SetupPanelMixin:
         priority_layout_root.addLayout(cpr_col, 1)
         priority_layout_root.addWidget(priority_panel, 3)
 
-        def _strategy_tab(*widgets: QWidget, note: str = ""):
+        def _strategy_info_box(info: dict[str, str]):
+            box = QGroupBox("Strategy Guide")
+            box_lay = QVBoxLayout(box)
+            box_lay.setContentsMargins(8, 8, 8, 8)
+            box_lay.setSpacing(6)
+
+            sections = (
+                ("Entry", info.get("entry", ""), "#1D334A", "#A5D6FF"),
+                ("Exit", info.get("exit", ""), "#3B2A42", "#E3C3FF"),
+                ("Important", info.get("important", ""), "#3A3723", "#F1E4A8"),
+            )
+            for title, text, bg, border in sections:
+                if not text:
+                    continue
+                lbl = QLabel(f"<b>{title}</b><br>{text}")
+                lbl.setWordWrap(True)
+                lbl.setTextFormat(Qt.RichText)
+                lbl.setStyleSheet(
+                    f"""
+                    QLabel {{
+                        background: {bg};
+                        border: 1px solid {border};
+                        border-radius: 6px;
+                        color: #E8EDF3;
+                        font-size: 11px;
+                        font-weight: 500;
+                        padding: 8px;
+                        line-height: 1.25em;
+                    }}
+                    """
+                )
+                box_lay.addWidget(lbl)
+            return box
+
+        def _strategy_tab(*widgets: QWidget, info: dict[str, str] | None = None):
             tab = QWidget()
             lay = QVBoxLayout(tab)
             lay.setContentsMargins(6, 6, 6, 6)
             lay.setSpacing(_GRP_SPACING)
-            if note:
-                lay.addWidget(_note(note))
+            if info:
+                lay.addWidget(_strategy_info_box(info))
             for widget in widgets:
                 lay.addWidget(widget)
             lay.addStretch()
             return tab
 
         tabs.addTab(general_tab, "General")
-        tabs.addTab(_strategy_tab(sig_grp), self.STRATEGY_PRIORITY_LABELS["atr_reversal"])
         tabs.addTab(
-            _strategy_tab(note="Uses ATR / Signal settings from ATR Reversal tab."),
+            _strategy_tab(sig_grp, info=strategy_tab_notes["atr_reversal"]),
+            self.STRATEGY_PRIORITY_LABELS["atr_reversal"],
+        )
+        tabs.addTab(
+            _strategy_tab(info=strategy_tab_notes["atr_divergence"]),
             self.STRATEGY_PRIORITY_LABELS["atr_divergence"],
         )
         tabs.addTab(
-            _strategy_tab(note="Uses ATR / Signal settings from ATR Reversal tab."),
+            _strategy_tab(info=strategy_tab_notes["ema_cross"]),
             self.STRATEGY_PRIORITY_LABELS["ema_cross"],
         )
-        tabs.addTab(_strategy_tab(cvdbk_grp, consol_grp), self.STRATEGY_PRIORITY_LABELS["cvd_range_breakout"])
-        tabs.addTab(_strategy_tab(brk_grp), self.STRATEGY_PRIORITY_LABELS["range_breakout"])
-        tabs.addTab(_strategy_tab(od_grp), self.STRATEGY_PRIORITY_LABELS["open_drive"])
+        tabs.addTab(
+            _strategy_tab(cvdbk_grp, consol_grp, info=strategy_tab_notes["cvd_range_breakout"]),
+            self.STRATEGY_PRIORITY_LABELS["cvd_range_breakout"],
+        )
+        tabs.addTab(
+            _strategy_tab(brk_grp, info=strategy_tab_notes["range_breakout"]),
+            self.STRATEGY_PRIORITY_LABELS["range_breakout"],
+        )
+        tabs.addTab(
+            _strategy_tab(od_grp, info=strategy_tab_notes["open_drive"]),
+            self.STRATEGY_PRIORITY_LABELS["open_drive"],
+        )
         self._build_regime_tab(tabs, compact_spinbox_style, compact_combo_style)
         tabs.addTab(priority_tab, "Priority Order")
         root.addWidget(tabs, 1)
