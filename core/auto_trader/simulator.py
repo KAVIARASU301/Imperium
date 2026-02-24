@@ -16,6 +16,41 @@ logger = logging.getLogger(__name__)
 
 
 class SimulatorMixin:
+    @staticmethod
+    def _sim_market_context(
+            idx: int,
+            close: np.ndarray,
+            ema51: np.ndarray,
+            atr_full: np.ndarray,
+            adx_full: np.ndarray,
+    ) -> dict:
+        """
+        Build market context from the *previous* completed bar to avoid using
+        the current bar's trend/volatility for signal handling.
+        """
+        snapshot_idx = max(0, idx - 1)
+        snapshot_price = float(close[snapshot_idx]) if snapshot_idx < len(close) and np.isfinite(close[snapshot_idx]) else 0.0
+        ema51_snapshot = float(ema51[snapshot_idx]) if snapshot_idx < len(ema51) and np.isfinite(ema51[snapshot_idx]) else 0.0
+        atr_snapshot = float(atr_full[snapshot_idx]) if snapshot_idx < len(atr_full) and np.isfinite(atr_full[snapshot_idx]) else 0.0
+        adx_snapshot = float(adx_full[snapshot_idx]) if snapshot_idx < len(adx_full) and np.isfinite(adx_full[snapshot_idx]) else 0.0
+        atr_pct_snapshot = (atr_snapshot / snapshot_price) * 100.0 if snapshot_price > 0 and atr_snapshot > 0 else 0.0
+
+        trend = "neutral"
+        if snapshot_price > 0 and ema51_snapshot > 0:
+            trend = "up" if snapshot_price >= ema51_snapshot else "down"
+
+        return {
+            "snapshot_idx": snapshot_idx,
+            "price": snapshot_price,
+            "ema51": ema51_snapshot,
+            "atr": atr_snapshot,
+            "adx": adx_snapshot,
+            "atr_pct": atr_pct_snapshot,
+            "trend": trend,
+        }
+
+
+
     def _on_simulator_run_clicked(self):
         x_arr = getattr(self, "_latest_sim_x_arr", None)
         short_mask = getattr(self, "_latest_sim_short_mask", None)
@@ -301,7 +336,23 @@ class SimulatorMixin:
         stack_window_minutes = 15.0
         y_offset = np.maximum((high - low) * 0.2, 1.0)
 
-        def _close_trade(idx: int):
+        def _log_signal_event(idx: int, event: str, side: str | None, strategy: str | None, reason: str):
+            ctx = self._sim_market_context(idx, close, ema51, atr_full, adx_full)
+            logger.debug(
+                "[SIM %s] idx=%d ts=%s side=%s strategy=%s reason=%s trend(prev)=%s adx(prev)=%.2f atr(prev)=%.2f atr%%(prev)=%.4f",
+                event,
+                idx,
+                self.all_timestamps[idx],
+                side or "none",
+                strategy or "none",
+                reason,
+                ctx["trend"],
+                ctx["adx"],
+                ctx["atr"],
+                ctx["atr_pct"],
+            )
+
+        def _close_trade(idx: int, reason: str = "rule"):
             nonlocal active_trade, sim_stacker
             if not active_trade:
                 return
@@ -309,13 +360,15 @@ class SimulatorMixin:
             if not np.isfinite(exit_price):
                 exit_price = float(active_trade["entry_price"])
 
-            signal_side = active_trade["signal_side"]
+            trade_snapshot = dict(active_trade)
+            signal_side = trade_snapshot["signal_side"]
+            market_ctx = self._sim_market_context(idx, close, ema51, atr_full, adx_full)
 
             # ── Anchor P&L (always) ──────────────────────────────────────────
             anchor_pnl = (
-                exit_price - active_trade["entry_price"]
+                exit_price - trade_snapshot["entry_price"]
                 if signal_side == "long"
-                else active_trade["entry_price"] - exit_price
+                else trade_snapshot["entry_price"] - exit_price
             )
 
             # ── Stack P&L: remaining stacks exit with anchor ─────────────────
@@ -337,8 +390,8 @@ class SimulatorMixin:
                         result["stack_exit_losses"] += 1  # breakeven counts as loss/neutral
 
             result["total_points"] += float(anchor_pnl)
-            result["trade_path_x"].extend([float(x_arr[active_trade["entry_bar_idx"]]), float(x_arr[idx])])
-            result["trade_path_y"].extend([float(active_trade["entry_price"]), exit_price])
+            result["trade_path_x"].extend([float(x_arr[trade_snapshot["entry_bar_idx"]]), float(x_arr[idx])])
+            result["trade_path_y"].extend([float(trade_snapshot["entry_price"]), exit_price])
             if anchor_pnl > 0:
                 result["wins"] += 1
                 result["exit_win_x"].append(float(x_arr[idx]))
@@ -347,6 +400,22 @@ class SimulatorMixin:
                 result["losses"] += 1
                 result["exit_loss_x"].append(float(x_arr[idx]))
                 result["exit_loss_y"].append(exit_price)
+            logger.debug(
+                "[SIM EXIT] idx=%d ts=%s side=%s strategy=%s entry=%.2f exit=%.2f pnl=%.2f reason=%s "
+                "trend(prev)=%s adx(prev)=%.2f atr(prev)=%.2f atr%%(prev)=%.4f",
+                idx,
+                self.all_timestamps[idx],
+                signal_side,
+                trade_snapshot.get("strategy_type", "unknown"),
+                float(trade_snapshot.get("entry_price", exit_price)),
+                exit_price,
+                float(anchor_pnl),
+                reason,
+                market_ctx["trend"],
+                market_ctx["adx"],
+                market_ctx["atr"],
+                market_ctx["atr_pct"],
+            )
             active_trade = None
             sim_stacker = None
 
@@ -383,7 +452,7 @@ class SimulatorMixin:
             ts = self.all_timestamps[idx]
             if ts.time() >= time(15, 0):
                 if active_trade:
-                    _close_trade(idx)
+                    _close_trade(idx, reason="session_close")
                 continue
 
             if active_trade:
@@ -468,9 +537,11 @@ class SimulatorMixin:
 
                 active_strategy_type = active_trade.get("strategy_type") or "atr_reversal"
 
-                adx_now = float(adx_full[idx]) if idx < len(adx_full) and np.isfinite(adx_full[idx]) else 0.0
-                atr_now = float(atr_full[idx]) if idx < len(atr_full) and np.isfinite(atr_full[idx]) and close[idx] > 0 else 0.0
-                atr_normalized = (atr_now / price_close) * 100.0 if atr_now > 0 and price_close > 0 else 0.0
+                # Use previous completed bar context to avoid current-bar lookahead.
+                regime_ctx = self._sim_market_context(idx, close, ema51, atr_full, adx_full)
+                adx_now = float(regime_ctx["adx"])
+                atr_now = float(regime_ctx["atr"])
+                atr_normalized = float(regime_ctx["atr_pct"])
                 adx_hist = active_trade.setdefault("regime_adx_hist", [])
                 vol_hist = active_trade.setdefault("regime_vol_hist", [])
                 if adx_now > 0:
@@ -522,18 +593,22 @@ class SimulatorMixin:
                         peak_vol = float(active_trade.get("trend_mode_peak_vol") or 0.0)
                         vol_contracting = vol_hist[-1] < (0.85 * peak_vol) if peak_vol > 0 else False
                         if adx_falling and adx_below_5bar and vol_below_5bar and vol_contracting:
-                            _close_trade(idx)
+                            _close_trade(idx, reason="trend_unlock_cooldown")
                             continue
 
                 use_default_ema_exits = active_trade.get("exit_mode") != "trend_unlock"
                 exit_now = False
+                exit_reason = "none"
                 if hit_stop:
                     exit_now = True
+                    exit_reason = "stop_loss"
                 elif active_strategy_type == "atr_reversal":
                     exit_now = (
                         (signal_side == "long" and ((ema51[idx] > 0 and price_close >= ema51[idx]) or (cvd_ema51[idx] != 0 and cvd_close[idx] >= cvd_ema51[idx])))
                         or (signal_side == "short" and ((ema51[idx] > 0 and price_close <= ema51[idx]) or (cvd_ema51[idx] != 0 and cvd_close[idx] <= cvd_ema51[idx])))
                     )
+                    if exit_now:
+                        exit_reason = "atr_reversal_target"
                 elif max_favorable_points > 0:
                     use_open_drive_override = (
                         active_strategy_type == "open_drive"
@@ -551,22 +626,32 @@ class SimulatorMixin:
                     if giveback_enabled_for_strategy and effective_giveback_points > 0:
                         giveback_points = max_favorable_points - favorable_move
                         exit_now = giveback_points >= effective_giveback_points
+                        if exit_now:
+                            exit_reason = "max_profit_giveback"
                 if (not exit_now) and active_strategy_type == "ema_cross" and use_default_ema_exits:
                     exit_now = (signal_side == "long" and cvd_cross_below_ema10) or (signal_side == "short" and cvd_cross_above_ema10)
+                    if exit_now:
+                        exit_reason = "ema_cross_exit"
                 elif (not exit_now) and active_strategy_type == "atr_divergence":
                     exit_now = (signal_side == "long" and price_cross_above_ema51) or (signal_side == "short" and price_cross_below_ema51)
+                    if exit_now:
+                        exit_reason = "atr_divergence_exit"
                 elif (not exit_now) and active_strategy_type in {"range_breakout", "cvd_range_breakout"} and use_default_ema_exits:
                     exit_now = (signal_side == "long" and (price_cross_below_ema10 or price_cross_below_ema51)) or (signal_side == "short" and (price_cross_above_ema10 or price_cross_above_ema51))
+                    if exit_now:
+                        exit_reason = "breakout_ema_reversal"
                 elif (not exit_now) and active_strategy_type == "open_drive" and use_default_ema_exits:
                     exit_now = (
                         (signal_side == "long" and (price_close < ema10[idx] or cvd_close[idx] < cvd_ema10[idx]))
                         or (signal_side == "short" and (price_close > ema10[idx] or cvd_close[idx] > cvd_ema10[idx]))
                     )
+                    if exit_now:
+                        exit_reason = "open_drive_ema_exit"
                 else:
                     exit_now = False
 
                 if exit_now:
-                    _close_trade(idx)
+                    _close_trade(idx, reason=exit_reason if exit_reason != "none" else "rule_exit")
 
                 if active_trade:
                     active_trade["last_price_close"] = float(close[idx])
@@ -601,8 +686,10 @@ class SimulatorMixin:
                     result["skipped_x"].append(float(x_arr[idx]))
                     result["skipped_y"].append(float((high[idx] + y_offset[idx]) if skip_side == "short" else (low[idx] - y_offset[idx])))
                     result["skipped_line_keys"].add(f"{'S' if skip_side == 'short' else 'L'}:{idx}")
+                    _log_signal_event(idx, "SKIP", skip_side, None, "regime_strategy_not_allowed")
 
             if signal_side is None:
+                _log_signal_event(idx, "NO_SIGNAL", None, None, "no_strategy_match")
                 continue
 
             open_drive_entry_time = time(
@@ -613,6 +700,7 @@ class SimulatorMixin:
             )
             intraday_start_time = open_drive_entry_time if signal_strategy == "open_drive" else time(9, 20)
             if ts.time() < intraday_start_time or ts.time() >= time(15, 0):
+                _log_signal_event(idx, "SKIP", signal_side, signal_strategy, "outside_trading_window")
                 continue
 
             if signal_strategy is None:
@@ -634,6 +722,7 @@ class SimulatorMixin:
                 result["skipped_x"].append(float(x_arr[idx]))
                 result["skipped_y"].append(float((high[idx] + y_offset[idx]) if signal_side == "short" else (low[idx] - y_offset[idx])))
                 result["skipped_line_keys"].add(f"{'S' if signal_side == 'short' else 'L'}:{idx}")
+                _log_signal_event(idx, "SKIP", signal_side, signal_strategy, "chop_filter")
                 continue
 
             if active_trade:
@@ -647,6 +736,7 @@ class SimulatorMixin:
                         result["skipped_x"].append(float(x_arr[idx]))
                         result["skipped_y"].append(float((high[idx] + y_offset[idx]) if signal_side == "short" else (low[idx] - y_offset[idx])))
                         result["skipped_line_keys"].add(f"{'S' if signal_side == 'short' else 'L'}:{idx}")
+                        _log_signal_event(idx, "SKIP", signal_side, signal_strategy, "same_side_stack_window")
                         continue
                 else:
                     active_strategy = active_trade.get("strategy_type")
@@ -675,13 +765,15 @@ class SimulatorMixin:
 
                         if skipped_count >= atr_skip_limit:
                             # Threshold reached — close breakout, take ATR
-                            _close_trade(idx)
+                            _close_trade(idx, reason="atr_skip_limit_reached")
+                            _log_signal_event(idx, "OVERRIDE", signal_side, signal_strategy, f"atr_skip_limit_reached:{skipped_count}/{atr_skip_limit}")
                             # Fall through to entry below
                         else:
                             result["skipped"] += 1
                             result["skipped_x"].append(float(x_arr[idx]))
                             result["skipped_y"].append(float((high[idx] + y_offset[idx]) if signal_side == "short" else (low[idx] - y_offset[idx])))
                             result["skipped_line_keys"].add(f"{'S' if signal_side == 'short' else 'L'}:{idx}")
+                            _log_signal_event(idx, "SKIP", signal_side, signal_strategy, f"atr_skip_limit_wait:{skipped_count}/{atr_skip_limit}")
                             continue
                     # ──────────────────────────────────────────────────────────
                     elif new_priority <= active_priority:
@@ -689,9 +781,11 @@ class SimulatorMixin:
                         result["skipped_x"].append(float(x_arr[idx]))
                         result["skipped_y"].append(float((high[idx] + y_offset[idx]) if signal_side == "short" else (low[idx] - y_offset[idx])))
                         result["skipped_line_keys"].add(f"{'S' if signal_side == 'short' else 'L'}:{idx}")
+                        _log_signal_event(idx, "SKIP", signal_side, signal_strategy, f"priority_blocked:new={new_priority}<=active={active_priority}")
                         continue
                     else:
-                        _close_trade(idx)
+                        _close_trade(idx, reason="higher_priority_signal")
+                        _log_signal_event(idx, "CLOSE", signal_side, signal_strategy, "higher_priority_signal")
 
             entry_price = float(close[idx])
             if not np.isfinite(entry_price):
@@ -739,6 +833,7 @@ class SimulatorMixin:
                 result["taken_short_x"].append(float(x_arr[idx]))
                 result["taken_short_y"].append(entry_price)
             result["trades"] += 1
+            _log_signal_event(idx, "TAKE", signal_side, signal_strategy, "entry_accepted")
 
             if active_trade:
                 active_trade["last_price_close"] = float(close[idx])
@@ -749,6 +844,6 @@ class SimulatorMixin:
                 active_trade["last_cvd_ema51"] = float(cvd_ema51[idx])
 
         if active_trade:
-            _close_trade(length - 1)
+            _close_trade(length - 1, reason="simulation_end")
 
         return result
