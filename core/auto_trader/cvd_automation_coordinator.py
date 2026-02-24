@@ -176,6 +176,8 @@ class CvdAutomationCoordinator:
         max_profit_giveback_points = float(payload.get("max_profit_giveback_points") or state.get("max_profit_giveback_points") or 0.0)
         open_drive_max_profit_giveback_points = float(payload.get("open_drive_max_profit_giveback_points") or state.get("open_drive_max_profit_giveback_points") or 0.0)
         open_drive_tick_drawdown_limit_points = float(payload.get("open_drive_tick_drawdown_limit_points") or state.get("open_drive_tick_drawdown_limit_points") or 100.0)
+        atr_trailing_step_points = float(payload.get("atr_trailing_step_points") or state.get("atr_trailing_step_points") or 10.0)
+        current_atr = float(payload.get("atr") or state.get("atr") or 0.0)
         max_profit_giveback_strategies = payload.get("max_profit_giveback_strategies") or state.get("max_profit_giveback_strategies") or ["atr_reversal", "ema_cross", "atr_divergence", "cvd_range_breakout", "range_breakout", "open_drive"]
         if not isinstance(max_profit_giveback_strategies, (list, tuple, set)):
             max_profit_giveback_strategies = ["atr_reversal", "ema_cross", "atr_divergence", "cvd_range_breakout", "range_breakout", "open_drive"]
@@ -261,8 +263,9 @@ class CvdAutomationCoordinator:
             "open_drive_max_profit_giveback_points": open_drive_max_profit_giveback_points,
             "open_drive_tick_drawdown_limit_points": open_drive_tick_drawdown_limit_points,
             "max_profit_giveback_strategies": list(max_profit_giveback_strategies),
-            "atr_trailing_step_points": 10.0,
+            "atr_trailing_step_points": atr_trailing_step_points,
             "entry_underlying": entry_underlying,
+            "entry_atr": current_atr if math.isfinite(current_atr) and current_atr > 0 else 0.0,
             "max_favorable_points": 0.0,
             "sl_underlying": sl_underlying,
             "last_price_close": entry_underlying,
@@ -457,9 +460,14 @@ class CvdAutomationCoordinator:
         if stoploss_points > 0 and entry_underlying > 0:
             trail_offset = 0.0
             if strategy_type == "atr_reversal" and atr_trailing_step_points > 0:
-                trail_steps = int(max(0.0, favorable_move) // atr_trailing_step_points)
+                dynamic_step = atr_trailing_step_points
+                entry_atr = _to_finite_float(active_trade.get("entry_atr"), 0.0)
+                current_atr = _to_finite_float(state.get("atr"), 0.0)
+                if entry_atr > 0 and current_atr > 0:
+                    dynamic_step *= max(1.0, current_atr / entry_atr)
+                trail_steps = int(max(0.0, favorable_move) // dynamic_step)
                 if trail_steps > 0:
-                    trail_offset = trail_steps * atr_trailing_step_points
+                    trail_offset = trail_steps * dynamic_step
             elif strategy_type in {"ema_cross", "range_breakout", "cvd_range_breakout", "open_drive"} and favorable_move >= 200.0:
                 trail_offset = (1 + int((favorable_move - 200.0) // 100.0)) * 100.0
             if trail_offset > 0:

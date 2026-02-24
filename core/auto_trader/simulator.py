@@ -235,7 +235,7 @@ class SimulatorMixin:
         max_profit_giveback_points = float(max(0.0, self.max_profit_giveback_input.value()))
         open_drive_max_profit_giveback_points = float(max(0.0, getattr(self, "open_drive_max_profit_giveback_input", None).value() if getattr(self, "open_drive_max_profit_giveback_input", None) is not None else 0.0))
         max_profit_giveback_strategies = set(self._selected_max_giveback_strategies())
-        atr_trailing_step_points = 10.0
+        atr_trailing_step_points = float(max(0.5, getattr(self, "atr_trailing_step_input", None).value() if getattr(self, "atr_trailing_step_input", None) is not None else 10.0))
         atr_skip_limit = int(getattr(self, "atr_skip_limit_input", None) and
                              self.atr_skip_limit_input.value() or 0)
 
@@ -395,10 +395,21 @@ class SimulatorMixin:
 
                 trail_offset = 0.0
                 if active_trade.get("strategy_type") == "atr_reversal":
-                    if atr_trailing_step_points > 0:
-                        trail_steps = int(max(0.0, favorable_move) // atr_trailing_step_points)
+                    dynamic_step = atr_trailing_step_points
+                    entry_atr = float(active_trade.get("entry_atr") or 0.0)
+                    current_atr = float(atr_full[idx]) if idx < len(atr_full) else 0.0
+                    if (
+                        dynamic_step > 0
+                        and np.isfinite(entry_atr)
+                        and entry_atr > 0
+                        and np.isfinite(current_atr)
+                        and current_atr > 0
+                    ):
+                        dynamic_step *= max(1.0, current_atr / entry_atr)
+                    if dynamic_step > 0:
+                        trail_steps = int(max(0.0, favorable_move) // dynamic_step)
                         if trail_steps > 0:
-                            trail_offset = trail_steps * atr_trailing_step_points
+                            trail_offset = trail_steps * dynamic_step
                 elif active_trade.get("strategy_type") in {"ema_cross", "range_breakout", "cvd_range_breakout"}:
                     initial_trigger_points = 200.0
                     incremental_trigger_points = 100.0
@@ -604,6 +615,7 @@ class SimulatorMixin:
                 "signal_timestamp": ts,
                 "strategy_type": signal_strategy,
                 "entry_price": entry_price,
+                "entry_atr": float(atr_full[idx]) if idx < len(atr_full) and np.isfinite(atr_full[idx]) and atr_full[idx] > 0 else 0.0,
                 "max_favorable_points": 0.0,
                 "entry_bar_idx": idx,      # used by ATR skip counter
                 "atr_skip_count": 0,       # fallback counter if raw masks unavailable

@@ -1066,6 +1066,7 @@ class AutoTraderDialog(SetupPanelMixin, SetupSettingsMigrationMixin, SignalRende
         self.range_lookback_input.blockSignals(True)  # 🆕 NEW
         self.breakout_switch_mode_combo.blockSignals(True)
         self.atr_skip_limit_input.blockSignals(True)
+        self.atr_trailing_step_input.blockSignals(True)
         self.deploy_mode_combo.blockSignals(True)
         self.min_confidence_input.blockSignals(True)
         self.canary_ratio_input.blockSignals(True)
@@ -1184,6 +1185,9 @@ class AutoTraderDialog(SetupPanelMixin, SetupSettingsMigrationMixin, SignalRende
         )
         self.atr_skip_limit_input.setValue(
             _read_setting("atr_skip_limit", 0, int)
+        )
+        self.atr_trailing_step_input.setValue(
+            _read_setting("atr_trailing_step_points", 10.0, float)
         )
         _apply_combo_value(
             self.deploy_mode_combo,
@@ -1323,6 +1327,7 @@ class AutoTraderDialog(SetupPanelMixin, SetupSettingsMigrationMixin, SignalRende
         self.range_lookback_input.blockSignals(False)  # 🆕 NEW
         self.breakout_switch_mode_combo.blockSignals(False)
         self.atr_skip_limit_input.blockSignals(False)
+        self.atr_trailing_step_input.blockSignals(False)
         self.deploy_mode_combo.blockSignals(False)
         self.min_confidence_input.blockSignals(False)
         self.canary_ratio_input.blockSignals(False)
@@ -1398,6 +1403,7 @@ class AutoTraderDialog(SetupPanelMixin, SetupSettingsMigrationMixin, SignalRende
             "range_lookback": int(self.range_lookback_input.value()),
             "breakout_switch_mode": self._selected_breakout_switch_mode(),
             "atr_skip_limit": int(self.atr_skip_limit_input.value()),
+            "atr_trailing_step_points": float(self.atr_trailing_step_input.value()),
             "deploy_mode": self.deploy_mode_combo.currentData() or "canary",
             "min_confidence_for_live": float(self.min_confidence_input.value()),
             "canary_live_ratio": float(self.canary_ratio_input.value()),
@@ -1483,6 +1489,7 @@ class AutoTraderDialog(SetupPanelMixin, SetupSettingsMigrationMixin, SignalRende
             "max_profit_giveback_strategies": self._selected_max_giveback_strategies(),
             "open_drive_max_profit_giveback_points": float(self.open_drive_max_profit_giveback_input.value()),
             "open_drive_tick_drawdown_limit_points": float(self.open_drive_tick_drawdown_limit_input.value()),
+            "atr_trailing_step_points": float(self.atr_trailing_step_input.value()),
             "route": self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL,
             "signal_filter": self._selected_signal_filter(),
             "signal_filters": self._selected_signal_filters(),

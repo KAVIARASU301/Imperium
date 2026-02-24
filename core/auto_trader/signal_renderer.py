@@ -208,6 +208,15 @@ class SignalRendererMixin:
         new_cvd_close = float(cvd_data_array[idx])
         new_cvd_ema10 = float(cvd_ema10[idx])
         new_cvd_ema51 = float(cvd_ema51[idx])
+        atr_values = calculate_atr(
+            np.array(self.all_price_high_data, dtype=float),
+            np.array(self.all_price_low_data, dtype=float),
+            price_data_array,
+            period=14,
+        )
+        current_atr = float(atr_values[idx]) if idx < len(atr_values) else 0.0
+        if not np.isfinite(current_atr) or current_atr <= 0:
+            current_atr = 0.0
         state_key = (
             ts_str,
             round(new_price_close, 4),
@@ -232,6 +241,8 @@ class SignalRendererMixin:
             "max_profit_giveback_strategies": self._selected_max_giveback_strategies(),
             "open_drive_max_profit_giveback_points": float(self.open_drive_max_profit_giveback_input.value()),
             "open_drive_tick_drawdown_limit_points": float(self.open_drive_tick_drawdown_limit_input.value()),
+            "atr_trailing_step_points": float(self.atr_trailing_step_input.value()),
+            "atr": current_atr,
             "route": self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL,
             "signal_filter": self._selected_signal_filter(),
             "priority_list": active_priority_list,
@@ -593,6 +604,16 @@ class SignalRendererMixin:
 
         self._last_emitted_closed_bar_ts = closed_bar_ts
 
+        atr_values = calculate_atr(
+            np.array(self.all_price_high_data, dtype=float),
+            np.array(self.all_price_low_data, dtype=float),
+            np.array(self.all_price_data, dtype=float),
+            period=14,
+        )
+        current_atr = float(atr_values[closed_idx]) if closed_idx < len(atr_values) else 0.0
+        if not np.isfinite(current_atr) or current_atr <= 0:
+            current_atr = 0.0
+
         active_priority_list, strategy_priorities = self._active_strategy_priorities()
         payload = {
             "instrument_token": self.instrument_token,
@@ -605,6 +626,8 @@ class SignalRendererMixin:
             "price_close": float(self.all_price_data[closed_idx]),
             "stoploss_points": float(self.automation_stoploss_input.value()),
             "open_drive_tick_drawdown_limit_points": float(self.open_drive_tick_drawdown_limit_input.value()),
+            "atr_trailing_step_points": float(self.atr_trailing_step_input.value()),
+            "atr": current_atr,
             "route": self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL,
             "timestamp": closed_bar_ts,
         }

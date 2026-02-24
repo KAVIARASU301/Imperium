@@ -254,6 +254,22 @@ class SetupPanelMixin:
         )
         self.atr_skip_limit_input.valueChanged.connect(self._on_breakout_settings_changed)
         brk_frm.addRow("ATR Skip Limit", self.atr_skip_limit_input)
+
+        self.atr_trailing_step_input = QDoubleSpinBox()
+        self.atr_trailing_step_input.setRange(0.5, 200.0)
+        self.atr_trailing_step_input.setDecimals(1)
+        self.atr_trailing_step_input.setSingleStep(0.5)
+        self.atr_trailing_step_input.setValue(10.0)
+        self.atr_trailing_step_input.setSuffix(" pts")
+        self.atr_trailing_step_input.setStyleSheet(compact_spinbox_style)
+        _w(self.atr_trailing_step_input)
+        self.atr_trailing_step_input.setToolTip(
+            "Base trailing step for ATR reversal exits in points.\n"
+            "Effective step expands with ATR (current ATR / entry ATR),\n"
+            "so fast breakouts widen the trail automatically."
+        )
+        self.atr_trailing_step_input.valueChanged.connect(self._on_breakout_settings_changed)
+        brk_frm.addRow("ATR Trail Base", self.atr_trailing_step_input)
         c2.addWidget(brk_grp)
 
         # ── Signal Governance ─────────────────────────────────────────────
