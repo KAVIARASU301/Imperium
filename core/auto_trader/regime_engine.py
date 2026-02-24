@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, field
+from datetime import datetime
 from datetime import time as dtime
 from typing import Optional
 
@@ -281,7 +282,16 @@ class RegimeEngine:
         if bar_time is None:
             return "MORNING"
         c = self.config
-        t = bar_time if isinstance(bar_time, dtime) else bar_time
+        if isinstance(bar_time, dtime):
+            t = bar_time
+        elif isinstance(bar_time, datetime):
+            t = bar_time.time()
+        elif hasattr(bar_time, "time"):
+            # pandas.Timestamp and similar datetime-like objects
+            t = bar_time.time()
+        else:
+            return "MORNING"
+
         if t < c.open_drive_end:
             return "OPEN_DRIVE"
         if t < c.morning_end:
