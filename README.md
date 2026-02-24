@@ -70,6 +70,17 @@ Options_Badger/
 python main.py
 ```
 
+## Build a Portable Linux (Mint) Package
+
+If you want to run this app as a portable package (without requiring a Python setup on each machine), see:
+
+- [`docs/portable_linux_mint.md`](docs/portable_linux_mint.md)
+
+That guide covers both:
+
+- a **portable folder build** using PyInstaller (`--onedir`), and
+- an optional **AppImage** wrapper for single-file distribution.
+
 On startup, the login dialog allows you to:
 
 - Enter Kite API credentials.
