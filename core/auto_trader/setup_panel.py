@@ -390,12 +390,6 @@ class SetupPanelMixin:
         )
         self.open_drive_tick_drawdown_limit_input.valueChanged.connect(self._on_open_drive_settings_changed)
         od_frm.addRow("OD Tick DD", self.open_drive_tick_drawdown_limit_input)
-        c2.addStretch()
-
-        # ══════════════════════════════════════════════════════════════════
-        # COLUMN 3 — Chop Filter · Breakout Consolidation · CVD Breakout
-        # ══════════════════════════════════════════════════════════════════
-        c3 = _col()
 
         # ── Chop Filter ───────────────────────────────────────────────────
         chop_grp, chop_frm = _group("Chop Filter")
@@ -455,6 +449,8 @@ class SetupPanelMixin:
         cvd_chop_lay.addWidget(self.chop_filter_cvd_range_breakout_check)
         cvd_chop_lay.addStretch()
         chop_frm.addRow("CVD Bkt", cvd_chop_row)
+        c2.addWidget(chop_grp)
+        c2.addStretch()
 
         # ── Breakout Consolidation ────────────────────────────────────────
         consol_grp, consol_frm = _group("Breakout Consolidation")
@@ -548,12 +544,9 @@ class SetupPanelMixin:
         )
         self.cvd_breakout_min_adx_input.valueChanged.connect(self._on_chop_filter_settings_changed)
         cvdbk_frm.addRow("Min ADX", self.cvd_breakout_min_adx_input)
-        c3.addWidget(chop_grp)
-
-        c3.addStretch()
 
         # ══════════════════════════════════════════════════════════════════
-        # COLUMN 4 — Simulator · Chart Appearance
+        # COLUMN 3 — Simulator · Chart Appearance
         # ══════════════════════════════════════════════════════════════════
         c4 = _col()
 
@@ -754,98 +747,29 @@ class SetupPanelMixin:
         tabs = QTabWidget(self.setup_dialog)
         tabs.setDocumentMode(True)
 
-        strategy_tab_notes = {
-            "atr_reversal": {
-                "entry": "ATR reversal markers align with the active signal filter and ATR / Signal thresholds.",
-                "exit": "Automation stop-loss, max-giveback rules, and opposite/reversal logic close positions.",
-                "important": "Base strategy settings here are shared by ATR Divergence and EMA Cross.",
-            },
-            "atr_divergence": {
-                "entry": "Divergence-style setup confirms through ATR reversal logic using shared ATR / Signal thresholds.",
-                "exit": "Uses automation exits (stop-loss, giveback) plus opposite/reversal transitions.",
-                "important": "This tab inherits ATR / Signal controls from ATR Reversal.",
-            },
-            "ema_cross": {
-                "entry": "EMA cross direction aligns with ATR / Signal confirmation filters.",
-                "exit": "Automation risk controls and opposite-signal transitions handle exits.",
-                "important": "Shared ATR / Signal controls are configured in ATR Reversal.",
-            },
-            "cvd_range_breakout": {
-                "entry": "Consolidation completes and breakout confirms with CVD support from this tab's settings.",
-                "exit": "Automation exits apply, with breakout failure/reversal logic ending trades.",
-                "important": "Tune consolidation and CVD thresholds together to reduce false breakouts.",
-            },
-            "range_breakout": {
-                "entry": "Price breaks the configured lookback range with the selected breakout-vs-ATR behavior.",
-                "exit": "Automation rules manage risk; ATR switch/skip logic controls opposite signal handling.",
-                "important": "ATR Skip Limit and trailing step strongly affect when reversal signals are accepted.",
-            },
-            "open_drive": {
-                "entry": "Opening-session momentum and directional conditions satisfy Open Drive filters.",
-                "exit": "Automation stop-loss/giveback and open-drive invalidation conditions close trades.",
-                "important": "Best tuned around high-liquidity open; keep conservative values outside that window.",
-            },
-        }
-
         general_tab = QWidget()
         general_layout = QVBoxLayout(general_tab)
-        general_layout.setContentsMargins(0, 0, 0, 0)
+        general_layout.setContentsMargins(0, 12, 0, 0)
         general_layout.setSpacing(0)
 
         cols_row = QHBoxLayout()
         cols_row.setSpacing(_COL_SPACING)
-        for col in (c1, c2, c3, c4):
+        for col in (c1, c2, c4):
             cols_row.addLayout(col, 1)
         general_layout.addLayout(cols_row, 1)
 
         priority_tab = QWidget()
         priority_layout_root = QHBoxLayout(priority_tab)
-        priority_layout_root.setContentsMargins(6, 6, 6, 6)
+        priority_layout_root.setContentsMargins(6, 12, 6, 6)
         priority_layout_root.setSpacing(_COL_SPACING)
         priority_layout_root.addLayout(cpr_col, 1)
         priority_layout_root.addWidget(priority_panel, 3)
 
-        def _strategy_info_box(info: dict[str, str]):
-            box = QGroupBox("Strategy Guide")
-            box_lay = QVBoxLayout(box)
-            box_lay.setContentsMargins(8, 8, 8, 8)
-            box_lay.setSpacing(6)
-
-            sections = (
-                ("Entry", info.get("entry", ""), "#1D334A", "#A5D6FF"),
-                ("Exit", info.get("exit", ""), "#3B2A42", "#E3C3FF"),
-                ("Important", info.get("important", ""), "#3A3723", "#F1E4A8"),
-            )
-            for title, text, bg, border in sections:
-                if not text:
-                    continue
-                lbl = QLabel(f"<b>{title}</b><br>{text}")
-                lbl.setWordWrap(True)
-                lbl.setTextFormat(Qt.RichText)
-                lbl.setStyleSheet(
-                    f"""
-                    QLabel {{
-                        background: {bg};
-                        border: 1px solid {border};
-                        border-radius: 6px;
-                        color: #E8EDF3;
-                        font-size: 11px;
-                        font-weight: 500;
-                        padding: 8px;
-                        line-height: 1.25em;
-                    }}
-                    """
-                )
-                box_lay.addWidget(lbl)
-            return box
-
-        def _strategy_tab(*widgets: QWidget, info: dict[str, str] | None = None):
+        def _strategy_tab(*widgets: QWidget):
             tab = QWidget()
             lay = QVBoxLayout(tab)
-            lay.setContentsMargins(6, 6, 6, 6)
+            lay.setContentsMargins(6, 12, 6, 6)
             lay.setSpacing(_GRP_SPACING)
-            if info:
-                lay.addWidget(_strategy_info_box(info))
             for widget in widgets:
                 lay.addWidget(widget)
             lay.addStretch()
@@ -853,27 +777,27 @@ class SetupPanelMixin:
 
         tabs.addTab(general_tab, "General")
         tabs.addTab(
-            _strategy_tab(sig_grp, info=strategy_tab_notes["atr_reversal"]),
+            _strategy_tab(sig_grp),
             self.STRATEGY_PRIORITY_LABELS["atr_reversal"],
         )
         tabs.addTab(
-            _strategy_tab(info=strategy_tab_notes["atr_divergence"]),
+            _strategy_tab(),
             self.STRATEGY_PRIORITY_LABELS["atr_divergence"],
         )
         tabs.addTab(
-            _strategy_tab(info=strategy_tab_notes["ema_cross"]),
+            _strategy_tab(),
             self.STRATEGY_PRIORITY_LABELS["ema_cross"],
         )
         tabs.addTab(
-            _strategy_tab(cvdbk_grp, consol_grp, info=strategy_tab_notes["cvd_range_breakout"]),
+            _strategy_tab(cvdbk_grp, consol_grp),
             self.STRATEGY_PRIORITY_LABELS["cvd_range_breakout"],
         )
         tabs.addTab(
-            _strategy_tab(brk_grp, info=strategy_tab_notes["range_breakout"]),
+            _strategy_tab(brk_grp),
             self.STRATEGY_PRIORITY_LABELS["range_breakout"],
         )
         tabs.addTab(
-            _strategy_tab(od_grp, info=strategy_tab_notes["open_drive"]),
+            _strategy_tab(od_grp),
             self.STRATEGY_PRIORITY_LABELS["open_drive"],
         )
         self._build_regime_tab(tabs, compact_spinbox_style, compact_combo_style)
