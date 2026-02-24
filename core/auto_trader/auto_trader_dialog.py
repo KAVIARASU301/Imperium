@@ -1539,8 +1539,9 @@ class AutoTraderDialog(RegimeTabMixin, SetupPanelMixin, SetupSettingsMigrationMi
             "regime_afternoon_end", "regime_pre_close_end",
         ]
         _regime_matrix_keys = [
-            f"regime_matrix_{trend}_{strategy}"
+            f"regime_matrix_{trend}_{vol}_{strategy}"
             for trend in ("STRONG_TREND", "WEAK_TREND", "CHOP")
+            for vol in ("HIGH_VOL", "NORMAL_VOL", "LOW_VOL")
             for strategy in ("atr_reversal", "atr_divergence", "ema_cross", "range_breakout")
         ]
         regime_dict = {}

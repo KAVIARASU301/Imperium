@@ -621,6 +621,15 @@ class RegimeTabMixin:
         """Restore regime UI from a flat dict (loaded from QSettings)."""
         from PySide6.QtCore import QTime
 
+        def _as_bool(value, default=None):
+            if value is None:
+                return default
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, str):
+                return value.strip().lower() in {"1", "true", "yes", "on"}
+            return bool(value)
+
         def _qtime(s, default_h, default_m):
             try:
                 parts = str(s).split(":")
@@ -628,7 +637,7 @@ class RegimeTabMixin:
             except Exception:
                 return QTime(default_h, default_m)
 
-        self.regime_enabled_check.setChecked(bool(d.get("regime_enabled", True)))
+        self.regime_enabled_check.setChecked(_as_bool(d.get("regime_enabled", True), True))
         self.regime_adx_strong_input.setValue(float(d.get("regime_adx_strong", 28.0)))
         self.regime_adx_weak_input.setValue(float(d.get("regime_adx_weak", 20.0)))
         self.regime_adx_confirm_input.setValue(int(d.get("regime_adx_confirm", 3)))
@@ -649,5 +658,5 @@ class RegimeTabMixin:
             value = d.get(key, d.get(legacy_key, None))
             if value is not None:
                 cb.blockSignals(True)
-                cb.setChecked(bool(value))
+                cb.setChecked(_as_bool(value, cb.isChecked()))
                 cb.blockSignals(False)
