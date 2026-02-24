@@ -231,9 +231,9 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
                 font-weight: 600;
                 font-size: 11px;
                 border: 1px solid #3A4458;
-                border-radius: 4px;
+                border-radius: 0px;
                 padding: 2px 4px;
-                min-height: 22px;
+                min-height: 20px;
             }
             QSpinBox:hover, QDoubleSpinBox:hover {
                 border: 1px solid #5B9BD5;
@@ -265,10 +265,10 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
                 color: #E0E0E0;
                 font-weight: 600;
                 font-size: 11px;
-                padding: 2px 8px;
+                padding: 1px 6px;
                 border: 1px solid #3A4458;
-                border-radius: 4px;
-                min-height: 22px;
+                border-radius: 0px;
+                min-height: 20px;
             }
             QComboBox:hover {
                 border: 1px solid #5B9BD5;
@@ -290,6 +290,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
                 selection-background-color: #5B9BD5;
                 selection-color: #000;
                 border: 1px solid #3A4458;
+                border-radius: 0px;
             }
         """
 
@@ -306,7 +307,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         top_bar.addWidget(tf_label)
 
         self.timeframe_combo = QComboBox()
-        self.timeframe_combo.setFixedHeight(26)
+        self.timeframe_combo.setFixedHeight(24)
         self.timeframe_combo.setFixedWidth(84)
         self.timeframe_combo.setStyleSheet(compact_combo_style)
 
@@ -332,14 +333,14 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self.btn_focus = QPushButton("1D")
         self.btn_focus.setCheckable(True)
         self.btn_focus.setChecked(False)
-        self.btn_focus.setFixedHeight(28)
+        self.btn_focus.setFixedHeight(24)
         self.btn_focus.setMinimumWidth(56)
         self.btn_focus.setStyleSheet("""
             QPushButton {
                 background:#212635;
                 border:1px solid #3A4458;
-                border-radius:4px;
-                padding:4px 10px;
+                border-radius:0px;
+                padding:2px 8px;
             }
             QPushButton:checked {
                 background:#26A69A;
@@ -364,15 +365,15 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self.automate_toggle.toggled.connect(self._on_automation_settings_changed)
 
         self.simulator_run_btn = QPushButton("Run Simulator")
-        self.simulator_run_btn.setFixedHeight(28)
+        self.simulator_run_btn.setFixedHeight(24)
         self.simulator_run_btn.setMinimumWidth(120)
         self.simulator_run_btn.setToolTip("Run simulator (Space)")
         self.simulator_run_btn.setStyleSheet("""
             QPushButton {
                 background:#212635;
                 border:1px solid #3A4458;
-                border-radius:4px;
-                padding:4px 10px;
+                border-radius:0px;
+                padding:2px 8px;
                 color:#9CCAF4;
                 font-weight:600;
             }
@@ -434,15 +435,15 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         top_bar.addWidget(self.simulator_run_btn)
 
         self.setup_btn = QPushButton("Setup")
-        self.setup_btn.setFixedHeight(28)
+        self.setup_btn.setFixedHeight(24)
         self.setup_btn.setMinimumWidth(88)
         self.setup_btn.setToolTip("Open automation and signal settings")
         self.setup_btn.setStyleSheet("""
             QPushButton {
                 background:#212635;
                 border:1px solid #3A4458;
-                border-radius:4px;
-                padding:4px 10px;
+                border-radius:0px;
+                padding:2px 8px;
                 color: #9CCAF4;
                 font-weight: 600;
             }
@@ -458,13 +459,13 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
 
         # Export button (compact)
         self.btn_export = QPushButton("📸")
-        self.btn_export.setFixedSize(28, 28)
+        self.btn_export.setFixedSize(24, 24)
         self.btn_export.setToolTip("Export current view as image")
         self.btn_export.setStyleSheet("""
             QPushButton {
                 background: #212635;
                 border: 1px solid #3A4458;
-                border-radius: 4px;
+                border-radius: 0px;
                 font-size: 14px;
             }
             QPushButton:hover {
@@ -478,13 +479,13 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self.btn_export.clicked.connect(self._export_chart_image)
 
         self.btn_refresh_plot = QPushButton("⟳")
-        self.btn_refresh_plot.setFixedSize(28, 28)
+        self.btn_refresh_plot.setFixedSize(24, 24)
         self.btn_refresh_plot.setToolTip("Refresh chart plot")
         self.btn_refresh_plot.setStyleSheet("""
             QPushButton {
                 background: #212635;
                 border: 1px solid #3A4458;
-                border-radius: 4px;
+                border-radius: 0px;
                 font-size: 14px;
             }
             QPushButton:hover {
@@ -1743,12 +1744,12 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         combo.clear()
         combo.setStyleSheet(combo.styleSheet() + """
             QComboBox {
-                min-height: 28px;
-                padding: 2px 10px;
+                min-height: 22px;
+                padding: 1px 8px;
             }
             QComboBox QAbstractItemView::item {
-                min-height: 30px;
-                padding: 6px 10px;
+                min-height: 22px;
+                padding: 3px 8px;
             }
         """)
 

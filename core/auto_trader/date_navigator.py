@@ -16,10 +16,31 @@ class DateNavigator(QWidget):
     def _setup_ui(self):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
+        layout.setSpacing(8)
 
         self.btn_back = QPushButton("◀")
-        self.btn_back.setFixedSize(40, 32)
+        nav_btn_style = """
+            QPushButton {
+                background: #212635;
+                color: #E0E0E0;
+                border: 1px solid #3A4458;
+                border-radius: 0px;
+                padding: 0;
+            }
+            QPushButton:hover {
+                border: 1px solid #5B9BD5;
+                background: #2A3142;
+            }
+            QPushButton:pressed {
+                background: #1B1F2B;
+            }
+            QPushButton:disabled {
+                color: #6A7284;
+                border: 1px solid #2A3142;
+            }
+        """
+        self.btn_back.setStyleSheet(nav_btn_style)
+        self.btn_back.setFixedSize(32, 24)
         self.btn_back.clicked.connect(self._go_backward)
 
         self.lbl_dates = QLabel()
@@ -36,7 +57,8 @@ class DateNavigator(QWidget):
         )
 
         self.btn_forward = QPushButton("▶")
-        self.btn_forward.setFixedSize(40, 32)
+        self.btn_forward.setStyleSheet(nav_btn_style)
+        self.btn_forward.setFixedSize(32, 24)
         self.btn_forward.clicked.connect(self._go_forward)
 
         layout.addStretch()
