@@ -345,6 +345,20 @@ class SetupPanelMixin:
         )
         self.open_drive_max_profit_giveback_input.valueChanged.connect(self._on_open_drive_settings_changed)
         od_frm.addRow("OD Giveback", self.open_drive_max_profit_giveback_input)
+
+        self.open_drive_tick_drawdown_limit_input = QSpinBox()
+        self.open_drive_tick_drawdown_limit_input.setRange(0, 5000)
+        self.open_drive_tick_drawdown_limit_input.setValue(100)
+        self.open_drive_tick_drawdown_limit_input.setSingleStep(5)
+        self.open_drive_tick_drawdown_limit_input.setSpecialValueText("Off")
+        self.open_drive_tick_drawdown_limit_input.setStyleSheet(compact_spinbox_style)
+        _w(self.open_drive_tick_drawdown_limit_input)
+        self.open_drive_tick_drawdown_limit_input.setToolTip(
+            "Open Drive-only live tick drawdown limit (pts).\n"
+            "Exits immediately when adverse move from entry reaches this value. 0 = Off."
+        )
+        self.open_drive_tick_drawdown_limit_input.valueChanged.connect(self._on_open_drive_settings_changed)
+        od_frm.addRow("OD Tick DD", self.open_drive_tick_drawdown_limit_input)
         c2.addWidget(od_grp)
 
         c2.addStretch()

@@ -208,6 +208,7 @@ class MarketDataOrchestrator:
     def on_market_data(self, data: list):
         w = self.main_window
         w.cvd_engine.process_ticks(data)
+        w.cvd_automation_coordinator.handle_tick_data(data)
         for tick in data:
             if 'instrument_token' in tick:
                 w._latest_market_data[tick['instrument_token']] = tick

@@ -100,7 +100,7 @@ class APICircuitBreaker:
         self.half_open_successes = 0
         self.consecutive_failures = 0  # Track consecutive failures for backoff
 
-        self.state = CircuitState.CLOSED
+        self._state = CircuitState.CLOSED
         self.last_failure_time: Optional[datetime] = None
         self.last_state_change: Optional[datetime] = None
 
@@ -120,10 +120,10 @@ class APICircuitBreaker:
         """
         self.metrics.total_calls += 1
 
-        if self.state == CircuitState.CLOSED:
+        if self._state == CircuitState.CLOSED:
             return True
 
-        elif self.state == CircuitState.OPEN:
+        elif self._state == CircuitState.OPEN:
             if self._should_attempt_reset():
                 self._transition_to_half_open()
                 return True
@@ -131,7 +131,7 @@ class APICircuitBreaker:
                 self.metrics.rejected_calls += 1
                 return False
 
-        elif self.state == CircuitState.HALF_OPEN:
+        elif self._state == CircuitState.HALF_OPEN:
             if self.half_open_attempts < self.half_open_max_calls:
                 self.half_open_attempts += 1
                 return True
@@ -147,7 +147,7 @@ class APICircuitBreaker:
         self.metrics.last_success_time = datetime.now()
         self.consecutive_failures = 0  # Reset consecutive failures
 
-        if self.state == CircuitState.HALF_OPEN:
+        if self._state == CircuitState.HALF_OPEN:
             self.half_open_successes += 1
             logger.info(
                 f"Circuit HALF_OPEN success {self.half_open_successes}/{self.success_threshold}"
@@ -156,7 +156,7 @@ class APICircuitBreaker:
             if self.half_open_successes >= self.success_threshold:
                 self._transition_to_closed()
 
-        elif self.state == CircuitState.CLOSED:
+        elif self._state == CircuitState.CLOSED:
             # Reset failure count on success in closed state
             if self.failure_count > 0:
                 logger.info(f"Circuit recovered, resetting failure count from {self.failure_count}")
@@ -170,20 +170,20 @@ class APICircuitBreaker:
         self.last_failure_time = datetime.now()
         self.metrics.last_failure_time = self.last_failure_time
 
-        if self.state == CircuitState.HALF_OPEN:
+        if self._state == CircuitState.HALF_OPEN:
             # Failure in HALF_OPEN immediately opens circuit
             logger.warning(
                 f"Circuit HALF_OPEN test failed after {self.half_open_attempts} attempts"
             )
             self._transition_to_open()
 
-        elif self.state == CircuitState.CLOSED:
+        elif self._state == CircuitState.CLOSED:
             if self.failure_count >= self.failure_threshold:
                 self._transition_to_open()
 
     def _transition_to_open(self):
         """Transition to OPEN state with exponential backoff"""
-        self.state = CircuitState.OPEN
+        self._state = CircuitState.OPEN
         self.last_state_change = datetime.now()
 
         # Exponential backoff: double timeout each time, up to max
@@ -209,7 +209,7 @@ class APICircuitBreaker:
 
     def _transition_to_half_open(self):
         """Transition to HALF_OPEN state"""
-        self.state = CircuitState.HALF_OPEN
+        self._state = CircuitState.HALF_OPEN
         self.last_state_change = datetime.now()
         self.half_open_attempts = 0
         self.half_open_successes = 0
@@ -226,7 +226,7 @@ class APICircuitBreaker:
 
     def _transition_to_closed(self):
         """Transition to CLOSED state"""
-        self.state = CircuitState.CLOSED
+        self._state = CircuitState.CLOSED
         self.last_state_change = datetime.now()
         self.failure_count = 0
         self.half_open_attempts = 0
@@ -254,12 +254,12 @@ class APICircuitBreaker:
 
     def get_state(self) -> str:
         """Get current circuit state"""
-        return self.state.value
+        return self._state.value
 
     def get_metrics(self) -> dict:
         """Get circuit metrics"""
         return {
-            "state": self.state.value,
+            "state": self._state.value,
             "total_calls": self.metrics.total_calls,
             "successful_calls": self.metrics.successful_calls,
             "failed_calls": self.metrics.failed_calls,
@@ -274,6 +274,11 @@ class APICircuitBreaker:
         """Manually reset circuit breaker"""
         logger.info("Circuit breaker manually reset")
         self._transition_to_closed()
+
+    @property
+    def state(self) -> str:
+        """Compatibility state accessor (legacy code expects uppercase strings)."""
+        return self._state.name
 
 
 def circuit_breaker_wrapper(

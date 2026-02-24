@@ -1040,6 +1040,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self.open_drive_time_minute_input.blockSignals(True)
         self.open_drive_stack_enabled_check.blockSignals(True)
         self.open_drive_max_profit_giveback_input.blockSignals(True)
+        self.open_drive_tick_drawdown_limit_input.blockSignals(True)
         self.breakout_min_consol_input.blockSignals(True)
         self.breakout_min_consol_adx_input.blockSignals(True)
         self.cvd_range_lookback_input.blockSignals(True)
@@ -1163,6 +1164,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self.open_drive_time_minute_input.setValue(_read_setting("open_drive_entry_minute", 17, int))
         self.open_drive_stack_enabled_check.setChecked(_read_setting("open_drive_stack_enabled", True, bool))
         self.open_drive_max_profit_giveback_input.setValue(_read_setting("open_drive_max_profit_giveback_points", 0, int))
+        self.open_drive_tick_drawdown_limit_input.setValue(_read_setting("open_drive_tick_drawdown_limit_points", 100, int))
         # 🆕 Load chop filter settings
         self.chop_filter_atr_reversal_check.setChecked(_read_setting("chop_filter_atr_reversal", True, bool))
         self.chop_filter_ema_cross_check.setChecked(_read_setting("chop_filter_ema_cross", True, bool))
@@ -1292,6 +1294,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self.open_drive_time_minute_input.blockSignals(False)
         self.open_drive_stack_enabled_check.blockSignals(False)
         self.open_drive_max_profit_giveback_input.blockSignals(False)
+        self.open_drive_tick_drawdown_limit_input.blockSignals(False)
         self.breakout_min_consol_input.blockSignals(False)
         self.breakout_min_consol_adx_input.blockSignals(False)
         self.cvd_range_lookback_input.blockSignals(False)
@@ -1362,6 +1365,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
             "open_drive_entry_minute": int(self.open_drive_time_minute_input.value()),
             "open_drive_stack_enabled": self.open_drive_stack_enabled_check.isChecked(),
             "open_drive_max_profit_giveback_points": int(self.open_drive_max_profit_giveback_input.value()),
+            "open_drive_tick_drawdown_limit_points": int(self.open_drive_tick_drawdown_limit_input.value()),
             # 🆕 Chop filter per-strategy
             "chop_filter_atr_reversal": self.chop_filter_atr_reversal_check.isChecked(),
             "chop_filter_ema_cross": self.chop_filter_ema_cross_check.isChecked(),
@@ -1434,6 +1438,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
             "max_profit_giveback_points": float(self.max_profit_giveback_input.value()),
             "max_profit_giveback_strategies": self._selected_max_giveback_strategies(),
             "open_drive_max_profit_giveback_points": float(self.open_drive_max_profit_giveback_input.value()),
+            "open_drive_tick_drawdown_limit_points": float(self.open_drive_tick_drawdown_limit_input.value()),
             "route": self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL,
             "signal_filter": self._selected_signal_filter(),
             "signal_filters": self._selected_signal_filters(),

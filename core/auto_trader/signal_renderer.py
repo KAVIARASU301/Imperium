@@ -231,6 +231,7 @@ class SignalRendererMixin:
             "max_profit_giveback_points": float(self.max_profit_giveback_input.value()),
             "max_profit_giveback_strategies": self._selected_max_giveback_strategies(),
             "open_drive_max_profit_giveback_points": float(self.open_drive_max_profit_giveback_input.value()),
+            "open_drive_tick_drawdown_limit_points": float(self.open_drive_tick_drawdown_limit_input.value()),
             "route": self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL,
             "signal_filter": self._selected_signal_filter(),
             "priority_list": active_priority_list,
@@ -603,6 +604,7 @@ class SignalRendererMixin:
             "signal_x": float(x_arr[closed_idx]),
             "price_close": float(self.all_price_data[closed_idx]),
             "stoploss_points": float(self.automation_stoploss_input.value()),
+            "open_drive_tick_drawdown_limit_points": float(self.open_drive_tick_drawdown_limit_input.value()),
             "route": self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL,
             "timestamp": closed_bar_ts,
         }

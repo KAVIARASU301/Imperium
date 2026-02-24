@@ -175,6 +175,7 @@ class CvdAutomationCoordinator:
         stoploss_points = float(payload.get("stoploss_points") or state.get("stoploss_points") or 50.0)
         max_profit_giveback_points = float(payload.get("max_profit_giveback_points") or state.get("max_profit_giveback_points") or 0.0)
         open_drive_max_profit_giveback_points = float(payload.get("open_drive_max_profit_giveback_points") or state.get("open_drive_max_profit_giveback_points") or 0.0)
+        open_drive_tick_drawdown_limit_points = float(payload.get("open_drive_tick_drawdown_limit_points") or state.get("open_drive_tick_drawdown_limit_points") or 100.0)
         max_profit_giveback_strategies = payload.get("max_profit_giveback_strategies") or state.get("max_profit_giveback_strategies") or ["atr_reversal", "ema_cross", "atr_divergence", "cvd_range_breakout", "range_breakout", "open_drive"]
         if not isinstance(max_profit_giveback_strategies, (list, tuple, set)):
             max_profit_giveback_strategies = ["atr_reversal", "ema_cross", "atr_divergence", "cvd_range_breakout", "range_breakout", "open_drive"]
@@ -254,6 +255,7 @@ class CvdAutomationCoordinator:
             "stoploss_points": stoploss_points,
             "max_profit_giveback_points": max_profit_giveback_points,
             "open_drive_max_profit_giveback_points": open_drive_max_profit_giveback_points,
+            "open_drive_tick_drawdown_limit_points": open_drive_tick_drawdown_limit_points,
             "max_profit_giveback_strategies": list(max_profit_giveback_strategies),
             "atr_trailing_step_points": 10.0,
             "entry_underlying": entry_underlying,
@@ -329,6 +331,57 @@ class CvdAutomationCoordinator:
 
         entry_signal_ts = payload.get("timestamp")
         QTimer.singleShot(2000, lambda t=token, s=tracked_tradingsymbol, ts=entry_signal_ts: self.reconcile_failed_entry(t, s, ts))
+
+    def handle_tick_data(self, ticks: list[dict]):
+        w = self.main_window
+        if not ticks or not self.positions:
+            return
+
+        latest_ticks: dict[int, dict] = {}
+        for tick in ticks:
+            token = tick.get("instrument_token")
+            if token is not None:
+                latest_ticks[token] = tick
+
+        if not latest_ticks:
+            return
+
+        for token, active_trade in list(self.positions.items()):
+            if active_trade.get("strategy_type") != "open_drive":
+                continue
+
+            limit_points = float(active_trade.get("open_drive_tick_drawdown_limit_points") or 0.0)
+            if limit_points <= 0:
+                continue
+
+            tick = latest_ticks.get(token)
+            if not tick:
+                continue
+
+            try:
+                last_price = float(tick.get("last_price") or 0.0)
+                entry_underlying = float(active_trade.get("entry_underlying") or 0.0)
+            except (TypeError, ValueError):
+                continue
+
+            if last_price <= 0 or entry_underlying <= 0:
+                continue
+
+            signal_side = active_trade.get("signal_side")
+            adverse_move = (entry_underlying - last_price) if signal_side == "long" else (last_price - entry_underlying)
+            if adverse_move < limit_points:
+                continue
+
+            tradingsymbols = [s for s in (active_trade.get("tradingsymbols") or [active_trade.get("tradingsymbol")]) if s]
+            for symbol in tradingsymbols:
+                position = w.position_manager.get_position(symbol)
+                if position:
+                    self.exit_position_automated(position, reason="AUTO_OPEN_DRIVE_TICK_DRAWDOWN")
+
+            if self.positions.pop(token, None) is not None:
+                self._stacker_states.pop(token, None)
+                self._notify_dialog_stacker_reset(token)
+                self.persist_state()
 
     def handle_market_state(self, payload: dict):
         w = self.main_window

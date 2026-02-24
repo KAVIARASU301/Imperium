@@ -37,7 +37,7 @@ from dialogs.cvd_symbol_set_multi_chart_dialog import CVDSetMultiChartDialog
 from core.execution.trade_ledger import TradeLedger
 from widgets.title_bar import TitleBar
 from core.ui.main_window_shell import MainWindowShell
-from utils.api_circuit_breaker import APICircuitBreaker
+from core.market_data import APICircuitBreaker
 from utils.about import show_about
 from utils.expiry_days import show_expiry_days
 from utils.shortcuts import show_shortcuts, setup_keyboard_shortcuts
