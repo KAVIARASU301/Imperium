@@ -47,6 +47,22 @@ class CVDEngine(QObject):
             self._states[token] = CVDState(instrument_token=token)
             logger.info(f"[CVD] Registered token {token}")
 
+    def seed_from_historical(
+        self,
+        token: int,
+        cvd_value: float,
+        last_price: float,
+        cumulative_volume: int,
+        session_day: date,
+    ):
+        """Seed state from historical minute candles so live ticks continue seamlessly."""
+        self.register_token(token)
+        state = self._states[token]
+        state.cvd = float(cvd_value)
+        state.last_price = float(last_price)
+        state.last_volume = int(max(cumulative_volume, 0))
+        state.session_date = session_day
+
     def process_ticks(self, ticks: Iterable[dict]):
         """Process multiple ticks."""
         for tick in ticks:

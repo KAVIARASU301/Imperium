@@ -139,8 +139,9 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self._live_price_points: deque[tuple[datetime, float]] = deque(maxlen=self.LIVE_TICK_MAX_POINTS)
         self._current_session_start_ts: datetime | None = None
         self._current_session_x_base: float = 0.0
-        self._live_cvd_offset: float | None = None
         self._current_session_last_cvd_value: float | None = None
+        self._current_session_last_price_value: float | None = None
+        self._current_session_cumulative_volume: int = 0
         self._current_session_volume_scale: float = 1.0
         self._is_loading = False
         self._last_live_refresh_minute: datetime | None = None
@@ -1563,8 +1564,9 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
 
         self._live_tick_points.clear()
         self._live_price_points.clear()
-        self._live_cvd_offset = None
         self._current_session_last_cvd_value = None
+        self._current_session_last_price_value = None
+        self._current_session_cumulative_volume = 0
         self._current_session_volume_scale = 1.0
         self.all_timestamps.clear()
         self._load_and_plot(force=True)
@@ -1606,8 +1608,9 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self.all_timestamps.clear()
         self._live_tick_points.clear()
         self._live_price_points.clear()
-        self._live_cvd_offset = None
         self._current_session_last_cvd_value = None
+        self._current_session_last_price_value = None
+        self._current_session_cumulative_volume = 0
         self._current_session_volume_scale = 1.0
         self._last_plot_x_indices = []
         self._load_and_plot(force=True)
@@ -1972,12 +1975,26 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self._latest_previous_day_cpr = previous_day_cpr
         self._log_active_priority_list_if_needed()
         self._plot_data(cvd_df, price_df, prev_close)
+        self._seed_live_cvd_from_historical()
 
         self._historical_loaded_once = True
         if self.live_mode:
             self._last_live_refresh_minute = datetime.now().replace(second=0, microsecond=0)
             # 🔥 Remove live ticks that are now covered by historical data
             self._cleanup_overlapping_ticks()
+
+    def _seed_live_cvd_from_historical(self):
+        if not self.live_mode or not self.cvd_engine:
+            return
+        if self._current_session_last_cvd_value is None or self._current_session_last_price_value is None:
+            return
+        self.cvd_engine.seed_from_historical(
+            token=self.instrument_token,
+            cvd_value=float(self._current_session_last_cvd_value),
+            last_price=float(self._current_session_last_price_value),
+            cumulative_volume=int(self._current_session_cumulative_volume),
+            session_day=datetime.now().date(),
+        )
 
     def _on_fetch_error(self, msg: str):
         """Called on the GUI thread when background fetch fails."""
@@ -2042,7 +2059,6 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
 
         # 🔥 Reset offset so next tick aligns with updated historical data
         # This ensures smooth continuation after historical refresh
-        self._live_cvd_offset = None
 
     # =========================================================================
     # SECTION 7: CHART RENDERING & PLOTTING
@@ -2089,8 +2105,9 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         x_offset = 0
         sessions = sorted(cvd_df["session"].unique())
         self._current_session_last_cvd_value = None
+        self._current_session_last_price_value = None
+        self._current_session_cumulative_volume = 0
         self._current_session_volume_scale = 1.0
-        self._live_cvd_offset = None
 
         for i, sess in enumerate(sessions):
             df_cvd_sess = cvd_df[cvd_df["session"] == sess]
@@ -2144,6 +2161,8 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
                 self._current_session_start_ts = df_cvd_sess.index[0]
                 self._current_session_x_base = float(xs[0]) if xs else 0.0
                 self._current_session_last_cvd_value = float(cvd_y[-1]) if len(cvd_y) else None
+                self._current_session_last_price_value = float(price_y[-1]) if len(price_y) else None
+                self._current_session_cumulative_volume = int(cumulative_volume[-1]) if len(cumulative_volume) else 0
                 self._current_session_volume_scale = float(cumulative_volume[-1]) if len(cumulative_volume) else 1.0
 
             self.all_timestamps.extend(df_cvd_sess.index.tolist())
@@ -2633,14 +2652,7 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         if cvd_mode == self.CVD_VALUE_MODE_NORMALIZED:
             transformed_cvd = transformed_cvd / max(float(self._current_session_volume_scale), 1.0)
 
-        # Align live tick CVD level with historical curve to avoid visual jump.
-        if self._live_cvd_offset is None:
-            if self._current_session_last_cvd_value is not None:
-                self._live_cvd_offset = float(self._current_session_last_cvd_value) - transformed_cvd
-            else:
-                self._live_cvd_offset = 0.0
-
-        plotted_cvd = transformed_cvd + float(self._live_cvd_offset)
+        plotted_cvd = transformed_cvd
         current_price = float(last_price)
 
         # 🔥 SMART TICK FILTERING - Only append if price/CVD changed meaningfully
