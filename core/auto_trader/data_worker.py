@@ -1,11 +1,15 @@
 import time
+import logging
 
 import numpy as np
 import pandas as pd
 from PySide6.QtCore import QObject, Signal
 
 from core.cvd.cvd_historical import CVDHistoricalBuilder
+from core.account.token_manager import TokenManager
 from utils.cpr_calculator import CPRCalculator
+
+logger = logging.getLogger(__name__)
 
 
 def load_tick_csv(csv_path: str) -> pd.DataFrame:
@@ -103,6 +107,7 @@ class _DataFetchWorker(QObject):
         self.timeframe_minutes = timeframe_minutes
         self.focus_mode = focus_mode
         self._cancelled = False
+        self._auth_refresh_attempted = False
 
     def cancel(self):
         self._cancelled = True
@@ -121,13 +126,42 @@ class _DataFetchWorker(QObject):
                     to_dt,
                     interval="minute",
                 )
-            except Exception:
+            except Exception as exc:
+                if self._is_auth_error(exc) and self._refresh_access_token_if_possible():
+                    continue
                 if attempt == max_attempts - 1:
                     raise
                 delay_seconds = base_delay_seconds * (2 ** attempt)
                 time.sleep(delay_seconds)
 
         return []
+
+    @staticmethod
+    def _is_auth_error(exc: Exception) -> bool:
+        msg = str(exc)
+        return "Incorrect `api_key` or `access_token`." in msg or "TokenException" in msg
+
+    def _refresh_access_token_if_possible(self) -> bool:
+        if self._auth_refresh_attempted:
+            return False
+
+        self._auth_refresh_attempted = True
+        try:
+            token_data = TokenManager().load_token_data() or {}
+            fresh_token = token_data.get("access_token")
+            if not fresh_token:
+                return False
+
+            current_token = getattr(self.kite, "access_token", None)
+            if fresh_token == current_token:
+                return False
+
+            self.kite.set_access_token(fresh_token)
+            logger.info("[AUTO] Refreshed access token for CVD historical fetch; retrying.")
+            return True
+        except Exception as exc:
+            logger.warning("[AUTO] Failed to refresh access token for CVD historical fetch: %s", exc)
+            return False
 
     def _load_minute_history(self):
         required_sessions = 2
@@ -220,6 +254,9 @@ class _DataFetchWorker(QObject):
             self.result_ready.emit(cvd_out, price_out, prev_close, previous_day_cpr)
 
         except Exception as exc:
-            self.error.emit(str(exc))
+            if self._is_auth_error(exc):
+                self.error.emit("auth_failed")
+            else:
+                self.error.emit(str(exc))
         finally:
             self.finished.emit()

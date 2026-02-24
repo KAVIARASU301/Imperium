@@ -160,6 +160,7 @@ class AutoTraderDialog(RegimeTabMixin, SetupPanelMixin, SetupSettingsMigrationMi
         self._last_live_refresh_minute: datetime | None = None
         self._uploaded_tick_data: pd.DataFrame | None = None
         self._uploaded_tick_source: str = ""
+        self._cvd_auth_error_logged = False
 
         # Plot caches (explicitly initialized so mixins never depend on dynamic attrs)
         self.all_timestamps: list[datetime] = []
@@ -2366,6 +2367,14 @@ class AutoTraderDialog(RegimeTabMixin, SetupPanelMixin, SetupSettingsMigrationMi
 
     def _on_fetch_error(self, msg: str):
         """Called on the GUI thread when background fetch fails."""
+        if msg == "auth_failed":
+            if not self._cvd_auth_error_logged:
+                logger.warning(
+                    "CVD historical fetch skipped: authentication for historical API failed. "
+                    "Live chart updates will continue from WebSocket ticks."
+                )
+                self._cvd_auth_error_logged = True
+            return
         if msg not in ("no_data", "empty_df", "no_sessions"):
             logger.error("Failed to load CVD data: %s", msg)
 
