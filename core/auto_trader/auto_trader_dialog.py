@@ -1138,6 +1138,7 @@ class AutoTraderDialog(RegimeTabMixin, SetupPanelMixin, SetupSettingsMigrationMi
         self.min_confidence_input.blockSignals(True)
         self.canary_ratio_input.blockSignals(True)
         self.hide_simulator_btn_check.blockSignals(True)
+        self.hide_tick_backtest_controls_check.blockSignals(True)
         self.chop_filter_atr_reversal_check.blockSignals(True)
         self.chop_filter_ema_cross_check.blockSignals(True)
         self.chop_filter_atr_divergence_check.blockSignals(True)
@@ -1278,6 +1279,9 @@ class AutoTraderDialog(RegimeTabMixin, SetupPanelMixin, SetupSettingsMigrationMi
         self.hide_simulator_btn_check.setChecked(
             _read_setting("hide_simulator_button", False, bool)
         )
+        self.hide_tick_backtest_controls_check.setChecked(
+            _read_setting("hide_tick_backtest_controls", False, bool)
+        )
         self.open_drive_enabled_check.setChecked(_read_setting("open_drive_enabled", False, bool))
         self.open_drive_time_hour_input.setValue(_read_setting("open_drive_entry_hour", 9, int))
         self.open_drive_time_minute_input.setValue(_read_setting("open_drive_entry_minute", 17, int))
@@ -1407,6 +1411,7 @@ class AutoTraderDialog(RegimeTabMixin, SetupPanelMixin, SetupSettingsMigrationMi
         self.min_confidence_input.blockSignals(False)
         self.canary_ratio_input.blockSignals(False)
         self.hide_simulator_btn_check.blockSignals(False)
+        self.hide_tick_backtest_controls_check.blockSignals(False)
         self.chop_filter_atr_reversal_check.blockSignals(False)
         self.chop_filter_ema_cross_check.blockSignals(False)
         self.chop_filter_atr_divergence_check.blockSignals(False)
@@ -1508,6 +1513,7 @@ class AutoTraderDialog(RegimeTabMixin, SetupPanelMixin, SetupSettingsMigrationMi
             "min_confidence_for_live": float(self.min_confidence_input.value()),
             "canary_live_ratio": float(self.canary_ratio_input.value()),
             "hide_simulator_button": self.hide_simulator_btn_check.isChecked(),
+            "hide_tick_backtest_controls": self.hide_tick_backtest_controls_check.isChecked(),
             "stacker_enabled": self.stacker_enabled_check.isChecked(),
             "stacker_step_points": int(self.stacker_step_input.value()),
             "stacker_max_stacks": int(self.stacker_max_input.value()),

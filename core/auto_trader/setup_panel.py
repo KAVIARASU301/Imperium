@@ -550,6 +550,13 @@ class SetupPanelMixin:
         self.hide_simulator_btn_check = QCheckBox("Hide 'Run Simulator' button")
         self.hide_simulator_btn_check.toggled.connect(self._on_setup_visual_settings_changed)
         sim_frm.addRow(self.hide_simulator_btn_check)
+        self.hide_tick_backtest_controls_check = QCheckBox("Hide tick backtest controls")
+        self.hide_tick_backtest_controls_check.setToolTip(
+            "Hide 'Upload Tick CSV' and 'Use Live' buttons from top bar.\n"
+            "Live data feed remains active by default."
+        )
+        self.hide_tick_backtest_controls_check.toggled.connect(self._on_setup_visual_settings_changed)
+        sim_frm.addRow(self.hide_tick_backtest_controls_check)
         c4.addWidget(sim_grp)
 
         # ── Chart Appearance ──────────────────────────────────────────────
@@ -992,6 +999,9 @@ class SetupPanelMixin:
         show_simulator_controls = not self.hide_simulator_btn_check.isChecked()
         self.simulator_run_btn.setVisible(show_simulator_controls)
         self.simulator_summary_label.setVisible(show_simulator_controls)
+        show_tick_backtest_controls = not self.hide_tick_backtest_controls_check.isChecked()
+        self.tick_upload_btn.setVisible(show_tick_backtest_controls)
+        self.tick_clear_btn.setVisible(show_tick_backtest_controls)
         self._apply_background_image()
         self._recolor_existing_confluence_lines()
 
