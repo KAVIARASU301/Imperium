@@ -203,8 +203,6 @@ class SetupPanelMixin:
         self.setup_atr_marker_filter_combo.setCurrentIndex(self.atr_marker_filter_combo.currentIndex())
         self.setup_atr_marker_filter_combo.currentIndexChanged.connect(self._on_setup_atr_marker_filter_changed)
         sig_frm.addRow("ATR Markers", self.setup_atr_marker_filter_combo)
-        c1.addWidget(sig_grp)
-
         c1.addStretch()
 
         # ══════════════════════════════════════════════════════════════════
@@ -274,8 +272,6 @@ class SetupPanelMixin:
         )
         self.atr_trailing_step_input.valueChanged.connect(self._on_breakout_settings_changed)
         brk_frm.addRow("ATR Trail Base", self.atr_trailing_step_input)
-        c2.addWidget(brk_grp)
-
         # ── Signal Governance ─────────────────────────────────────────────
         gov_grp, gov_frm = _group("Signal Governance")
 
@@ -379,8 +375,6 @@ class SetupPanelMixin:
         )
         self.open_drive_tick_drawdown_limit_input.valueChanged.connect(self._on_open_drive_settings_changed)
         od_frm.addRow("OD Tick DD", self.open_drive_tick_drawdown_limit_input)
-        c2.addWidget(od_grp)
-
         c2.addStretch()
 
         # ══════════════════════════════════════════════════════════════════
@@ -447,8 +441,6 @@ class SetupPanelMixin:
         cvd_chop_lay.addStretch()
         chop_frm.addRow("CVD Bkt", cvd_chop_row)
 
-        c3.addWidget(chop_grp)
-
         # ── Breakout Consolidation ────────────────────────────────────────
         consol_grp, consol_frm = _group("Breakout Consolidation")
         consol_frm.addRow(_note("Require a squeeze before breakout fires. 0 = off."))
@@ -479,8 +471,6 @@ class SetupPanelMixin:
         )
         self.breakout_min_consol_adx_input.valueChanged.connect(self._on_chop_filter_settings_changed)
         consol_frm.addRow("Max ADX", self.breakout_min_consol_adx_input)
-        c3.addWidget(consol_grp)
-
         # ── CVD Range Breakout ────────────────────────────────────────────
         cvdbk_grp, cvdbk_frm = _group("CVD Range Breakout")
         cvdbk_frm.addRow(_note("CVD breaks its own range first; price slope confirms."))
@@ -543,7 +533,7 @@ class SetupPanelMixin:
         )
         self.cvd_breakout_min_adx_input.valueChanged.connect(self._on_chop_filter_settings_changed)
         cvdbk_frm.addRow("Min ADX", self.cvd_breakout_min_adx_input)
-        c3.addWidget(cvdbk_grp)
+        c3.addWidget(chop_grp)
 
         c3.addStretch()
 
@@ -711,9 +701,9 @@ class SetupPanelMixin:
         # ══════════════════════════════════════════════════════════════════
         # CPR Strategy Priorities
         # ══════════════════════════════════════════════════════════════════
-        priority_tab = QWidget()
-        priority_layout = QVBoxLayout(priority_tab)
-        priority_layout.setContentsMargins(6, 6, 6, 6)
+        priority_panel = QWidget()
+        priority_layout = QVBoxLayout(priority_panel)
+        priority_layout.setContentsMargins(0, 0, 0, 0)
         priority_layout.setSpacing(6)
         priority_layout.addWidget(_note("Lower number = higher strategy priority (1 is highest). Auto trader uses Narrow/Neutral/Wide list based on CPR width, and Fallback when CPR is unavailable."))
 
@@ -753,16 +743,40 @@ class SetupPanelMixin:
             cols_row.addLayout(col, 1)
         general_layout.addLayout(cols_row, 1)
 
-        cpr_tab = QWidget()
-        cpr_layout = QHBoxLayout(cpr_tab)
-        cpr_layout.setContentsMargins(6, 6, 6, 6)
-        cpr_layout.setSpacing(_COL_SPACING)
-        cpr_layout.addLayout(cpr_col, 1)
+        priority_tab = QWidget()
+        priority_layout_root = QHBoxLayout(priority_tab)
+        priority_layout_root.setContentsMargins(6, 6, 6, 6)
+        priority_layout_root.setSpacing(_COL_SPACING)
+        priority_layout_root.addLayout(cpr_col, 1)
+        priority_layout_root.addWidget(priority_panel, 3)
+
+        def _strategy_tab(*widgets: QWidget, note: str = ""):
+            tab = QWidget()
+            lay = QVBoxLayout(tab)
+            lay.setContentsMargins(6, 6, 6, 6)
+            lay.setSpacing(_GRP_SPACING)
+            if note:
+                lay.addWidget(_note(note))
+            for widget in widgets:
+                lay.addWidget(widget)
+            lay.addStretch()
+            return tab
 
         tabs.addTab(general_tab, "General")
-        tabs.addTab(cpr_tab, "CPR")
-        tabs.addTab(priority_tab, "Priorities")
+        tabs.addTab(_strategy_tab(sig_grp), self.STRATEGY_PRIORITY_LABELS["atr_reversal"])
+        tabs.addTab(
+            _strategy_tab(note="Uses ATR / Signal settings from ATR Reversal tab."),
+            self.STRATEGY_PRIORITY_LABELS["atr_divergence"],
+        )
+        tabs.addTab(
+            _strategy_tab(note="Uses ATR / Signal settings from ATR Reversal tab."),
+            self.STRATEGY_PRIORITY_LABELS["ema_cross"],
+        )
+        tabs.addTab(_strategy_tab(cvdbk_grp, consol_grp), self.STRATEGY_PRIORITY_LABELS["cvd_range_breakout"])
+        tabs.addTab(_strategy_tab(brk_grp), self.STRATEGY_PRIORITY_LABELS["range_breakout"])
+        tabs.addTab(_strategy_tab(od_grp), self.STRATEGY_PRIORITY_LABELS["open_drive"])
         self._build_regime_tab(tabs, compact_spinbox_style, compact_combo_style)
+        tabs.addTab(priority_tab, "Priority Order")
         root.addWidget(tabs, 1)
 
         # ── Close bar ─────────────────────────────────────────────────────
