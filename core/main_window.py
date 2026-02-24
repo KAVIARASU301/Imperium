@@ -1107,7 +1107,9 @@ class ImperiumMainWindow(QMainWindow):
             "net_pnl": realized_pnl,
 
             "exit_reason": exit_reason,
-            "strategy_tag": None,
+            "strategy_tag": getattr(original_position, "strategy_name", "N/A") or "N/A",
+            "trade_status": getattr(original_position, "trade_status", "MANUAL") or "MANUAL",
+            "strategy_name": getattr(original_position, "strategy_name", "N/A") or "N/A",
 
             "trading_mode": trading_mode,
             "session_date": date.today().isoformat(),

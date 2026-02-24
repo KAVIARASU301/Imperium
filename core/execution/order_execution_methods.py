@@ -1,5 +1,6 @@
 import logging
 import time
+from datetime import datetime
 from typing import Dict, List, Optional
 
 from PySide6.QtCore import QTimer
@@ -23,6 +24,8 @@ class OrderExecutionMethods:
         failed_orders_info = []
         order_product = confirmed_order_details.get('product', self.window.trader.PRODUCT_MIS)
         total_quantity_per_strike = confirmed_order_details.get('total_quantity_per_strike', 0)
+        trade_status = str(confirmed_order_details.get("trade_status") or "MANUAL").upper()
+        strategy_name = str(confirmed_order_details.get("strategy_name") or "N/A")
 
         if total_quantity_per_strike == 0:
             logger.error("Total quantity per strike is zero in confirmed_order_details.")
@@ -120,7 +123,10 @@ class OrderExecutionMethods:
                                 product=order_product,
                                 stop_loss_price=confirmed_order_details.get("stop_loss_price"),
                                 target_price=confirmed_order_details.get("target_price"),
-                                trailing_stop_loss=tsl if tsl > 0 else None
+                                trailing_stop_loss=tsl if tsl > 0 else None,
+                                entry_time=datetime.now(),
+                                trade_status=trade_status,
+                                strategy_name=strategy_name,
                             )
 
                             self.window.position_manager.add_position(new_position)
@@ -181,6 +187,8 @@ class OrderExecutionMethods:
         trailing_stop_loss_amount = float(order_params.get('trailing_stop_loss_amount') or 0)
         group_name = order_params.get('group_name')
         auto_token = order_params.get('auto_token')
+        trade_status = str(order_params.get("trade_status") or ("ALGO" if auto_token is not None else "MANUAL")).upper()
+        strategy_name = str(order_params.get("strategy_name") or "N/A")
 
         if group_name and contract_to_trade:
             self.window.position_manager.set_group_name_hint(contract_to_trade.tradingsymbol, group_name)
@@ -377,7 +385,10 @@ class OrderExecutionMethods:
                         stop_loss_price=stop_loss_price,
                         target_price=target_price,
                         trailing_stop_loss=trailing_stop_loss if trailing_stop_loss and trailing_stop_loss > 0 else None,
-                        group_name=group_name
+                        group_name=group_name,
+                        entry_time=datetime.now(),
+                        trade_status=trade_status,
+                        strategy_name=strategy_name,
                     )
                     self.window.position_manager.add_position(new_position)
                     self.window.trade_logger.log_trade(confirmed_order_api_data)
@@ -506,6 +517,8 @@ class OrderExecutionMethods:
                 "transaction_type") or self.window.trader.TRANSACTION_TYPE_BUY,
             "group_name": active_trade.get("group_name") or f"CVD_AUTO_{token}",
             "auto_token": token,
+            "trade_status": "ALGO",
+            "strategy_name": active_trade.get("strategy_type") or "N/A",
         }
         logger.info(
             "[AUTO] Replacing pending order for %s every 10s with refreshed LTP %.2f",

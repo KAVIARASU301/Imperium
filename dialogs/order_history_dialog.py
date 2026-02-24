@@ -26,16 +26,18 @@ class OrderHistoryTable(QTableWidget):
     def __init__(self):
         super().__init__()
 
-        self.setColumnCount(8)
+        self.setColumnCount(10)
         self.setHorizontalHeaderLabels([
             "",                 # Arrow
-            "Timestamp",
+            "Entry Time",
+            "Exit Time",
             "Symbol",
             "Qty",
-            "Avg Price",
+            "Entry",
+            "Exit",
             "PnL",
             "Status",
-            "Order ID"
+            "Strategy"
         ])
 
         self._setup_table()
@@ -49,11 +51,11 @@ class OrderHistoryTable(QTableWidget):
 
         header = self.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(2, QHeaderView.Stretch)   # Symbol
-        header.setSectionResizeMode(7, QHeaderView.Stretch)   # Order ID
+        header.setSectionResizeMode(3, QHeaderView.Stretch)   # Symbol
+        header.setSectionResizeMode(9, QHeaderView.Stretch)   # Strategy
 
         self.setColumnWidth(0, 36)
-        self.setColumnWidth(5, 100)
+        self.setColumnWidth(6, 110)
 
     # -----------------------------------------------------
     def update_orders(self, orders: List[Dict]):
@@ -155,34 +157,51 @@ class OrderHistoryTable(QTableWidget):
             self.insertRow(row)
 
             self.setItem(row, 0, QTableWidgetItem(""))
-            raw_ts = trade.get("exit_time", "")
 
-            try:
-                # ISO 8601 → datetime
-                dt = datetime.fromisoformat(raw_ts)
-                display_ts = dt.strftime("%d %b %H:%M:%S")
-            except Exception:
-                display_ts = raw_ts  # fallback (never crash UI)
+            def _fmt_time(raw_value: str) -> str:
+                try:
+                    dt = datetime.fromisoformat(raw_value)
+                    return dt.strftime("%d %b %H:%M:%S")
+                except Exception:
+                    return raw_value or "—"
 
-            self.setItem(row, 1, QTableWidgetItem(display_ts))
-            self.setItem(row, 2, QTableWidgetItem(trade.get("tradingsymbol", "")))
-            self.setItem(row, 3, QTableWidgetItem(str(trade.get("quantity", 0))))
-            self.setItem(row, 4, QTableWidgetItem(f'{trade.get("entry_price", 0):.2f}'))
+            entry_time = _fmt_time(trade.get("entry_time", ""))
+            exit_time = _fmt_time(trade.get("exit_time", ""))
 
-            pnl = trade.get("net_pnl", 0.0)
+            self.setItem(row, 1, QTableWidgetItem(entry_time))
+            self.setItem(row, 2, QTableWidgetItem(exit_time))
+            self.setItem(row, 3, QTableWidgetItem(trade.get("tradingsymbol", "")))
+            self.setItem(row, 4, QTableWidgetItem(str(trade.get("quantity", 0))))
+            self.setItem(row, 5, QTableWidgetItem(f'{float(trade.get("entry_price", 0) or 0):.2f}'))
+            self.setItem(row, 6, QTableWidgetItem(f'{float(trade.get("exit_price", 0) or 0):.2f}'))
+
+            pnl = float(trade.get("net_pnl", 0.0) or 0.0)
             pnl_item = QTableWidgetItem(f"{pnl:,.2f}")
             pnl_item.setForeground(
                 QColor("#29C7C9") if pnl >= 0 else QColor("#F85149")
             )
             pnl_item.setTextAlignment(Qt.AlignCenter)
-            self.setItem(row, 5, pnl_item)
+            self.setItem(row, 7, pnl_item)
 
-            self.setItem(row, 6, QTableWidgetItem(trade.get("exit_reason", "")))
-            self.setItem(row, 7, QTableWidgetItem(trade.get("trade_id", "")))
+            status_text = str(trade.get("trade_status") or "MANUAL").upper()
+            status_item = QTableWidgetItem(status_text)
+            status_item.setForeground(QColor("#29C7C9") if status_text == "ALGO" else QColor("#F39C12"))
+            self.setItem(row, 8, status_item)
+
+            self.setItem(row, 9, QTableWidgetItem(str(trade.get("strategy_name") or "N/A")))
+
+            for col in range(self.columnCount()):
+                item = self.item(row, col)
+                if item:
+                    if col == 3:
+                        item.setTextAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+                    else:
+                        item.setTextAlignment(Qt.AlignCenter)
 
         if self.rowCount() > 0:
             self.scrollToBottom()
             self.selectRow(self.rowCount() - 1)
+
 
 
 # ---------------------------------------------------------

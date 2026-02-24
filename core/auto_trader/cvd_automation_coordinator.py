@@ -198,6 +198,8 @@ class CvdAutomationCoordinator:
             "target_price": None,
             "group_name": f"CVD_AUTO_{token}",
             "auto_token": token,
+            "trade_status": "ALGO",
+            "strategy_name": strategy_type,
         }
 
         tracked_tradingsymbol = contract.tradingsymbol
@@ -229,6 +231,8 @@ class CvdAutomationCoordinator:
                         instrument_lot_quantity = w.instrument_data[symbol].get('lot_size', 1)
                         order_details['total_quantity_per_strike'] = order_details.get('lot_size', 1) * instrument_lot_quantity
                         order_details['product'] = w.settings.get('default_product', 'MIS')
+                        order_details['trade_status'] = 'ALGO'
+                        order_details['strategy_name'] = strategy_type
                         w._execute_orders(order_details)
                         placed_syms = [s['contract'].tradingsymbol for s in order_details['strikes'] if s.get('contract') and getattr(s['contract'], 'tradingsymbol', None)]
                 else:

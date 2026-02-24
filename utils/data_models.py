@@ -4,7 +4,7 @@
 
 from dataclasses import dataclass, field
 from enum import Enum
-from datetime import date
+from datetime import date, datetime
 from typing import Optional
 
 
@@ -59,6 +59,9 @@ class Position:
     stop_loss_order_id: Optional[str] = field(default=None)
     target_order_id: Optional[str] = field(default=None)
     group_name: Optional[str] = field(default=None)
+    entry_time: Optional[datetime] = field(default=None)
+    trade_status: str = field(default="MANUAL")
+    strategy_name: str = field(default="N/A")
 
     def update_pnl(self, new_ltp: float):
         """Recalculate P&L based on updated LTP"""
