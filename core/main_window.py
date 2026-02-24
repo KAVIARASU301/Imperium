@@ -2347,8 +2347,28 @@ class ImperiumMainWindow(QMainWindow):
         if getattr(self, '_close_in_progress', False):
             event.ignore()
             return
-        self._close_in_progress = True
         logger.info("Close event triggered.")
+
+        # Confirm exit before any shutdown side-effects.
+        if self.position_manager.has_positions():
+            reply = QMessageBox.warning(
+                self,
+                "Exit Application",
+                (
+                    "You have open positions.\n\n"
+                    "Closing the application will NOT exit or square off your positions.\n"
+                    "They will remain open in your trading account.\n\n"
+                    "Do you still want to close the application?"
+                ),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+
+            if reply != QMessageBox.StandardButton.Yes:
+                event.ignore()
+                return
+
+        self._close_in_progress = True
 
         # Stop timers first
         if hasattr(self, 'api_health_check_timer'):
@@ -2373,32 +2393,6 @@ class ImperiumMainWindow(QMainWindow):
                 logger.warning("Instrument loader did not stop gracefully.")
             else:
                 logger.info("Instrument loader stopped.")
-
-        # ---- CLEAR EXIT CONFIRMATION ----
-        if self.position_manager.has_positions():
-            reply = QMessageBox.warning(
-                self,
-                "Exit Application",
-                (
-                    "You have open positions.\n\n"
-                    "Closing the application will NOT exit or square off your positions.\n"
-                    "They will remain open in your trading account.\n\n"
-                    "Do you still want to close the application?"
-                ),
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No
-            )
-
-            if reply == QMessageBox.StandardButton.No:
-                event.ignore()
-
-                # Restart timers if exit cancelled
-                if hasattr(self, 'api_health_check_timer'):
-                    self.api_health_check_timer.start()
-                if hasattr(self, 'update_timer'):
-                    self.update_timer.start()
-
-                return
 
         logger.info("Proceeding with application shutdown.")
         self.save_window_state()
