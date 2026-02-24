@@ -26,6 +26,20 @@ class CvdAutomationCoordinator:
         # Stacker: one StackerState per token while an anchor trade is active
         self._stacker_states: dict[int, StackerState] = {}
 
+    @staticmethod
+    def _is_regime_breakdown(active_trade: dict) -> bool:
+        adx_hist = active_trade.get("regime_adx_hist") or []
+        vol_hist = active_trade.get("regime_vol_hist") or []
+        if len(adx_hist) < 6 or len(vol_hist) < 6:
+            return False
+
+        adx_falling = all(adx_hist[-i] < adx_hist[-i - 1] for i in range(1, 4))
+        adx_below_5bar = adx_hist[-1] < adx_hist[-6]
+        vol_below_5bar = vol_hist[-1] < vol_hist[-6]
+        peak_vol = float(active_trade.get("trend_mode_peak_vol") or 0.0)
+        vol_contracting = vol_hist[-1] < (0.85 * peak_vol) if peak_vol > 0 else False
+        return adx_falling and adx_below_5bar and vol_below_5bar and vol_contracting
+
     def handle_signal(self, payload: dict):
         w = self.main_window
         token = payload.get("instrument_token")
@@ -181,6 +195,9 @@ class CvdAutomationCoordinator:
         max_profit_giveback_strategies = payload.get("max_profit_giveback_strategies") or state.get("max_profit_giveback_strategies") or ["atr_reversal", "ema_cross", "atr_divergence", "cvd_range_breakout", "range_breakout", "open_drive"]
         if not isinstance(max_profit_giveback_strategies, (list, tuple, set)):
             max_profit_giveback_strategies = ["atr_reversal", "ema_cross", "atr_divergence", "cvd_range_breakout", "range_breakout", "open_drive"]
+        dynamic_exit_trend_following_strategies = payload.get("dynamic_exit_trend_following_strategies") or state.get("dynamic_exit_trend_following_strategies") or ["ema_cross", "range_breakout", "cvd_range_breakout"]
+        if not isinstance(dynamic_exit_trend_following_strategies, (list, tuple, set)):
+            dynamic_exit_trend_following_strategies = ["ema_cross", "range_breakout", "cvd_range_breakout"]
 
         entry_underlying = float(payload.get("price_close") or state.get("price_close") or 0.0)
         signal_type = payload.get("signal_type") or state.get("signal_filter")
@@ -263,6 +280,7 @@ class CvdAutomationCoordinator:
             "open_drive_max_profit_giveback_points": open_drive_max_profit_giveback_points,
             "open_drive_tick_drawdown_limit_points": open_drive_tick_drawdown_limit_points,
             "max_profit_giveback_strategies": list(max_profit_giveback_strategies),
+            "dynamic_exit_trend_following_strategies": list(dynamic_exit_trend_following_strategies),
             "atr_trailing_step_points": atr_trailing_step_points,
             "entry_underlying": entry_underlying,
             "entry_atr": current_atr if math.isfinite(current_atr) and current_atr > 0 else 0.0,
@@ -280,6 +298,11 @@ class CvdAutomationCoordinator:
             "product": w.settings.get('default_product', w.trader.PRODUCT_MIS),
             "transaction_type": w.trader.TRANSACTION_TYPE_BUY,
             "group_name": f"CVD_AUTO_{token}",
+            "exit_mode": "default",
+            "trend_mode_unlock_bar_count": 0,
+            "trend_mode_peak_vol": 0.0,
+            "regime_adx_hist": [],
+            "regime_vol_hist": [],
         }
 
         # ── Stacker: init state for anchor, or record stack entry ─────────
@@ -437,6 +460,8 @@ class CvdAutomationCoordinator:
         cvd_close = _to_finite_float(payload.get("cvd_close"), 0.0)
         cvd_ema51 = _to_finite_float(payload.get("cvd_ema51"), 0.0)
         cvd_ema51_simple = _to_finite_float(payload.get("cvd_ema51_simple"), cvd_ema51)
+        adx = _to_finite_float(payload.get("adx"), 0.0)
+        atr_normalized = _to_finite_float(payload.get("atr_normalized"), 0.0)
 
         signal_side = active_trade.get("signal_side")
         strategy_type = active_trade.get("strategy_type") or "atr_reversal"
@@ -444,6 +469,7 @@ class CvdAutomationCoordinator:
         max_profit_giveback_points = _to_finite_float(active_trade.get("max_profit_giveback_points"), 0.0)
         open_drive_max_profit_giveback_points = _to_finite_float(active_trade.get("open_drive_max_profit_giveback_points"), 0.0)
         max_profit_giveback_strategies = set(active_trade.get("max_profit_giveback_strategies") or ["atr_reversal", "ema_cross", "atr_divergence", "cvd_range_breakout", "range_breakout", "open_drive"])
+        dynamic_exit_trend_following_strategies = set(active_trade.get("dynamic_exit_trend_following_strategies") or ["ema_cross", "range_breakout", "cvd_range_breakout"])
         entry_underlying = _to_finite_float(active_trade.get("entry_underlying"), 0.0)
         max_favorable_points = _to_finite_float(active_trade.get("max_favorable_points"), 0.0)
         sl_underlying = _to_finite_float(active_trade.get("sl_underlying"), None) if active_trade.get("sl_underlying") is not None else None
@@ -467,6 +493,17 @@ class CvdAutomationCoordinator:
                 new_sl = (entry_underlying - stoploss_points + trail_offset) if signal_side == "long" else (entry_underlying + stoploss_points - trail_offset)
                 sl_underlying = max(float(sl_underlying), new_sl) if (sl_underlying is not None and signal_side == "long") else min(float(sl_underlying), new_sl) if sl_underlying is not None else new_sl
                 active_trade["sl_underlying"] = sl_underlying
+
+        adx_hist = active_trade.setdefault("regime_adx_hist", [])
+        vol_hist = active_trade.setdefault("regime_vol_hist", [])
+        if adx > 0:
+            adx_hist.append(adx)
+        if atr_normalized > 0:
+            vol_hist.append(atr_normalized)
+        if len(adx_hist) > 50:
+            del adx_hist[:-50]
+        if len(vol_hist) > 50:
+            del vol_hist[:-50]
 
         hit_stop = (price_close <= float(sl_underlying)) if (sl_underlying is not None and signal_side == "long") else (price_close >= float(sl_underlying)) if sl_underlying is not None else False
 
@@ -497,18 +534,58 @@ class CvdAutomationCoordinator:
             exit_reason = "AUTO_SL"
         elif strategy_type != "atr_reversal" and giveback_enabled_for_strategy and effective_giveback_points > 0 and max_favorable_points and (max_favorable_points - favorable_move) >= effective_giveback_points:
             exit_reason = "AUTO_MAX_PROFIT_GIVEBACK"
-        elif strategy_type == "ema_cross" and ((signal_side == "long" and cvd_cross_below_ema10) or (signal_side == "short" and cvd_cross_above_ema10)):
+
+        trend_mode_eligible = strategy_type in dynamic_exit_trend_following_strategies
+        stacked_active = bool(active_trade.get("stacked_tradingsymbols"))
+        adx_slope = (adx_hist[-1] - adx_hist[-2]) if len(adx_hist) >= 2 else 0.0
+        vol_slope = (vol_hist[-1] - vol_hist[-2]) if len(vol_hist) >= 2 else 0.0
+        unlock_profit_buffer = max(stoploss_points or 0.0, 1.0)
+        trend_unlock = (
+            trend_mode_eligible
+            and not stacked_active
+            and favorable_move >= unlock_profit_buffer
+            and adx >= 28.0
+            and atr_normalized >= 1.15
+            and adx_slope > 0
+            and vol_slope > 0
+            and len(adx_hist) >= 3
+            and len(vol_hist) >= 3
+            and adx_hist[-1] > adx_hist[-2] > adx_hist[-3]
+            and vol_hist[-1] > vol_hist[-2] > vol_hist[-3]
+        )
+        unlock_bar_count = int(active_trade.get("trend_mode_unlock_bar_count") or 0)
+        if trend_unlock:
+            unlock_bar_count += 1
+        else:
+            unlock_bar_count = 0
+            if active_trade.get("exit_mode") == "trend_unlock":
+                active_trade["exit_mode"] = "default"
+                active_trade["trend_mode_peak_vol"] = 0.0
+        active_trade["trend_mode_unlock_bar_count"] = unlock_bar_count
+        if unlock_bar_count >= 3 and active_trade.get("exit_mode") != "trend_unlock":
+            active_trade["exit_mode"] = "trend_unlock"
+            active_trade["trend_mode_peak_vol"] = atr_normalized
+            logger.info("[AUTO] Exit mode switched to trend_unlock token=%s strategy=%s", token, strategy_type)
+
+        if active_trade.get("exit_mode") == "trend_unlock":
+            active_trade["trend_mode_peak_vol"] = max(float(active_trade.get("trend_mode_peak_vol") or 0.0), atr_normalized)
+            if self._is_regime_breakdown(active_trade):
+                exit_reason = "AUTO_REGIME_BREAKDOWN"
+
+        use_default_ema_exits = active_trade.get("exit_mode") != "trend_unlock"
+
+        if not exit_reason and strategy_type == "ema_cross" and use_default_ema_exits and ((signal_side == "long" and cvd_cross_below_ema10) or (signal_side == "short" and cvd_cross_above_ema10)):
             exit_reason = "AUTO_EMA10_CROSS"
-        elif strategy_type == "atr_divergence" and ((signal_side == "long" and price_cross_above_ema51) or (signal_side == "short" and price_cross_below_ema51)):
+        elif not exit_reason and strategy_type == "atr_divergence" and ((signal_side == "long" and price_cross_above_ema51) or (signal_side == "short" and price_cross_below_ema51)):
             exit_reason = "AUTO_EMA51_CROSS"
-        elif strategy_type in {"range_breakout", "cvd_range_breakout"} and ((signal_side == "long" and (price_cross_below_ema10 or price_cross_below_ema51)) or (signal_side == "short" and (price_cross_above_ema10 or price_cross_above_ema51))):
+        elif not exit_reason and strategy_type in {"range_breakout", "cvd_range_breakout"} and use_default_ema_exits and ((signal_side == "long" and (price_cross_below_ema10 or price_cross_below_ema51)) or (signal_side == "short" and (price_cross_above_ema10 or price_cross_above_ema51))):
             exit_reason = "AUTO_BREAKOUT_EXIT"
-        elif strategy_type == "open_drive" and (
+        elif not exit_reason and strategy_type == "open_drive" and use_default_ema_exits and (
                 (signal_side == "long" and (price_close < ema10 or cvd_close < cvd_ema10))
                 or (signal_side == "short" and (price_close > ema10 or cvd_close > cvd_ema10))
         ):
             exit_reason = "AUTO_OPEN_DRIVE_FAST_EMA_CLOSE_EXIT"
-        elif strategy_type == "atr_reversal" and (
+        elif not exit_reason and strategy_type == "atr_reversal" and (
                 (signal_side == "long" and ((ema51_simple > 0 and price_close >= ema51_simple) or (cvd_ema51_simple != 0 and cvd_close >= cvd_ema51_simple)))
                 or (signal_side == "short" and ((ema51_simple > 0 and price_close <= ema51_simple) or (cvd_ema51_simple != 0 and cvd_close <= cvd_ema51_simple)))
         ):

@@ -476,6 +476,36 @@ class AutoTraderDialog(RegimeTabMixin, SetupPanelMixin, SetupSettingsMigrationMi
         self.max_giveback_range_breakout_check.setToolTip("Apply max profit giveback exit to Range Breakout trades.")
         self.max_giveback_range_breakout_check.toggled.connect(self._on_automation_settings_changed)
 
+        self.dynamic_exit_atr_reversal_check = QCheckBox("ATR Reversal")
+        self.dynamic_exit_atr_reversal_check.setChecked(False)
+        self.dynamic_exit_atr_reversal_check.setToolTip("Enable regime-aware trend-unlock exits for ATR Reversal trades.")
+        self.dynamic_exit_atr_reversal_check.toggled.connect(self._on_automation_settings_changed)
+
+        self.dynamic_exit_ema_cross_check = QCheckBox("EMA Cross")
+        self.dynamic_exit_ema_cross_check.setChecked(True)
+        self.dynamic_exit_ema_cross_check.setToolTip("Enable regime-aware trend-unlock exits for EMA Cross trades.")
+        self.dynamic_exit_ema_cross_check.toggled.connect(self._on_automation_settings_changed)
+
+        self.dynamic_exit_atr_divergence_check = QCheckBox("ATR Divergence")
+        self.dynamic_exit_atr_divergence_check.setChecked(False)
+        self.dynamic_exit_atr_divergence_check.setToolTip("Enable regime-aware trend-unlock exits for ATR Divergence trades.")
+        self.dynamic_exit_atr_divergence_check.toggled.connect(self._on_automation_settings_changed)
+
+        self.dynamic_exit_range_breakout_check = QCheckBox("Range Breakout")
+        self.dynamic_exit_range_breakout_check.setChecked(True)
+        self.dynamic_exit_range_breakout_check.setToolTip("Enable regime-aware trend-unlock exits for Range Breakout trades.")
+        self.dynamic_exit_range_breakout_check.toggled.connect(self._on_automation_settings_changed)
+
+        self.dynamic_exit_cvd_range_breakout_check = QCheckBox("CVD Range Breakout")
+        self.dynamic_exit_cvd_range_breakout_check.setChecked(True)
+        self.dynamic_exit_cvd_range_breakout_check.setToolTip("Enable regime-aware trend-unlock exits for CVD Range Breakout trades.")
+        self.dynamic_exit_cvd_range_breakout_check.toggled.connect(self._on_automation_settings_changed)
+
+        self.dynamic_exit_open_drive_check = QCheckBox("Open Drive")
+        self.dynamic_exit_open_drive_check.setChecked(False)
+        self.dynamic_exit_open_drive_check.setToolTip("Enable regime-aware trend-unlock exits for Open Drive trades.")
+        self.dynamic_exit_open_drive_check.toggled.connect(self._on_automation_settings_changed)
+
         self.automation_route_combo = QComboBox()
         self.automation_route_combo.setFixedWidth(180)
         self.automation_route_combo.setStyleSheet(compact_combo_style)
@@ -1147,6 +1177,12 @@ class AutoTraderDialog(RegimeTabMixin, SetupPanelMixin, SetupSettingsMigrationMi
         self.max_giveback_ema_cross_check.blockSignals(True)
         self.max_giveback_atr_divergence_check.blockSignals(True)
         self.max_giveback_range_breakout_check.blockSignals(True)
+        self.dynamic_exit_atr_reversal_check.blockSignals(True)
+        self.dynamic_exit_ema_cross_check.blockSignals(True)
+        self.dynamic_exit_atr_divergence_check.blockSignals(True)
+        self.dynamic_exit_range_breakout_check.blockSignals(True)
+        self.dynamic_exit_cvd_range_breakout_check.blockSignals(True)
+        self.dynamic_exit_open_drive_check.blockSignals(True)
         self.automation_route_combo.blockSignals(True)
         self.atr_base_ema_input.blockSignals(True)
         self.atr_distance_input.blockSignals(True)
@@ -1224,6 +1260,13 @@ class AutoTraderDialog(RegimeTabMixin, SetupPanelMixin, SetupSettingsMigrationMi
         if not isinstance(max_giveback_strategies, (list, tuple, set)):
             max_giveback_strategies = self._max_giveback_strategy_defaults()
         self._apply_max_giveback_strategy_selection(list(max_giveback_strategies))
+        dynamic_exit_strategies = _read_setting(
+            "dynamic_exit_trend_following_strategies",
+            list(self._dynamic_exit_strategy_defaults()),
+        )
+        if not isinstance(dynamic_exit_strategies, (list, tuple, set)):
+            dynamic_exit_strategies = self._dynamic_exit_strategy_defaults()
+        self._apply_dynamic_exit_strategy_selection(list(dynamic_exit_strategies))
         _apply_combo_value(
             self.automation_route_combo,
             _read_setting("route", self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL),
@@ -1420,6 +1463,12 @@ class AutoTraderDialog(RegimeTabMixin, SetupPanelMixin, SetupSettingsMigrationMi
         self.max_giveback_ema_cross_check.blockSignals(False)
         self.max_giveback_atr_divergence_check.blockSignals(False)
         self.max_giveback_range_breakout_check.blockSignals(False)
+        self.dynamic_exit_atr_reversal_check.blockSignals(False)
+        self.dynamic_exit_ema_cross_check.blockSignals(False)
+        self.dynamic_exit_atr_divergence_check.blockSignals(False)
+        self.dynamic_exit_range_breakout_check.blockSignals(False)
+        self.dynamic_exit_cvd_range_breakout_check.blockSignals(False)
+        self.dynamic_exit_open_drive_check.blockSignals(False)
         self.automation_route_combo.blockSignals(False)
         self.atr_base_ema_input.blockSignals(False)
         self.atr_distance_input.blockSignals(False)
@@ -1522,6 +1571,7 @@ class AutoTraderDialog(RegimeTabMixin, SetupPanelMixin, SetupSettingsMigrationMi
             "stoploss_points": int(self.automation_stoploss_input.value()),
             "max_profit_giveback_points": int(self.max_profit_giveback_input.value()),
             "max_profit_giveback_strategies": self._selected_max_giveback_strategies(),
+            "dynamic_exit_trend_following_strategies": self._selected_dynamic_exit_strategies(),
             "route": self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL,
             "atr_base_ema": int(self.atr_base_ema_input.value()),
             "atr_distance": float(self.atr_distance_input.value()),
@@ -1622,6 +1672,7 @@ class AutoTraderDialog(RegimeTabMixin, SetupPanelMixin, SetupSettingsMigrationMi
             "stoploss_points": float(self.automation_stoploss_input.value()),
             "max_profit_giveback_points": float(self.max_profit_giveback_input.value()),
             "max_profit_giveback_strategies": self._selected_max_giveback_strategies(),
+            "dynamic_exit_trend_following_strategies": self._selected_dynamic_exit_strategies(),
             "open_drive_max_profit_giveback_points": float(self.open_drive_max_profit_giveback_input.value()),
             "open_drive_tick_drawdown_limit_points": float(self.open_drive_tick_drawdown_limit_input.value()),
             "atr_trailing_step_points": float(self.atr_trailing_step_input.value()),
@@ -2131,6 +2182,51 @@ class AutoTraderDialog(RegimeTabMixin, SetupPanelMixin, SetupSettingsMigrationMi
 
     def _selected_breakout_switch_mode(self) -> str:
         return self.breakout_switch_mode_combo.currentData() or self.BREAKOUT_SWITCH_ADAPTIVE
+
+    @classmethod
+    def _dynamic_exit_strategy_defaults(cls) -> tuple[str, ...]:
+        return (
+            cls.MAX_GIVEBACK_STRATEGY_EMA_CROSS,
+            cls.MAX_GIVEBACK_STRATEGY_RANGE_BREAKOUT,
+            cls.MAX_GIVEBACK_STRATEGY_CVD_RANGE_BREAKOUT,
+        )
+
+    def _selected_dynamic_exit_strategies(self) -> list[str]:
+        selected: list[str] = []
+        if self.dynamic_exit_atr_reversal_check.isChecked():
+            selected.append(self.MAX_GIVEBACK_STRATEGY_ATR_REVERSAL)
+        if self.dynamic_exit_ema_cross_check.isChecked():
+            selected.append(self.MAX_GIVEBACK_STRATEGY_EMA_CROSS)
+        if self.dynamic_exit_atr_divergence_check.isChecked():
+            selected.append(self.MAX_GIVEBACK_STRATEGY_ATR_DIVERGENCE)
+        if self.dynamic_exit_range_breakout_check.isChecked():
+            selected.append(self.MAX_GIVEBACK_STRATEGY_RANGE_BREAKOUT)
+        if self.dynamic_exit_cvd_range_breakout_check.isChecked():
+            selected.append(self.MAX_GIVEBACK_STRATEGY_CVD_RANGE_BREAKOUT)
+        if self.dynamic_exit_open_drive_check.isChecked():
+            selected.append(self.MAX_GIVEBACK_STRATEGY_OPEN_DRIVE)
+        return selected
+
+    def _apply_dynamic_exit_strategy_selection(self, strategies: list[str]):
+        selected = set(strategies or [])
+        self.dynamic_exit_atr_reversal_check.setChecked(
+            self.MAX_GIVEBACK_STRATEGY_ATR_REVERSAL in selected
+        )
+        self.dynamic_exit_ema_cross_check.setChecked(
+            self.MAX_GIVEBACK_STRATEGY_EMA_CROSS in selected
+        )
+        self.dynamic_exit_atr_divergence_check.setChecked(
+            self.MAX_GIVEBACK_STRATEGY_ATR_DIVERGENCE in selected
+        )
+        self.dynamic_exit_range_breakout_check.setChecked(
+            self.MAX_GIVEBACK_STRATEGY_RANGE_BREAKOUT in selected
+        )
+        self.dynamic_exit_cvd_range_breakout_check.setChecked(
+            self.MAX_GIVEBACK_STRATEGY_CVD_RANGE_BREAKOUT in selected
+        )
+        self.dynamic_exit_open_drive_check.setChecked(
+            self.MAX_GIVEBACK_STRATEGY_OPEN_DRIVE in selected
+        )
 
     @classmethod
     def _max_giveback_strategy_defaults(cls) -> tuple[str, ...]:

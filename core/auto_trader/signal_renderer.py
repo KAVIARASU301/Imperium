@@ -219,6 +219,19 @@ class SignalRendererMixin:
         current_atr = float(atr_values[idx]) if idx < len(atr_values) else 0.0
         if not np.isfinite(current_atr) or current_atr <= 0:
             current_atr = 0.0
+        adx_values = compute_adx(
+            np.array(self.all_price_high_data, dtype=float),
+            np.array(self.all_price_low_data, dtype=float),
+            price_data_array,
+            period=14,
+        )
+        current_adx = float(adx_values[idx]) if idx < len(adx_values) else 0.0
+        if not np.isfinite(current_adx) or current_adx < 0:
+            current_adx = 0.0
+        atr_baseline = float(np.nanmean(atr_values[max(0, idx - 29): idx + 1])) if len(atr_values) else 0.0
+        if not np.isfinite(atr_baseline) or atr_baseline <= 0:
+            atr_baseline = current_atr if current_atr > 0 else 0.0
+        atr_normalized = (current_atr / atr_baseline) if atr_baseline > 0 else 0.0
         state_key = (
             ts_str,
             round(new_price_close, 4),
@@ -241,10 +254,13 @@ class SignalRendererMixin:
             "stoploss_points": float(self.automation_stoploss_input.value()),
             "max_profit_giveback_points": float(self.max_profit_giveback_input.value()),
             "max_profit_giveback_strategies": self._selected_max_giveback_strategies(),
+            "dynamic_exit_trend_following_strategies": self._selected_dynamic_exit_strategies(),
             "open_drive_max_profit_giveback_points": float(self.open_drive_max_profit_giveback_input.value()),
             "open_drive_tick_drawdown_limit_points": float(self.open_drive_tick_drawdown_limit_input.value()),
             "atr_trailing_step_points": float(self.atr_trailing_step_input.value()),
             "atr": current_atr,
+            "adx": current_adx,
+            "atr_normalized": float(atr_normalized) if np.isfinite(atr_normalized) else 0.0,
             "route": self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL,
             "signal_filter": self._selected_signal_filter(),
             "priority_list": active_priority_list,

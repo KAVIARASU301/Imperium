@@ -27,8 +27,8 @@ from PySide6.QtWidgets import (
 # ══════════════════════════════════════════════════════════════════════════════
 # LAYOUT CONSTANTS  ←  tweak everything here, nowhere else
 # ══════════════════════════════════════════════════════════════════════════════
-_DLG_MIN_W   = 1200   # dialog minimum width  (px)
-_DLG_MIN_H   = 560    # dialog minimum height (px)
+_DLG_MIN_W   = 1320   # dialog minimum width  (px)
+_DLG_MIN_H   = 640    # dialog minimum height (px)
 _COL_SPACING = 8      # gap between columns   (px)
 _GRP_SPACING = 6      # gap between groups    (px)
 _FORM_MARGIN = (7, 5, 7, 5)  # L,T,R,B inside each group
@@ -139,6 +139,21 @@ class SetupPanelMixin:
             gb_lay.addWidget(cb)
         gb_lay.addStretch()
         auto_frm.addRow("Giveback On", gb_row)
+
+        trend_exit_row = QWidget()
+        trend_exit_lay = QVBoxLayout(trend_exit_row)
+        trend_exit_lay.setContentsMargins(0, 0, 0, 0)
+        trend_exit_lay.setSpacing(3)
+        for cb in (
+            self.dynamic_exit_atr_reversal_check,
+            self.dynamic_exit_ema_cross_check,
+            self.dynamic_exit_atr_divergence_check,
+            self.dynamic_exit_range_breakout_check,
+            self.dynamic_exit_cvd_range_breakout_check,
+            self.dynamic_exit_open_drive_check,
+        ):
+            trend_exit_lay.addWidget(cb)
+        auto_frm.addRow("Trend Exit On", trend_exit_row)
         auto_frm.addRow("Route",       self.automation_route_combo)
         c1.addWidget(auto_grp)
 
