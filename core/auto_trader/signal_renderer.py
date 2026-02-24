@@ -446,6 +446,8 @@ class SignalRendererMixin:
                 price_atr_below=price_below_mask,
                 cvd_atr_above=cvd_above_mask,
                 cvd_atr_below=cvd_below_mask,
+                atr_values=atr_values,
+                timestamps=self.all_timestamps,
                 active_breakout_long=breakout_long_context,
                 active_breakout_short=breakout_short_context,
                 breakout_long_momentum_strong=breakout_long_strong,

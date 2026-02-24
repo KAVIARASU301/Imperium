@@ -64,6 +64,8 @@ class StrategySignalDetector:
             price_atr_below: np.ndarray,  # Price ATR reversal - below EMA (potential LONG)
             cvd_atr_above: np.ndarray,  # CVD ATR reversal - above EMA51 (potential SHORT)
             cvd_atr_below: np.ndarray,  # CVD ATR reversal - below EMA51 (potential LONG)
+            atr_values: np.ndarray | None = None,
+            timestamps: list | None = None,
             active_breakout_long: np.ndarray | None = None,
             active_breakout_short: np.ndarray | None = None,
             breakout_long_momentum_strong: np.ndarray | None = None,
@@ -82,11 +84,63 @@ class StrategySignalDetector:
         🆕 SUPPRESSION: Opposing ATR signals blocked during active breakout trades.
         """
 
-        # SHORT signals: Both Price and CVD show ATR reversal from above
-        short_atr_reversal = price_atr_above & cvd_atr_above
+        signal_length = min(len(price_atr_above), len(price_atr_below), len(cvd_atr_above), len(cvd_atr_below))
+        short_atr_reversal = np.zeros(signal_length, dtype=bool)
+        long_atr_reversal = np.zeros(signal_length, dtype=bool)
 
-        # LONG signals: Both Price and CVD show ATR reversal from below
-        long_atr_reversal = price_atr_below & cvd_atr_below
+        if signal_length == 0:
+            return short_atr_reversal, long_atr_reversal, short_atr_reversal.copy(), long_atr_reversal.copy()
+
+        # Scale the 5-minute confirmation logic to bars for the selected chart timeframe.
+        confirmation_window_bars = max(1, int(round(self.CONFIRMATION_WAIT_MINUTES / max(float(self.timeframe_minutes), 1.0))))
+
+        def _rolling_confirmation(mask: np.ndarray) -> np.ndarray:
+            confirmed = np.zeros(signal_length, dtype=bool)
+            for idx in range(signal_length):
+                start = max(0, idx - confirmation_window_bars + 1)
+                if np.any(mask[start: idx + 1]):
+                    confirmed[idx] = True
+            return confirmed
+
+        cvd_short_confirmed = _rolling_confirmation(cvd_atr_above[:signal_length])
+        cvd_long_confirmed = _rolling_confirmation(cvd_atr_below[:signal_length])
+
+        # Base confluence with timeframe-aware CVD confirmation window.
+        short_atr_reversal = price_atr_above[:signal_length] & cvd_short_confirmed
+        long_atr_reversal = price_atr_below[:signal_length] & cvd_long_confirmed
+
+        # Adaptive volatility gating:
+        # 1) normalized ATR > 1.2 (extended regime)
+        # 2) ATR velocity is flattening/contracting at signal bar
+        if atr_values is not None and len(atr_values) >= signal_length:
+            atr_slice = np.asarray(atr_values[:signal_length], dtype=float)
+            atr_velocity = np.diff(atr_slice, prepend=atr_slice[0])
+            prev_atr = np.roll(atr_slice, 1)
+            prev_atr[0] = atr_slice[0]
+            atr_velocity_pct = np.divide(
+                atr_velocity,
+                np.where(np.abs(prev_atr) > 1e-9, np.abs(prev_atr), 1.0),
+            )
+            atr_flat_or_contracting = (atr_velocity <= 0.0) | (atr_velocity_pct <= 0.01)
+
+            if timestamps is not None and len(timestamps) >= signal_length:
+                session_index = pd.to_datetime(pd.Series(timestamps[:signal_length])).dt.date
+                atr_session_mean = pd.Series(atr_slice).groupby(session_index).transform("mean")
+                rolling_30_session_avg = atr_session_mean.groupby(session_index).first().rolling(30, min_periods=1).mean()
+                baseline_map = rolling_30_session_avg.to_dict()
+                baseline = np.array([baseline_map.get(d, np.nan) for d in session_index], dtype=float)
+            else:
+                baseline = pd.Series(atr_slice).rolling(30, min_periods=1).mean().to_numpy()
+
+            normalized_atr = np.divide(
+                atr_slice,
+                np.where(np.abs(baseline) > 1e-9, baseline, np.nan),
+            )
+            normalized_atr_extended = np.nan_to_num(normalized_atr, nan=0.0) > 1.2
+
+            atr_gate = normalized_atr_extended & atr_flat_or_contracting
+            short_atr_reversal &= atr_gate
+            long_atr_reversal &= atr_gate
 
         # Keep raw copies BEFORE any suppression — callers use these to count
         # how many ATR signals were skipped during an active breakout trade.
