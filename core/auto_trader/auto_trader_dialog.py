@@ -146,6 +146,7 @@ class AutoTraderDialog(SetupPanelMixin, SetupSettingsMigrationMixin, SignalRende
         self._last_live_tick_ts: datetime | None = None
         self._last_ws_reconnect_attempt_ts: datetime | None = None
         self._ws_status_text: str = "initializing"
+        self._is_closing = False
         self._is_loading = False
         self._last_live_refresh_minute: datetime | None = None
 
@@ -2793,8 +2794,14 @@ class AutoTraderDialog(SetupPanelMixin, SetupSettingsMigrationMixin, SignalRende
 
     def _attempt_manual_ws_reconnect(self, reason: str):
         parent = self.parent()
+        if self._is_closing or getattr(parent, "_close_in_progress", False):
+            return
+
         market_data_worker = getattr(parent, "market_data_worker", None)
         if market_data_worker is None or not hasattr(market_data_worker, "manual_reconnect"):
+            return
+
+        if getattr(market_data_worker, "is_intentional_stop", False):
             return
 
         now = datetime.now()
@@ -2980,6 +2987,7 @@ class AutoTraderDialog(SetupPanelMixin, SetupSettingsMigrationMixin, SignalRende
         super().changeEvent(event)
 
     def closeEvent(self, event):
+        self._is_closing = True
         self._persist_setup_values()
         try:
             if hasattr(self, "_fetch_thread") and self._fetch_thread.isRunning():
