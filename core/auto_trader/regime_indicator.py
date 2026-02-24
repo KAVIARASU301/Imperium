@@ -39,6 +39,11 @@ _VOL_ICONS = {
     "NORMAL_VOL": "◆",
     "LOW_VOL":    "❄",
 }
+_VOL_LABELS = {
+    "HIGH_VOL": "HIGH VOLATILITY",
+    "NORMAL_VOL": "NORMAL VOLATILITY",
+    "LOW_VOL": "LOW VOLATILITY",
+}
 _SESSION_COLORS = {
     "OPEN_DRIVE": "#FFD700",
     "MORNING":    "#9CCAF4",
@@ -51,7 +56,7 @@ _SESSION_COLORS = {
 class RegimeIndicator(QWidget):
     """
     Compact pill widget:
-      [▲▲ STRONG TREND] [🔥 HIGH VOL] [MORNING] [ADX 31.4]
+      [▲▲ STRONG TREND] [🔥 HIGH VOLATILITY] [MORNING] [ADX 31.4]
     """
 
     def __init__(self, parent=None):
@@ -103,7 +108,7 @@ class RegimeIndicator(QWidget):
         sess_c  = _SESSION_COLORS.get(regime.session, "#8A99B3")
 
         trend_text = f"{_TREND_ICONS.get(regime.trend,'')} {regime.trend.replace('_',' ')}"
-        vol_text   = f"{_VOL_ICONS.get(regime.volatility,'')} {regime.volatility.replace('_',' ')}"
+        vol_text   = f"{_VOL_ICONS.get(regime.volatility,'')} {_VOL_LABELS.get(regime.volatility, regime.volatility.replace('_',' '))}"
         sess_text  = regime.session.replace("_", " ")
         adx_text   = f"ADX {regime.adx_value:.1f}"
 
