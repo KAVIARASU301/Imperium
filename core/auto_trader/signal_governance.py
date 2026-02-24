@@ -42,14 +42,15 @@ class SignalGovernance:
             "range_breakout": 0.30,
         }
         self.strategy_weights = dict(self._base_strategy_weights)
-        self._weight_posterior = {
-            name: [1.0 + (base_weight * 4.0), 1.0 + ((1.0 - base_weight) * 4.0)]
-            for name, base_weight in self._base_strategy_weights.items()
+        self.strategy_weight_window_days = 5
+        self.strategy_weight_decay_lambda = 0.9
+        self.strategy_weight_bars_per_day = 390
+        self._strategy_weight_floor = 0.05
+        self._strategy_edge_history = {
+            name: deque(maxlen=self.strategy_weight_window_days * self.strategy_weight_bars_per_day)
+            for name in self.STRATEGIES
         }
-        self._edge_ema_by_strategy = {name: 0.0 for name in self.STRATEGIES}
-        self._weight_learning_rate = 0.18
-        self._weight_decay = 0.985
-        self._edge_ema_alpha = 0.12
+        self._last_edge_idx_by_strategy = {name: -1 for name in self.STRATEGIES}
         self.regime_strategy_matrix = {
             "trend": {"atr_reversal": True, "atr_divergence": True, "ema_cross": True, "range_breakout": True},
             "chop": {"atr_reversal": True, "atr_divergence": False, "ema_cross": False, "range_breakout": False},
@@ -133,50 +134,34 @@ class SignalGovernance:
         self._health_by_strategy[strategy].append(float(signed_return))
 
     def _update_online_strategy_weights(self, realized_edge: dict[str, np.ndarray], closed_idx: int) -> None:
-        raw_weights: dict[str, float] = {}
-        edge_scale = 0.003
-
+        win_scores: dict[str, float] = {}
         for strategy in self.STRATEGIES:
-            alpha, beta = self._weight_posterior[strategy]
-            alpha = 1.0 + (alpha - 1.0) * self._weight_decay
-            beta = 1.0 + (beta - 1.0) * self._weight_decay
-
             strategy_edge = realized_edge.get(strategy)
-            if strategy_edge is not None and closed_idx < len(strategy_edge):
+            if strategy_edge is not None and closed_idx < len(strategy_edge) and closed_idx > self._last_edge_idx_by_strategy[strategy]:
                 edge = float(strategy_edge[closed_idx])
                 if not np.isnan(edge):
-                    success = 1.0 if edge > 0.0 else 0.0
-                    alpha += success
-                    beta += 1.0 - success
+                    self._strategy_edge_history[strategy].append(edge)
+                    self._last_edge_idx_by_strategy[strategy] = closed_idx
 
-                    prev_ema = self._edge_ema_by_strategy[strategy]
-                    self._edge_ema_by_strategy[strategy] = (
-                        (1.0 - self._edge_ema_alpha) * prev_ema
-                        + self._edge_ema_alpha * edge
-                    )
+            history = self._strategy_edge_history[strategy]
+            if not history:
+                win_scores[strategy] = 0.5
+                continue
 
-            self._weight_posterior[strategy] = [alpha, beta]
-            posterior_win_rate = alpha / max(alpha + beta, 1e-9)
-            edge_ema = self._edge_ema_by_strategy[strategy]
-            edge_score = float(np.clip((edge_ema + edge_scale) / (2.0 * edge_scale), 0.0, 1.0))
-            combined_score = 0.55 * posterior_win_rate + 0.45 * edge_score
-            raw_weights[strategy] = self._base_strategy_weights[strategy] * max(0.05, combined_score)
+            outcomes = (np.asarray(history, dtype=float) > 0.0).astype(float)
+            age = np.arange(len(outcomes) - 1, -1, -1, dtype=float)
+            decay_weights = np.power(self.strategy_weight_decay_lambda, age)
+            weighted_win_rate = float(np.dot(outcomes, decay_weights) / max(np.sum(decay_weights), 1e-9))
+            win_scores[strategy] = max(self._strategy_weight_floor, weighted_win_rate)
 
-        raw_sum = sum(raw_weights.values())
+        raw_sum = sum(win_scores.values())
         if raw_sum <= 0.0:
             return
 
-        normalized_weights = {
-            strategy: raw_weights[strategy] / raw_sum
+        self.strategy_weights = {
+            strategy: win_scores[strategy] / raw_sum
             for strategy in self.STRATEGIES
         }
-        for strategy in self.STRATEGIES:
-            current = self.strategy_weights[strategy]
-            target = normalized_weights[strategy]
-            self.strategy_weights[strategy] = (
-                (1.0 - self._weight_learning_rate) * current
-                + self._weight_learning_rate * target
-            )
 
     def _health_score(self, strategy: str) -> float:
         history = self._health_by_strategy.get(strategy)
