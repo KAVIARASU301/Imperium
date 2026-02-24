@@ -1,5 +1,7 @@
 import sys
 import logging
+from pathlib import Path
+import os
 
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox, QWidget
@@ -22,6 +24,9 @@ logger = logging.getLogger(__name__)
 
 def main():
     """Main function to run the application."""
+    project_root = Path(__file__).resolve().parent
+    os.chdir(project_root)
+
     app = QApplication(sys.argv)
 
     app.setApplicationName("imperium")
