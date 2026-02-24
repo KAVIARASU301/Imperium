@@ -2,6 +2,7 @@ import numpy as np
 import logging
 import pyqtgraph as pg
 from datetime import time
+from copy import deepcopy
 from core.auto_trader.indicators import (
     calculate_ema,
     calculate_atr,
@@ -9,6 +10,7 @@ from core.auto_trader.indicators import (
     is_chop_regime,
     calculate_regime_trend_filter,
 )
+from core.auto_trader.regime_engine import RegimeEngine
 from core.auto_trader.stacker import StackerState
 logger = logging.getLogger(__name__)
 
@@ -92,7 +94,13 @@ class SimulatorMixin:
 
 
 
-    def _resolve_side_strategy_from_masks(self, idx: int, side: str, strategy_masks: dict | None) -> str | None:
+    def _resolve_side_strategy_from_masks(
+            self,
+            idx: int,
+            side: str,
+            strategy_masks: dict | None,
+            allowed_strategies: dict[str, bool] | None = None,
+    ) -> str | None:
         if not strategy_masks:
             return None
 
@@ -104,6 +112,8 @@ class SimulatorMixin:
             reverse=True,
         )
         for strategy_type in ordered_strategies:
+            if allowed_strategies is not None and not allowed_strategies.get(strategy_type, True):
+                continue
             mask = side_masks.get(strategy_type)
             if mask is not None and idx < len(mask) and bool(mask[idx]):
                 return strategy_type
@@ -117,13 +127,14 @@ class SimulatorMixin:
             short_mask: np.ndarray,
             long_mask: np.ndarray,
             strategy_masks: dict | None,
+            allowed_strategies: dict[str, bool] | None = None,
     ) -> tuple[str | None, str | None]:
-        candidate_short = idx < len(short_mask) and bool(short_mask[idx])
-        candidate_long = idx < len(long_mask) and bool(long_mask[idx])
+        short_strategy = self._resolve_side_strategy_from_masks(idx, "short", strategy_masks, allowed_strategies)
+        long_strategy = self._resolve_side_strategy_from_masks(idx, "long", strategy_masks, allowed_strategies)
+        candidate_short = short_strategy is not None
+        candidate_long = long_strategy is not None
 
         if candidate_short and candidate_long:
-            short_strategy = self._resolve_side_strategy_from_masks(idx, "short", strategy_masks)
-            long_strategy = self._resolve_side_strategy_from_masks(idx, "long", strategy_masks)
             short_priority = self._strategy_priority(short_strategy)
             long_priority = self._strategy_priority(long_strategy)
 
@@ -132,9 +143,9 @@ class SimulatorMixin:
             return ("short", short_strategy) if short_priority > long_priority else ("long", long_strategy)
 
         if candidate_short:
-            return "short", self._resolve_side_strategy_from_masks(idx, "short", strategy_masks)
+            return "short", short_strategy
         if candidate_long:
-            return "long", self._resolve_side_strategy_from_masks(idx, "long", strategy_masks)
+            return "long", long_strategy
         return None, None
 
 
@@ -230,6 +241,15 @@ class SimulatorMixin:
         price_low_full = np.array(self.all_price_low_data[:length], dtype=float)
         atr_full = calculate_atr(price_high_full, price_low_full, close, 14)
         adx_full = compute_adx(price_high_full, price_low_full, close, 14)
+
+        regime_enabled = bool(
+            getattr(self, "regime_enabled_check", None)
+            and self.regime_enabled_check.isChecked()
+            and getattr(self, "regime_engine", None) is not None
+        )
+        sim_regime_engine = None
+        if regime_enabled:
+            sim_regime_engine = RegimeEngine(config=deepcopy(self.regime_engine.config))
 
         stop_points = float(max(0.1, self.automation_stoploss_input.value()))
         max_profit_giveback_points = float(max(0.0, self.max_profit_giveback_input.value()))
@@ -492,12 +512,32 @@ class SimulatorMixin:
                     active_trade["last_cvd_ema10"] = float(cvd_ema10[idx])
                     active_trade["last_cvd_ema51"] = float(cvd_ema51[idx])
 
+            allowed_for_bar = None
+            if sim_regime_engine is not None:
+                regime_snapshot = sim_regime_engine.classify(
+                    adx=adx_full[:idx + 1],
+                    atr=atr_full[:idx + 1],
+                    bar_time=ts,
+                )
+                allowed_for_bar = regime_snapshot.allowed_strategies
+
             signal_side, signal_strategy = self._resolve_signal_side_and_strategy(
                 idx=idx,
                 short_mask=short_mask,
                 long_mask=long_mask,
                 strategy_masks=strategy_masks,
+                allowed_strategies=allowed_for_bar,
             )
+
+            if signal_side is None and allowed_for_bar is not None:
+                had_raw_signal = (idx < len(short_mask) and bool(short_mask[idx])) or (idx < len(long_mask) and bool(long_mask[idx]))
+                if had_raw_signal:
+                    result["skipped"] += 1
+                    skip_side = "short" if idx < len(short_mask) and bool(short_mask[idx]) else "long"
+                    result["skipped_x"].append(float(x_arr[idx]))
+                    result["skipped_y"].append(float((high[idx] + y_offset[idx]) if skip_side == "short" else (low[idx] - y_offset[idx])))
+                    result["skipped_line_keys"].add(f"{'S' if skip_side == 'short' else 'L'}:{idx}")
+
             if signal_side is None:
                 continue
 

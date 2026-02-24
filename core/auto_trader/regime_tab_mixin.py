@@ -72,7 +72,7 @@ class RegimeTabMixin:
         self.regime_midday_end_input
         self.regime_afternoon_end_input
         self.regime_pre_close_end_input
-        self.regime_matrix_checks          — dict[(trend, strategy)] → QCheckBox
+        self.regime_matrix_checks          — dict[(trend, vol, strategy)] → QCheckBox
     """
 
     # Strategy keys displayed in matrix
@@ -323,61 +323,94 @@ class RegimeTabMixin:
         # ═════════════════════════════════════════════════════════════════
         # ROW 2 — Strategy enable matrix
         # ═════════════════════════════════════════════════════════════════
-        matrix_grp = QGroupBox("Strategy Enable Matrix  (per Trend Regime — Vol overrides applied automatically)")
+        matrix_grp = QGroupBox("Strategy Enable Matrix (per Trend + Volatility Regime)")
         matrix_layout = QVBoxLayout(matrix_grp)
         matrix_layout.setContentsMargins(7, 5, 7, 5)
         matrix_layout.addWidget(_note(
-            "Controls which strategies are ALLOWED in each trend regime during normal vol. "
-            "High-vol and Low-vol overrides (Range Breakout off in high-vol, most off in low-vol) "
-            "are always applied on top of this matrix regardless of checkboxes."
+            "Controls which strategies are ALLOWED for every Trend × Volatility regime combination. "
+            "These checkboxes directly power RegimeEngine.allowed_strategies."
         ))
 
         grid = QGridLayout()
         grid.setHorizontalSpacing(20)
         grid.setVerticalSpacing(6)
 
-        # Header row
-        for col, trend in enumerate(self._TREND_REGIMES, start=1):
-            lbl = QLabel(trend.replace("_", " "))
-            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            lbl.setStyleSheet(f"color:{_C_GRP_TITLE}; font-size:10px; font-weight:700;")
-            grid.addWidget(lbl, 0, col)
+        # Header rows
+        for block_idx, vol in enumerate(self._VOL_REGIMES):
+            col_start = 1 + block_idx * len(self._TREND_REGIMES)
+            vol_lbl = QLabel(vol.replace("_", " "))
+            vol_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            vol_lbl.setStyleSheet(f"color:{_C_GRP_TITLE}; font-size:10px; font-weight:700;")
+            grid.addWidget(vol_lbl, 0, col_start, 1, len(self._TREND_REGIMES))
 
-        self.regime_matrix_checks: dict[tuple[str, str], QCheckBox] = {}
+            for trend_offset, trend in enumerate(self._TREND_REGIMES):
+                col = col_start + trend_offset
+                trend_lbl = QLabel(trend.replace("_", " "))
+                trend_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                trend_lbl.setStyleSheet(f"color:{_C_NOTE}; font-size:9px; font-weight:700;")
+                grid.addWidget(trend_lbl, 1, col)
 
-        # Default enabled state per (trend, strategy)
+        self.regime_matrix_checks: dict[tuple[str, str, str], QCheckBox] = {}
+
         _defaults = {
-            ("STRONG_TREND", "atr_reversal"):   False,
-            ("STRONG_TREND", "atr_divergence"): True,
-            ("STRONG_TREND", "ema_cross"):       True,
-            ("STRONG_TREND", "range_breakout"):  True,
-            ("WEAK_TREND",   "atr_reversal"):    True,
-            ("WEAK_TREND",   "atr_divergence"):  True,
-            ("WEAK_TREND",   "ema_cross"):        True,
-            ("WEAK_TREND",   "range_breakout"):   True,
-            ("CHOP",         "atr_reversal"):     True,
-            ("CHOP",         "atr_divergence"):   False,
-            ("CHOP",         "ema_cross"):         False,
-            ("CHOP",         "range_breakout"):    False,
+            ("STRONG_TREND", "NORMAL_VOL", "atr_reversal"): False,
+            ("STRONG_TREND", "NORMAL_VOL", "atr_divergence"): True,
+            ("STRONG_TREND", "NORMAL_VOL", "ema_cross"): True,
+            ("STRONG_TREND", "NORMAL_VOL", "range_breakout"): True,
+            ("STRONG_TREND", "HIGH_VOL", "atr_reversal"): False,
+            ("STRONG_TREND", "HIGH_VOL", "atr_divergence"): True,
+            ("STRONG_TREND", "HIGH_VOL", "ema_cross"): True,
+            ("STRONG_TREND", "HIGH_VOL", "range_breakout"): False,
+            ("STRONG_TREND", "LOW_VOL", "atr_reversal"): False,
+            ("STRONG_TREND", "LOW_VOL", "atr_divergence"): True,
+            ("STRONG_TREND", "LOW_VOL", "ema_cross"): True,
+            ("STRONG_TREND", "LOW_VOL", "range_breakout"): True,
+            ("WEAK_TREND", "NORMAL_VOL", "atr_reversal"): True,
+            ("WEAK_TREND", "NORMAL_VOL", "atr_divergence"): True,
+            ("WEAK_TREND", "NORMAL_VOL", "ema_cross"): True,
+            ("WEAK_TREND", "NORMAL_VOL", "range_breakout"): True,
+            ("WEAK_TREND", "HIGH_VOL", "atr_reversal"): True,
+            ("WEAK_TREND", "HIGH_VOL", "atr_divergence"): True,
+            ("WEAK_TREND", "HIGH_VOL", "ema_cross"): True,
+            ("WEAK_TREND", "HIGH_VOL", "range_breakout"): False,
+            ("WEAK_TREND", "LOW_VOL", "atr_reversal"): True,
+            ("WEAK_TREND", "LOW_VOL", "atr_divergence"): False,
+            ("WEAK_TREND", "LOW_VOL", "ema_cross"): False,
+            ("WEAK_TREND", "LOW_VOL", "range_breakout"): False,
+            ("CHOP", "NORMAL_VOL", "atr_reversal"): True,
+            ("CHOP", "NORMAL_VOL", "atr_divergence"): False,
+            ("CHOP", "NORMAL_VOL", "ema_cross"): False,
+            ("CHOP", "NORMAL_VOL", "range_breakout"): False,
+            ("CHOP", "HIGH_VOL", "atr_reversal"): True,
+            ("CHOP", "HIGH_VOL", "atr_divergence"): False,
+            ("CHOP", "HIGH_VOL", "ema_cross"): False,
+            ("CHOP", "HIGH_VOL", "range_breakout"): False,
+            ("CHOP", "LOW_VOL", "atr_reversal"): False,
+            ("CHOP", "LOW_VOL", "atr_divergence"): False,
+            ("CHOP", "LOW_VOL", "ema_cross"): False,
+            ("CHOP", "LOW_VOL", "range_breakout"): False,
         }
 
-        for row, strategy in enumerate(self._REGIME_STRATEGIES, start=1):
+        for row, strategy in enumerate(self._REGIME_STRATEGIES, start=2):
             lbl = QLabel(self._REGIME_STRATEGY_LABELS[strategy])
             lbl.setStyleSheet(f"color:{_C_LABEL}; font-size:10px;")
             grid.addWidget(lbl, row, 0)
 
-            for col, trend in enumerate(self._TREND_REGIMES, start=1):
-                cb = QCheckBox()
-                cb.setChecked(_defaults.get((trend, strategy), True))
-                cb.setStyleSheet("""
-                    QCheckBox::indicator { width:14px; height:14px; }
-                    QCheckBox::indicator:unchecked { background:#1B1F2B; border:1px solid #3A4458; border-radius:3px; }
-                    QCheckBox::indicator:checked { background:#26A69A; border:1px solid #26A69A; border-radius:3px; }
-                """)
-                cb.toggled.connect(self._on_regime_settings_changed)
-                cb.setToolTip(f"Allow {self._REGIME_STRATEGY_LABELS[strategy]} in {trend.replace('_',' ')} regime")
-                self.regime_matrix_checks[(trend, strategy)] = cb
-                grid.addWidget(cb, row, col, alignment=Qt.AlignmentFlag.AlignCenter)
+            for block_idx, vol in enumerate(self._VOL_REGIMES):
+                col_start = 1 + block_idx * len(self._TREND_REGIMES)
+                for trend_offset, trend in enumerate(self._TREND_REGIMES):
+                    col = col_start + trend_offset
+                    cb = QCheckBox()
+                    cb.setChecked(_defaults.get((trend, vol, strategy), True))
+                    cb.setStyleSheet("""
+                        QCheckBox::indicator { width:14px; height:14px; }
+                        QCheckBox::indicator:unchecked { background:#1B1F2B; border:1px solid #3A4458; border-radius:3px; }
+                        QCheckBox::indicator:checked { background:#26A69A; border:1px solid #26A69A; border-radius:3px; }
+                    """)
+                    cb.toggled.connect(self._on_regime_settings_changed)
+                    cb.setToolTip(f"Allow {self._REGIME_STRATEGY_LABELS[strategy]} in {trend.replace('_',' ')} + {vol.replace('_', ' ')}")
+                    self.regime_matrix_checks[(trend, vol, strategy)] = cb
+                    grid.addWidget(cb, row, col, alignment=Qt.AlignmentFlag.AlignCenter)
 
         matrix_layout.addLayout(grid)
         main_layout.addWidget(matrix_grp)
@@ -424,24 +457,14 @@ class RegimeTabMixin:
         def _qt_to_dtime(qtime):
             return dtime(qtime.hour(), qtime.minute())
 
-        # Build strategy matrix from checkboxes
+        # Build strategy matrix from checkboxes (trend + volatility specific)
         matrix = {}
-        for vol in ("HIGH_VOL", "NORMAL_VOL", "LOW_VOL"):
+        for vol in self._VOL_REGIMES:
             for trend in self._TREND_REGIMES:
                 row = {}
                 for strategy in self._REGIME_STRATEGIES:
-                    # Only NORMAL_VOL uses UI checkboxes; HIGH/LOW have hardcoded overrides
-                    if vol == "NORMAL_VOL":
-                        cb = self.regime_matrix_checks.get((trend, strategy))
-                        row[strategy] = cb.isChecked() if cb else True
-                    elif vol == "HIGH_VOL":
-                        # Range breakout off; reversal stays per trend
-                        cb = self.regime_matrix_checks.get((trend, strategy))
-                        base = cb.isChecked() if cb else True
-                        row[strategy] = base and (strategy != "range_breakout")
-                    else:  # LOW_VOL
-                        # Almost everything off in low vol
-                        row[strategy] = strategy == "atr_reversal" and trend != "CHOP"
+                    cb = self.regime_matrix_checks.get((trend, vol, strategy))
+                    row[strategy] = cb.isChecked() if cb else True
                 matrix[(trend, vol)] = row
 
         config = RegimeConfig(
@@ -480,21 +503,45 @@ class RegimeTabMixin:
         self.regime_pre_close_end_input.setTime(QTime(15, 30))
 
         _defaults = {
-            ("STRONG_TREND", "atr_reversal"):   False,
-            ("STRONG_TREND", "atr_divergence"): True,
-            ("STRONG_TREND", "ema_cross"):       True,
-            ("STRONG_TREND", "range_breakout"):  True,
-            ("WEAK_TREND",   "atr_reversal"):    True,
-            ("WEAK_TREND",   "atr_divergence"):  True,
-            ("WEAK_TREND",   "ema_cross"):        True,
-            ("WEAK_TREND",   "range_breakout"):   True,
-            ("CHOP",         "atr_reversal"):     True,
-            ("CHOP",         "atr_divergence"):   False,
-            ("CHOP",         "ema_cross"):         False,
-            ("CHOP",         "range_breakout"):    False,
+            ("STRONG_TREND", "NORMAL_VOL", "atr_reversal"): False,
+            ("STRONG_TREND", "NORMAL_VOL", "atr_divergence"): True,
+            ("STRONG_TREND", "NORMAL_VOL", "ema_cross"): True,
+            ("STRONG_TREND", "NORMAL_VOL", "range_breakout"): True,
+            ("STRONG_TREND", "HIGH_VOL", "atr_reversal"): False,
+            ("STRONG_TREND", "HIGH_VOL", "atr_divergence"): True,
+            ("STRONG_TREND", "HIGH_VOL", "ema_cross"): True,
+            ("STRONG_TREND", "HIGH_VOL", "range_breakout"): False,
+            ("STRONG_TREND", "LOW_VOL", "atr_reversal"): False,
+            ("STRONG_TREND", "LOW_VOL", "atr_divergence"): True,
+            ("STRONG_TREND", "LOW_VOL", "ema_cross"): True,
+            ("STRONG_TREND", "LOW_VOL", "range_breakout"): True,
+            ("WEAK_TREND", "NORMAL_VOL", "atr_reversal"): True,
+            ("WEAK_TREND", "NORMAL_VOL", "atr_divergence"): True,
+            ("WEAK_TREND", "NORMAL_VOL", "ema_cross"): True,
+            ("WEAK_TREND", "NORMAL_VOL", "range_breakout"): True,
+            ("WEAK_TREND", "HIGH_VOL", "atr_reversal"): True,
+            ("WEAK_TREND", "HIGH_VOL", "atr_divergence"): True,
+            ("WEAK_TREND", "HIGH_VOL", "ema_cross"): True,
+            ("WEAK_TREND", "HIGH_VOL", "range_breakout"): False,
+            ("WEAK_TREND", "LOW_VOL", "atr_reversal"): True,
+            ("WEAK_TREND", "LOW_VOL", "atr_divergence"): False,
+            ("WEAK_TREND", "LOW_VOL", "ema_cross"): False,
+            ("WEAK_TREND", "LOW_VOL", "range_breakout"): False,
+            ("CHOP", "NORMAL_VOL", "atr_reversal"): True,
+            ("CHOP", "NORMAL_VOL", "atr_divergence"): False,
+            ("CHOP", "NORMAL_VOL", "ema_cross"): False,
+            ("CHOP", "NORMAL_VOL", "range_breakout"): False,
+            ("CHOP", "HIGH_VOL", "atr_reversal"): True,
+            ("CHOP", "HIGH_VOL", "atr_divergence"): False,
+            ("CHOP", "HIGH_VOL", "ema_cross"): False,
+            ("CHOP", "HIGH_VOL", "range_breakout"): False,
+            ("CHOP", "LOW_VOL", "atr_reversal"): False,
+            ("CHOP", "LOW_VOL", "atr_divergence"): False,
+            ("CHOP", "LOW_VOL", "ema_cross"): False,
+            ("CHOP", "LOW_VOL", "range_breakout"): False,
         }
-        for (trend, strategy), cb in self.regime_matrix_checks.items():
-            cb.setChecked(_defaults.get((trend, strategy), True))
+        for (trend, vol, strategy), cb in self.regime_matrix_checks.items():
+            cb.setChecked(_defaults.get((trend, vol, strategy), True))
 
     def update_regime_badge(self, regime):
         """
@@ -566,8 +613,8 @@ class RegimeTabMixin:
             "regime_afternoon_end":    self.regime_afternoon_end_input.time().toString("HH:mm"),
             "regime_pre_close_end":    self.regime_pre_close_end_input.time().toString("HH:mm"),
         }
-        for (trend, strategy), cb in self.regime_matrix_checks.items():
-            d[f"regime_matrix_{trend}_{strategy}"] = cb.isChecked()
+        for (trend, vol, strategy), cb in self.regime_matrix_checks.items():
+            d[f"regime_matrix_{trend}_{vol}_{strategy}"] = cb.isChecked()
         return d
 
     def _regime_settings_from_dict(self, d: dict):
@@ -596,9 +643,11 @@ class RegimeTabMixin:
         self.regime_afternoon_end_input.setTime(_qtime(d.get("regime_afternoon_end", "15:00"), 15, 0))
         self.regime_pre_close_end_input.setTime(_qtime(d.get("regime_pre_close_end", "15:30"), 15, 30))
 
-        for (trend, strategy), cb in self.regime_matrix_checks.items():
-            key = f"regime_matrix_{trend}_{strategy}"
-            if key in d:
+        for (trend, vol, strategy), cb in self.regime_matrix_checks.items():
+            key = f"regime_matrix_{trend}_{vol}_{strategy}"
+            legacy_key = f"regime_matrix_{trend}_{strategy}"
+            value = d.get(key, d.get(legacy_key, None))
+            if value is not None:
                 cb.blockSignals(True)
-                cb.setChecked(bool(d[key]))
+                cb.setChecked(bool(value))
                 cb.blockSignals(False)
