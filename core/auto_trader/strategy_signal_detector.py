@@ -55,6 +55,9 @@ class StrategySignalDetector:
         self.active_ema_cross_short = False
         self.ema_cross_entry_idx = -1
 
+        # Incremental cache for heavy breakout computations
+        self._range_breakout_cache: dict[str, object] = {}
+
     def detect_atr_reversal_strategy(
             self,
             price_atr_above: np.ndarray,  # Price ATR reversal - above EMA (potential SHORT)
@@ -651,21 +654,34 @@ class StrategySignalDetector:
         # Convert consolidation requirement to bars
         min_consol_bars = max(0, int(round(min_consolidation_minutes / max(self.timeframe_minutes, 1))))
 
+        cache_key = (lookback_bars, min_consol_bars, float(min_consolidation_adx), float(breakout_threshold_multiplier))
+        cache = self._range_breakout_cache if self._range_breakout_cache.get("key") == cache_key else {}
+        can_incremental = bool(cache) and cache.get("length", 0) < length and cache.get("length", 0) >= lookback_bars
+
+        if can_incremental:
+            cached_len = int(cache["length"])
+            long_breakout[:cached_len] = cache["long"][:cached_len]
+            short_breakout[:cached_len] = cache["short"][:cached_len]
+            range_highs[:cached_len] = cache["highs"][:cached_len]
+            range_lows[:cached_len] = cache["lows"][:cached_len]
+            calc_start = max(lookback_bars, cached_len - 2)
+        else:
+            calc_start = lookback_bars
+
         # Pre-compute ADX only if needed (expensive — avoid if not configured)
         adx_series = None
         if min_consol_bars > 0 and min_consolidation_adx > 0:
-            try:
-                # Simple Wilder ADX (14-period)
+            if can_incremental and isinstance(cache.get("adx"), np.ndarray) and len(cache["adx"]) == cached_len:
                 adx_series = self._compute_adx_simple(price_high, price_low, price_close, period=14)
-            except Exception:
-                adx_series = None
+            else:
+                adx_series = self._compute_adx_simple(price_high, price_low, price_close, period=14)
 
         # breakout_threshold_multiplier is converted into a minimum breakout
         # extension beyond the range boundary. 1.0 ~= 3% of the prior range.
         base_breakout_strength = max(0.0, 0.03 * float(breakout_threshold_multiplier))
 
         # Calculate rolling range and average range
-        for i in range(lookback_bars, length):
+        for i in range(calc_start, length):
             start_idx = max(0, i - lookback_bars)
             window_high = np.max(price_high[start_idx:i])
             window_low = np.min(price_low[start_idx:i])
@@ -744,6 +760,15 @@ class StrategySignalDetector:
                 if volume_confirmed and cvd_bearish and strong_breakout:
                     short_breakout[i] = True
 
+        self._range_breakout_cache = {
+            "key": cache_key,
+            "length": length,
+            "long": long_breakout.copy(),
+            "short": short_breakout.copy(),
+            "highs": range_highs.copy(),
+            "lows": range_lows.copy(),
+            "adx": adx_series.copy() if isinstance(adx_series, np.ndarray) else None,
+        }
         return long_breakout, short_breakout, range_highs, range_lows
 
     def detect_cvd_range_breakout_strategy(
@@ -1113,6 +1138,9 @@ class StrategySignalDetector:
                 self.active_ema_cross_long = False
                 self.ema_cross_entry_idx = -1
 
+        # Incremental cache for heavy breakout computations
+        self._range_breakout_cache: dict[str, object] = {}
+
         # Check SHORT exit
         if self.active_ema_cross_short:
             if (price_close[current_idx] > price_ema10[current_idx] or
@@ -1120,5 +1148,8 @@ class StrategySignalDetector:
                 exit_short = True
                 self.active_ema_cross_short = False
                 self.ema_cross_entry_idx = -1
+
+        # Incremental cache for heavy breakout computations
+        self._range_breakout_cache: dict[str, object] = {}
 
         return exit_long, exit_short

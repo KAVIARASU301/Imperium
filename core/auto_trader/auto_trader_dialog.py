@@ -1,4 +1,3 @@
-import json
 import logging
 import re
 from collections import deque
@@ -25,7 +24,7 @@ from core.auto_trader.constants import TRADING_START, TRADING_END, MINUTES_PER_S
 from core.auto_trader.data_worker import _DataFetchWorker
 from core.auto_trader.date_navigator import DateNavigator
 from core.auto_trader.setup_panel import SetupPanelMixin
-from core.auto_trader.settings_manager import SettingsManagerMixin
+from core.auto_trader.settings_manager import SetupSettingsMigrationMixin
 from core.auto_trader.signal_renderer import SignalRendererMixin
 from core.auto_trader.simulator import SimulatorMixin
 from core.auto_trader.indicators import calculate_ema, calculate_vwap, calculate_atr, compute_adx, build_slope_direction_masks, is_chop_regime
@@ -39,7 +38,7 @@ logger = logging.getLogger(__name__)
 # Auto Trader DIalog
 # =============================================================================
 
-class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixin, SimulatorMixin, QDialog):
+class AutoTraderDialog(SetupPanelMixin, SetupSettingsMigrationMixin, SignalRendererMixin, SimulatorMixin, QDialog):
     REFRESH_INTERVAL_MS = 3000
     LIVE_TICK_MAX_POINTS = 6000
     LIVE_TICK_REPAINT_MS = 80
@@ -150,8 +149,15 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self._is_loading = False
         self._last_live_refresh_minute: datetime | None = None
 
-        # Plot caches
+        # Plot caches (explicitly initialized so mixins never depend on dynamic attrs)
         self.all_timestamps: list[datetime] = []
+        self.all_cvd_data: list[float] = []
+        self.all_cvd_high_data: list[float] = []
+        self.all_cvd_low_data: list[float] = []
+        self.all_price_data: list[float] = []
+        self.all_price_high_data: list[float] = []
+        self.all_price_low_data: list[float] = []
+        self.all_volume_data: list[float] = []
         self._last_plot_x_indices: list[float] = []
 
         # 🎯 Confluence signal lines (price + CVD both reversal at same bar)
@@ -993,30 +999,39 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
     def _load_persisted_setup_values(self):
         key_prefix = self._settings_key_prefix()
         global_key_prefix = self._global_settings_key_prefix()
-        json_settings = self._read_setup_json()
+        migration_settings = self._read_setup_json_for_migration()
+        migrated_values: dict[str, object] = {}
+
+        def _coerce_setting(value, default, value_type=None):
+            if value_type is None:
+                return value
+            try:
+                if value_type is bool:
+                    if isinstance(value, bool):
+                        return value
+                    if isinstance(value, str):
+                        return value.strip().lower() in {"1", "true", "yes", "on"}
+                    return bool(value)
+                return value_type(value)
+            except (TypeError, ValueError):
+                return default
 
         def _read_setting(name: str, default, value_type=None):
-            if name in json_settings:
-                value = json_settings[name]
-                if value_type is None:
-                    return value
-                try:
-                    if value_type is bool:
-                        if isinstance(value, bool):
-                            return value
-                        if isinstance(value, str):
-                            return value.strip().lower() in {"1", "true", "yes", "on"}
-                        return bool(value)
-                    return value_type(value)
-                except (TypeError, ValueError):
-                    return default
-
             token_key = f"{key_prefix}/{name}"
             global_key = f"{global_key_prefix}/{name}"
-            key_to_read = global_key if self._settings.contains(global_key) else token_key
-            if value_type is None:
-                return self._settings.value(key_to_read, default)
-            return self._settings.value(key_to_read, default, type=value_type)
+            if self._settings.contains(global_key):
+                key_to_read = global_key
+                raw_value = self._settings.value(key_to_read, default)
+                return _coerce_setting(raw_value, default, value_type)
+            if self._settings.contains(token_key):
+                raw_value = self._settings.value(token_key, default)
+                return _coerce_setting(raw_value, default, value_type)
+
+            if name in migration_settings:
+                migrated_values[name] = migration_settings[name]
+                return _coerce_setting(migration_settings[name], default, value_type)
+
+            return default
 
         def _apply_combo_value(combo: QComboBox, data_value, fallback_index: int = 0):
             idx = combo.findData(data_value)
@@ -1343,6 +1358,9 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
         self._apply_visual_settings()
         self._update_atr_reversal_markers()
         self._setup_values_ready = True
+        if migrated_values:
+            self._persist_setup_values()
+            self._mark_setup_json_migrated()
         self._on_automation_settings_changed()
         self._log_active_priority_list_if_needed()
 
@@ -1430,7 +1448,6 @@ class AutoTraderDialog(SetupPanelMixin, SettingsManagerMixin, SignalRendererMixi
             self._settings.setValue(f"{global_key_prefix}/{name}", value)
 
         self._settings.sync()
-        self._write_setup_json(values_to_persist)
 
     # =========================================================================
     # SECTION 4: SETTINGS CHANGE HANDLERS
