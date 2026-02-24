@@ -444,7 +444,6 @@ class CvdAutomationCoordinator:
         max_profit_giveback_points = _to_finite_float(active_trade.get("max_profit_giveback_points"), 0.0)
         open_drive_max_profit_giveback_points = _to_finite_float(active_trade.get("open_drive_max_profit_giveback_points"), 0.0)
         max_profit_giveback_strategies = set(active_trade.get("max_profit_giveback_strategies") or ["atr_reversal", "ema_cross", "atr_divergence", "cvd_range_breakout", "range_breakout", "open_drive"])
-        atr_trailing_step_points = _to_finite_float(active_trade.get("atr_trailing_step_points"), 10.0)
         entry_underlying = _to_finite_float(active_trade.get("entry_underlying"), 0.0)
         max_favorable_points = _to_finite_float(active_trade.get("max_favorable_points"), 0.0)
         sl_underlying = _to_finite_float(active_trade.get("sl_underlying"), None) if active_trade.get("sl_underlying") is not None else None
@@ -459,15 +458,9 @@ class CvdAutomationCoordinator:
 
         if stoploss_points > 0 and entry_underlying > 0:
             trail_offset = 0.0
-            if strategy_type == "atr_reversal" and atr_trailing_step_points > 0:
-                dynamic_step = atr_trailing_step_points
-                entry_atr = _to_finite_float(active_trade.get("entry_atr"), 0.0)
-                current_atr = _to_finite_float(state.get("atr"), 0.0)
-                if entry_atr > 0 and current_atr > 0:
-                    dynamic_step *= max(1.0, current_atr / entry_atr)
-                trail_steps = int(max(0.0, favorable_move) // dynamic_step)
-                if trail_steps > 0:
-                    trail_offset = trail_steps * dynamic_step
+            if strategy_type == "atr_reversal":
+                # Keep ATR reversal SL simple and fixed from entry.
+                trail_offset = 0.0
             elif strategy_type in {"ema_cross", "range_breakout", "cvd_range_breakout", "open_drive"} and favorable_move >= 200.0:
                 trail_offset = (1 + int((favorable_move - 200.0) // 100.0)) * 100.0
             if trail_offset > 0:
@@ -489,10 +482,6 @@ class CvdAutomationCoordinator:
         cvd_cross_below_ema10 = all(v is not None for v in (prev_cvd, prev_cvd_ema10)) and cvd_ema10 != 0 and prev_cvd >= prev_cvd_ema10 and cvd_close < cvd_ema10
         cvd_cross_above_ema51 = all(v is not None for v in (prev_cvd, prev_cvd_ema51)) and cvd_ema51 != 0 and prev_cvd <= prev_cvd_ema51 and cvd_close > cvd_ema51
         cvd_cross_below_ema51 = all(v is not None for v in (prev_cvd, prev_cvd_ema51)) and cvd_ema51 != 0 and prev_cvd >= prev_cvd_ema51 and cvd_close < cvd_ema51
-        price_cross_above_ema51_simple = all(v is not None for v in (prev_price, prev_ema51_simple)) and ema51_simple > 0 and prev_price <= prev_ema51_simple and price_close > ema51_simple
-        price_cross_below_ema51_simple = all(v is not None for v in (prev_price, prev_ema51_simple)) and ema51_simple > 0 and prev_price >= prev_ema51_simple and price_close < ema51_simple
-        cvd_cross_above_ema51_simple = all(v is not None for v in (prev_cvd, prev_cvd_ema51_simple)) and cvd_ema51_simple != 0 and prev_cvd <= prev_cvd_ema51_simple and cvd_close > cvd_ema51_simple
-        cvd_cross_below_ema51_simple = all(v is not None for v in (prev_cvd, prev_cvd_ema51_simple)) and cvd_ema51_simple != 0 and prev_cvd >= prev_cvd_ema51_simple and cvd_close < cvd_ema51_simple
 
         use_open_drive_override = strategy_type == "open_drive" and (open_drive_max_profit_giveback_points or 0.0) > 0
         effective_giveback_points = (
@@ -506,7 +495,7 @@ class CvdAutomationCoordinator:
         exit_reason = None
         if hit_stop:
             exit_reason = "AUTO_SL"
-        elif giveback_enabled_for_strategy and effective_giveback_points > 0 and max_favorable_points and (max_favorable_points - favorable_move) >= effective_giveback_points:
+        elif strategy_type != "atr_reversal" and giveback_enabled_for_strategy and effective_giveback_points > 0 and max_favorable_points and (max_favorable_points - favorable_move) >= effective_giveback_points:
             exit_reason = "AUTO_MAX_PROFIT_GIVEBACK"
         elif strategy_type == "ema_cross" and ((signal_side == "long" and cvd_cross_below_ema10) or (signal_side == "short" and cvd_cross_above_ema10)):
             exit_reason = "AUTO_EMA10_CROSS"
@@ -520,14 +509,16 @@ class CvdAutomationCoordinator:
         ):
             exit_reason = "AUTO_OPEN_DRIVE_FAST_EMA_CLOSE_EXIT"
         elif strategy_type == "atr_reversal" and (
-                (signal_side == "long" and (price_cross_above_ema51_simple or cvd_cross_above_ema51_simple))
-                or (signal_side == "short" and (price_cross_below_ema51_simple or cvd_cross_below_ema51_simple))
+                (signal_side == "long" and ((ema51_simple > 0 and price_close >= ema51_simple) or (cvd_ema51_simple != 0 and cvd_close >= cvd_ema51_simple)))
+                or (signal_side == "short" and ((ema51_simple > 0 and price_close <= ema51_simple) or (cvd_ema51_simple != 0 and cvd_close <= cvd_ema51_simple)))
         ):
             logger.debug(
-                "[AUTO] ATR reversal exit via persistent EMA51 state: side=%s price=%.2f ema51=%.2f",
+                "[AUTO] ATR reversal target hit at EMA51: side=%s price=%.2f ema51=%.2f cvd=%.2f cvd_ema51=%.2f",
                 signal_side,
                 price_close,
                 ema51,
+                cvd_close,
+                cvd_ema51,
             )
             exit_reason = "AUTO_ATR_REVERSAL_EXIT"
 

@@ -218,12 +218,12 @@ class SimulatorMixin:
         low = np.array(self.all_price_low_data[:length], dtype=float)
         cvd_close = np.array(self.all_cvd_data[:length], dtype=float)
 
-        price_fast_filter, price_slow_filter = calculate_regime_trend_filter(close)
-        cvd_fast_filter, cvd_slow_filter = calculate_regime_trend_filter(cvd_close)
-        ema10 = price_fast_filter  # adaptive fast — replaces fixed EMA10
-        ema51 = price_slow_filter  # adaptive slow (KAMA) — replaces fixed EMA51
+        price_fast_filter, _ = calculate_regime_trend_filter(close)
+        cvd_fast_filter, _ = calculate_regime_trend_filter(cvd_close)
+        ema10 = price_fast_filter
+        ema51 = calculate_ema(close, 51)
         cvd_ema10 = cvd_fast_filter
-        cvd_ema51 = cvd_slow_filter
+        cvd_ema51 = calculate_ema(cvd_close, 51)
 
         # Pre-compute ATR and ADX once for the full array (used by is_chop_regime)
         price_high_full = np.array(self.all_price_high_data[:length], dtype=float)
@@ -235,7 +235,6 @@ class SimulatorMixin:
         max_profit_giveback_points = float(max(0.0, self.max_profit_giveback_input.value()))
         open_drive_max_profit_giveback_points = float(max(0.0, getattr(self, "open_drive_max_profit_giveback_input", None).value() if getattr(self, "open_drive_max_profit_giveback_input", None) is not None else 0.0))
         max_profit_giveback_strategies = set(self._selected_max_giveback_strategies())
-        atr_trailing_step_points = float(max(0.5, getattr(self, "atr_trailing_step_input", None).value() if getattr(self, "atr_trailing_step_input", None) is not None else 10.0))
         atr_skip_limit = int(getattr(self, "atr_skip_limit_input", None) and
                              self.atr_skip_limit_input.value() or 0)
 
@@ -395,21 +394,8 @@ class SimulatorMixin:
 
                 trail_offset = 0.0
                 if active_trade.get("strategy_type") == "atr_reversal":
-                    dynamic_step = atr_trailing_step_points
-                    entry_atr = float(active_trade.get("entry_atr") or 0.0)
-                    current_atr = float(atr_full[idx]) if idx < len(atr_full) else 0.0
-                    if (
-                        dynamic_step > 0
-                        and np.isfinite(entry_atr)
-                        and entry_atr > 0
-                        and np.isfinite(current_atr)
-                        and current_atr > 0
-                    ):
-                        dynamic_step *= max(1.0, current_atr / entry_atr)
-                    if dynamic_step > 0:
-                        trail_steps = int(max(0.0, favorable_move) // dynamic_step)
-                        if trail_steps > 0:
-                            trail_offset = trail_steps * dynamic_step
+                    # Keep ATR reversal stop-loss fixed at user configured points.
+                    trail_offset = 0.0
                 elif active_trade.get("strategy_type") in {"ema_cross", "range_breakout", "cvd_range_breakout"}:
                     initial_trigger_points = 200.0
                     incremental_trigger_points = 100.0
@@ -459,6 +445,11 @@ class SimulatorMixin:
                 exit_now = False
                 if hit_stop:
                     exit_now = True
+                elif active_strategy_type == "atr_reversal":
+                    exit_now = (
+                        (signal_side == "long" and ((ema51[idx] > 0 and price_close >= ema51[idx]) or (cvd_ema51[idx] != 0 and cvd_close[idx] >= cvd_ema51[idx])))
+                        or (signal_side == "short" and ((ema51[idx] > 0 and price_close <= ema51[idx]) or (cvd_ema51[idx] != 0 and cvd_close[idx] <= cvd_ema51[idx])))
+                    )
                 elif max_favorable_points > 0:
                     use_open_drive_override = (
                         active_strategy_type == "open_drive"
@@ -488,15 +479,7 @@ class SimulatorMixin:
                         or (signal_side == "short" and (price_close > ema10[idx] or cvd_close[idx] > cvd_ema10[idx]))
                     )
                 else:
-                    # Keep ATR reversal exit logic aligned with live coordinator:
-                    # persistent price-vs-EMA51 state check (not one-time cross event).
-                    exit_now = (
-                        ema51[idx] > 0
-                        and (
-                            (signal_side == "long" and price_close >= ema51[idx])
-                            or (signal_side == "short" and price_close <= ema51[idx])
-                        )
-                    )
+                    exit_now = False
 
                 if exit_now:
                     _close_trade(idx)

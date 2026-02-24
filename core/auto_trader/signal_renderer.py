@@ -190,12 +190,12 @@ class SignalRendererMixin:
         x_arr = np.array(self._last_plot_x_indices, dtype=float)
         price_data_array = np.array(self.all_price_data, dtype=float)
         cvd_data_array = np.array(self.all_cvd_data, dtype=float)
-        price_fast_filter, price_slow_filter = calculate_regime_trend_filter(price_data_array)
-        cvd_fast_filter, cvd_slow_filter = calculate_regime_trend_filter(cvd_data_array)
-        ema10 = price_fast_filter   # adaptive fast — replaces fixed EMA10
-        ema51 = price_slow_filter   # adaptive slow (KAMA) — replaces fixed EMA51
+        price_fast_filter, _ = calculate_regime_trend_filter(price_data_array)
+        cvd_fast_filter, _ = calculate_regime_trend_filter(cvd_data_array)
+        ema10 = price_fast_filter
+        ema51 = calculate_ema(price_data_array, 51)
         cvd_ema10 = cvd_fast_filter
-        cvd_ema51 = cvd_slow_filter
+        cvd_ema51 = calculate_ema(cvd_data_array, 51)
         idx = self._latest_closed_bar_index()
         if idx is None:
             return
