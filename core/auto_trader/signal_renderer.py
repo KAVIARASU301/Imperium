@@ -23,6 +23,8 @@ logger = logging.getLogger(__name__)
 class SignalRendererMixin:
     def _on_atr_settings_changed(self, *_):
         """Recompute ATR markers from plotted data without refetching history."""
+        self.strategy_detector.ATR_EXTENSION_THRESHOLD = float(self.atr_extension_threshold_input.value())
+        self.strategy_detector.ATR_FLAT_VELOCITY_PCT = float(self.atr_flat_velocity_pct_input.value())
         self._update_atr_reversal_markers()
         self._persist_setup_values()
 
@@ -439,6 +441,9 @@ class SignalRendererMixin:
             short_context=breakout_short_context,
             slope_lookback_bars=max(1, int(round(3 / max(self.timeframe_minutes, 1))))
         )
+
+        self.strategy_detector.ATR_EXTENSION_THRESHOLD = float(self.atr_extension_threshold_input.value())
+        self.strategy_detector.ATR_FLAT_VELOCITY_PCT = float(self.atr_flat_velocity_pct_input.value())
 
         short_atr_reversal, long_atr_reversal, short_atr_reversal_raw, long_atr_reversal_raw = \
             self.strategy_detector.detect_atr_reversal_strategy(

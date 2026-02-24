@@ -567,6 +567,32 @@ class AutoTraderDialog(SetupPanelMixin, SetupSettingsMigrationMixin, SignalRende
         )
         self.cvd_atr_distance_input.valueChanged.connect(self._on_atr_settings_changed)
 
+        self.atr_extension_threshold_input = QDoubleSpinBox()
+        self.atr_extension_threshold_input.setRange(0.5, 3.0)
+        self.atr_extension_threshold_input.setDecimals(2)
+        self.atr_extension_threshold_input.setSingleStep(0.05)
+        self.atr_extension_threshold_input.setValue(1.10)
+        self.atr_extension_threshold_input.setFixedWidth(96)
+        self.atr_extension_threshold_input.setStyleSheet(compact_spinbox_style)
+        self.atr_extension_threshold_input.setToolTip(
+            "Minimum normalized ATR required for ATR reversal gating.\n"
+            "Lower values increase signal frequency; higher values make it stricter."
+        )
+        self.atr_extension_threshold_input.valueChanged.connect(self._on_atr_settings_changed)
+
+        self.atr_flat_velocity_pct_input = QDoubleSpinBox()
+        self.atr_flat_velocity_pct_input.setRange(0.0, 0.2)
+        self.atr_flat_velocity_pct_input.setDecimals(3)
+        self.atr_flat_velocity_pct_input.setSingleStep(0.005)
+        self.atr_flat_velocity_pct_input.setValue(0.020)
+        self.atr_flat_velocity_pct_input.setFixedWidth(96)
+        self.atr_flat_velocity_pct_input.setStyleSheet(compact_spinbox_style)
+        self.atr_flat_velocity_pct_input.setToolTip(
+            "Maximum ATR velocity percentage treated as flat/contracting.\n"
+            "Higher values allow more signals to pass the flatness gate."
+        )
+        self.atr_flat_velocity_pct_input.valueChanged.connect(self._on_atr_settings_changed)
+
         # EMA Label
         ema_label = QLabel("EMAs:")
         ema_label.setStyleSheet("color: #B0B0B0; font-weight: 600; font-size: 12px;")
@@ -1057,6 +1083,8 @@ class AutoTraderDialog(SetupPanelMixin, SetupSettingsMigrationMixin, SignalRende
         self.atr_base_ema_input.blockSignals(True)
         self.atr_distance_input.blockSignals(True)
         self.cvd_atr_distance_input.blockSignals(True)
+        self.atr_extension_threshold_input.blockSignals(True)
+        self.atr_flat_velocity_pct_input.blockSignals(True)
         self.cvd_ema_gap_input.blockSignals(True)
         self.signal_filter_combo.blockSignals(True)
         self.atr_marker_filter_combo.blockSignals(True)
@@ -1141,6 +1169,12 @@ class AutoTraderDialog(SetupPanelMixin, SetupSettingsMigrationMixin, SignalRende
         )
         self.cvd_atr_distance_input.setValue(
             _read_setting("cvd_atr_distance", self.cvd_atr_distance_input.value(), float)
+        )
+        self.atr_extension_threshold_input.setValue(
+            _read_setting("atr_extension_threshold", self.atr_extension_threshold_input.value(), float)
+        )
+        self.atr_flat_velocity_pct_input.setValue(
+            _read_setting("atr_flat_velocity_pct", self.atr_flat_velocity_pct_input.value(), float)
         )
         self.cvd_ema_gap_input.setValue(
             _read_setting("cvd_ema_gap", self.cvd_ema_gap_input.value(), int)
@@ -1318,6 +1352,8 @@ class AutoTraderDialog(SetupPanelMixin, SetupSettingsMigrationMixin, SignalRende
         self.atr_base_ema_input.blockSignals(False)
         self.atr_distance_input.blockSignals(False)
         self.cvd_atr_distance_input.blockSignals(False)
+        self.atr_extension_threshold_input.blockSignals(False)
+        self.atr_flat_velocity_pct_input.blockSignals(False)
         self.cvd_ema_gap_input.blockSignals(False)
         self.setup_cvd_value_mode_combo.blockSignals(False)
         self.signal_filter_combo.blockSignals(False)
@@ -1394,6 +1430,8 @@ class AutoTraderDialog(SetupPanelMixin, SetupSettingsMigrationMixin, SignalRende
             "atr_base_ema": int(self.atr_base_ema_input.value()),
             "atr_distance": float(self.atr_distance_input.value()),
             "cvd_atr_distance": float(self.cvd_atr_distance_input.value()),
+            "atr_extension_threshold": float(self.atr_extension_threshold_input.value()),
+            "atr_flat_velocity_pct": float(self.atr_flat_velocity_pct_input.value()),
             "cvd_ema_gap": int(self.cvd_ema_gap_input.value()),
             "cvd_value_mode": self.setup_cvd_value_mode_combo.currentData() or self.CVD_VALUE_MODE_RAW,
             "signal_filter": self._selected_signal_filter(),
