@@ -1,3 +1,5 @@
+import time
+
 import pandas as pd
 from PySide6.QtCore import QObject, Signal
 
@@ -19,26 +21,61 @@ class _DataFetchWorker(QObject):
         self.timeframe_minutes = timeframe_minutes
         self.focus_mode = focus_mode
 
+    def _fetch_historical_with_retry(self, from_dt, to_dt):
+        max_attempts = 3
+        base_delay_seconds = 0.25
+
+        for attempt in range(max_attempts):
+            try:
+                return self.kite.historical_data(
+                    self.instrument_token,
+                    from_dt,
+                    to_dt,
+                    interval="minute",
+                )
+            except Exception:
+                if attempt == max_attempts - 1:
+                    raise
+                delay_seconds = base_delay_seconds * (2 ** attempt)
+                time.sleep(delay_seconds)
+
+        return []
+
+    def _load_minute_history(self):
+        required_sessions = 2
+        max_lookback_days = 30
+        chunk_days = 5
+
+        aggregate_df = pd.DataFrame()
+        range_end = self.to_dt
+        range_start = self.from_dt
+
+        while (self.to_dt - range_start).days <= max_lookback_days:
+            hist = self._fetch_historical_with_retry(range_start, range_end)
+
+            if hist:
+                chunk_df = pd.DataFrame(hist)
+                if not chunk_df.empty:
+                    chunk_df["date"] = pd.to_datetime(chunk_df["date"])
+                    chunk_df.set_index("date", inplace=True)
+                    aggregate_df = pd.concat([chunk_df, aggregate_df])
+                    aggregate_df = aggregate_df[~aggregate_df.index.duplicated(keep="last")]
+                    aggregate_df.sort_index(inplace=True)
+                    sessions_count = aggregate_df.index.normalize().nunique()
+                    if sessions_count >= required_sessions:
+                        return aggregate_df
+
+            range_end = range_start
+            range_start = range_start - pd.Timedelta(days=chunk_days)
+
+        return aggregate_df
+
     def run(self):
         try:
-            hist = self.kite.historical_data(
-                self.instrument_token,
-                self.from_dt,
-                self.to_dt,
-                interval="minute",
-            )
-
-            if not hist:
-                self.error.emit("no_data")
-                return
-
-            df = pd.DataFrame(hist)
+            df = self._load_minute_history()
             if df.empty:
                 self.error.emit("empty_df")
                 return
-
-            df["date"] = pd.to_datetime(df["date"])
-            df.set_index("date", inplace=True)
 
             if self.timeframe_minutes > 1:
                 rule = f"{self.timeframe_minutes}min"
@@ -50,7 +87,9 @@ class _DataFetchWorker(QObject):
                         "close": "last",
                         "volume": "sum",
                     }
-                ).dropna()
+                )
+                df["volume"] = df["volume"].fillna(0)
+                df = df.dropna(subset=["open", "high", "low", "close"])
 
             cvd_df = CVDHistoricalBuilder.build_cvd_ohlc(df)
             cvd_df["session"] = cvd_df.index.date
