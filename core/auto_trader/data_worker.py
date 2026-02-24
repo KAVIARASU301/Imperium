@@ -20,12 +20,18 @@ class _DataFetchWorker(QObject):
         self.to_dt = to_dt
         self.timeframe_minutes = timeframe_minutes
         self.focus_mode = focus_mode
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
 
     def _fetch_historical_with_retry(self, from_dt, to_dt):
         max_attempts = 3
         base_delay_seconds = 0.25
 
         for attempt in range(max_attempts):
+            if self._cancelled:
+                return []
             try:
                 return self.kite.historical_data(
                     self.instrument_token,
@@ -51,6 +57,8 @@ class _DataFetchWorker(QObject):
         range_start = self.from_dt
 
         while (self.to_dt - range_start).days <= max_lookback_days:
+            if self._cancelled:
+                return pd.DataFrame()
             hist = self._fetch_historical_with_retry(range_start, range_end)
 
             if hist:
@@ -72,7 +80,11 @@ class _DataFetchWorker(QObject):
 
     def run(self):
         try:
+            if self._cancelled:
+                return
             df = self._load_minute_history()
+            if self._cancelled:
+                return
             if df.empty:
                 self.error.emit("empty_df")
                 return
@@ -92,6 +104,8 @@ class _DataFetchWorker(QObject):
                 df = df.dropna(subset=["open", "high", "low", "close"])
 
             cvd_df = CVDHistoricalBuilder.build_cvd_ohlc(df)
+            if self._cancelled:
+                return
             cvd_df["session"] = cvd_df.index.date
 
             sessions = sorted(cvd_df["session"].unique())
@@ -119,6 +133,8 @@ class _DataFetchWorker(QObject):
                 prev_day_price = df[df["session"] == sessions[-2]]
                 previous_day_cpr = CPRCalculator.get_previous_day_cpr(prev_day_price)
 
+            if self._cancelled:
+                return
             self.result_ready.emit(cvd_out, price_out, prev_close, previous_day_cpr)
 
         except Exception as exc:

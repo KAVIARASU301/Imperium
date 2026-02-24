@@ -136,6 +136,10 @@ class AutoTraderDialog(SetupPanelMixin, SetupSettingsMigrationMixin, SignalRende
         self.previous_date = None
         self._live_tick_points: deque[tuple[datetime, float]] = deque(maxlen=self.LIVE_TICK_MAX_POINTS)
         self._live_price_points: deque[tuple[datetime, float]] = deque(maxlen=self.LIVE_TICK_MAX_POINTS)
+        self._pending_live_tick: tuple[float, float] | None = None
+        self._last_applied_cvd_value: float | None = None
+        self._last_applied_price_value: float | None = None
+        self._last_applied_tick_ts: datetime | None = None
         self._current_session_start_ts: datetime | None = None
         self._current_session_x_base: float = 0.0
         self._current_session_last_cvd_value: float | None = None
@@ -967,6 +971,10 @@ class AutoTraderDialog(SetupPanelMixin, SetupSettingsMigrationMixin, SignalRende
         self._tick_repaint_timer = QTimer(self)
         self._tick_repaint_timer.setSingleShot(True)
         self._tick_repaint_timer.timeout.connect(self._plot_live_ticks_only)
+
+        self._cvd_tick_flush_timer = QTimer(self)
+        self._cvd_tick_flush_timer.setSingleShot(True)
+        self._cvd_tick_flush_timer.timeout.connect(self._flush_pending_cvd_tick)
 
         self._apply_visual_settings()
 
@@ -2712,7 +2720,30 @@ class AutoTraderDialog(SetupPanelMixin, SetupSettingsMigrationMixin, SignalRende
         if token != self.instrument_token or not self.live_mode:
             return
 
-        self._cvd_tick_received.emit(cvd_value, last_price)
+        self._pending_live_tick = (float(cvd_value), float(last_price))
+        if not self._cvd_tick_flush_timer.isActive():
+            self._cvd_tick_flush_timer.start(33)
+
+    def _flush_pending_cvd_tick(self):
+        if self._pending_live_tick is None:
+            return
+
+        cvd_value, last_price = self._pending_live_tick
+        self._pending_live_tick = None
+
+        ts = datetime.now()
+        should_forward = self._last_applied_tick_ts is None
+        if not should_forward:
+            elapsed = (ts - self._last_applied_tick_ts).total_seconds()
+            price_changed = abs(last_price - (self._last_applied_price_value or last_price)) > 0.01
+            cvd_changed = abs(cvd_value - (self._last_applied_cvd_value or cvd_value)) > 1.0
+            should_forward = price_changed or cvd_changed or elapsed > 1.0
+
+        if should_forward:
+            self._last_applied_tick_ts = ts
+            self._last_applied_cvd_value = cvd_value
+            self._last_applied_price_value = last_price
+            self._cvd_tick_received.emit(cvd_value, last_price)
 
     def _apply_cvd_tick(self, cvd_value: float, last_price: float):
         """Slot — always called on the GUI thread via queued signal connection."""
@@ -2733,35 +2764,8 @@ class AutoTraderDialog(SetupPanelMixin, SetupSettingsMigrationMixin, SignalRende
         raw_cvd = transformed_cvd
         current_price = float(last_price)
 
-        # 🔥 SMART TICK FILTERING - Only append if price/CVD changed meaningfully
-        # This prevents wick-like artifacts from back-and-forth movements
-        should_append = True
-
-        if self._live_tick_points:
-            # Get last recorded values
-            last_ts, last_cvd = self._live_tick_points[-1]
-            last_price_val = self._live_price_points[-1][1] if self._live_price_points else current_price
-
-            # Only append if:
-            # 1. Price changed (to avoid redundant points at same price level)
-            # 2. OR it's been more than 1 second (to ensure minimum sampling)
-            time_since_last = (ts - last_ts).total_seconds()
-            price_changed = abs(current_price - last_price_val) > 0.01
-            cvd_changed = abs(raw_cvd - last_cvd) > 1.0
-
-            # Append only if there's actual movement or time gap
-            should_append = price_changed or cvd_changed or time_since_last > 1.0
-
-        if should_append:
-            self._live_tick_points.append((ts, raw_cvd))
-            self._live_price_points.append((ts, current_price))
-        else:
-            # Update the last point in place (no new point, just update current value)
-            # This creates a "moving dot" effect rather than drawing lines
-            if self._live_tick_points:
-                self._live_tick_points[-1] = (ts, raw_cvd)
-            if self._live_price_points:
-                self._live_price_points[-1] = (ts, current_price)
+        self._live_tick_points.append((ts, raw_cvd))
+        self._live_price_points.append((ts, current_price))
 
         # Trim stale points from previous sessions.
         today = ts.date()
@@ -2990,9 +2994,14 @@ class AutoTraderDialog(SetupPanelMixin, SetupSettingsMigrationMixin, SignalRende
         self._is_closing = True
         self._persist_setup_values()
         try:
+            if hasattr(self, "_cvd_tick_flush_timer"):
+                self._cvd_tick_flush_timer.stop()
+                self._pending_live_tick = None
+            if hasattr(self, "_fetch_worker") and self._fetch_worker is not None:
+                self._fetch_worker.cancel()
             if hasattr(self, "_fetch_thread") and self._fetch_thread.isRunning():
                 self._fetch_thread.quit()
-                self._fetch_thread.wait(2000)
+                self._fetch_thread.wait()
         except Exception:
             pass
         super().closeEvent(event)
