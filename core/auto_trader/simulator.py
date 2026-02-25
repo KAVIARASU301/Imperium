@@ -55,12 +55,29 @@ class SimulatorMixin:
 
     def _on_simulator_run_clicked(self):
         x_arr = getattr(self, "_latest_sim_x_arr", None)
-        short_mask = getattr(self, "_latest_sim_short_mask", None)
-        long_mask = getattr(self, "_latest_sim_long_mask", None)
-        strategy_masks = getattr(self, "_latest_sim_strategy_masks", None)
-        if x_arr is None or short_mask is None or long_mask is None:
+        if x_arr is None:
             self._set_simulator_summary_text("Simulator: no plotted signals yet", "#FFA726")
             return
+
+        # ── Use raw (pre-regime-filter) masks so the simulator can apply the
+        # regime engine bar-by-bar historically.  This is what makes enabling /
+        # disabling regime actually change results: the renderer only stores the
+        # current-bar regime; the simulator must replay each bar's own regime.
+        # Fall back to the filtered masks when raw ones are not yet available.
+        # NOTE: explicit `is None` guards — numpy arrays raise ValueError when
+        # used with Python `or` (truth value of array is ambiguous).
+        _raw_short = getattr(self, "_latest_sim_raw_short_mask", None)
+        _raw_long = getattr(self, "_latest_sim_raw_long_mask", None)
+        _raw_strategy = getattr(self, "_latest_sim_raw_strategy_masks", None)
+
+        short_mask = _raw_short if _raw_short is not None else getattr(self, "_latest_sim_short_mask", None)
+        long_mask = _raw_long if _raw_long is not None else getattr(self, "_latest_sim_long_mask", None)
+        strategy_masks = _raw_strategy if _raw_strategy is not None else getattr(self, "_latest_sim_strategy_masks", None)
+
+        if short_mask is None or long_mask is None:
+            self._set_simulator_summary_text("Simulator: no plotted signals yet", "#FFA726")
+            return
+
         self._update_simulator_overlay(
             x_arr=x_arr,
             short_mask=short_mask,
@@ -283,6 +300,7 @@ class SimulatorMixin:
             and getattr(self, "regime_engine", None) is not None
         )
         sim_regime_engine = None
+        sim_regime_session_day = None   # tracks day for session resets between trading days
         if regime_enabled:
             sim_regime_engine = RegimeEngine(config=deepcopy(self.regime_engine.config))
 
@@ -613,6 +631,14 @@ class SimulatorMixin:
 
             allowed_for_bar = None
             if sim_regime_engine is not None:
+                # Reset ATR baseline at each new trading session so volatility
+                # regime is computed relative to that day's own baseline — not a
+                # cumulative baseline that bleeds across multiple days.
+                bar_day = ts.date()
+                if sim_regime_session_day != bar_day:
+                    sim_regime_engine.reset_session()
+                    sim_regime_session_day = bar_day
+
                 regime_snapshot = sim_regime_engine.classify(
                     adx=adx_full[:idx + 1],
                     atr=atr_full[:idx + 1],

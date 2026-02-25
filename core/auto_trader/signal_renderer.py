@@ -579,6 +579,24 @@ class SignalRendererMixin:
             },
         }
 
+        # ── Snapshot RAW masks BEFORE strategy-filter zeroing ─────────────────
+        # The simulator needs these unfiltered masks so it can gate signals via
+        # the regime engine bar-by-bar historically.  If we gave the simulator
+        # the already-filtered masks, enabling/disabling regime would have no
+        # effect (signals already absent/present from the current-bar regime pass).
+        _raw_short = np.zeros(length, dtype=bool)
+        _raw_long = np.zeros(length, dtype=bool)
+        for _strat_masks in strategy_masks.get("short", {}).values():
+            if _strat_masks is not None and len(_strat_masks) >= length:
+                _raw_short |= np.asarray(_strat_masks[:length], dtype=bool)
+        for _strat_masks in strategy_masks.get("long", {}).values():
+            if _strat_masks is not None and len(_strat_masks) >= length:
+                _raw_long |= np.asarray(_strat_masks[:length], dtype=bool)
+        self._latest_sim_raw_short_mask = _raw_short
+        self._latest_sim_raw_long_mask = _raw_long
+        import copy as _copy
+        self._latest_sim_raw_strategy_masks = _copy.deepcopy(strategy_masks)
+
         # ── Sync strategy_masks with the active signal filter ─────────────────
         # The short_mask / long_mask passed to the simulator are already filtered,
         # but strategy_masks sub-masks still contain ALL strategy signals.  If we
