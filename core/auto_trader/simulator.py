@@ -12,6 +12,23 @@ from core.auto_trader.indicators import (
 )
 from core.auto_trader.regime_engine import RegimeEngine
 from core.auto_trader.stacker import StackerState
+
+
+def _is_regime_breakdown(active_trade: dict) -> bool:
+    """Mirror live AUTO regime-breakdown exit trigger."""
+    adx_hist = active_trade.get("regime_adx_hist") or []
+    vol_hist = active_trade.get("regime_vol_hist") or []
+    if len(adx_hist) < 6 or len(vol_hist) < 6:
+        return False
+
+    adx_falling = all(adx_hist[-i] < adx_hist[-i - 1] for i in range(1, 4))
+    adx_below_5bar = adx_hist[-1] < adx_hist[-6]
+    vol_below_5bar = vol_hist[-1] < vol_hist[-6]
+    peak_vol = float(active_trade.get("trend_mode_peak_vol") or 0.0)
+    vol_contracting = vol_hist[-1] < (0.85 * peak_vol) if peak_vol > 0 else False
+    return adx_falling and adx_below_5bar and vol_below_5bar and vol_contracting
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -276,6 +293,16 @@ class SimulatorMixin:
         price_low_full = np.array(self.all_price_low_data[:length], dtype=float)
         atr_full = calculate_atr(price_high_full, price_low_full, close, 14)
         adx_full = compute_adx(price_high_full, price_low_full, close, 14)
+        atr_normalized_full = np.zeros(length, dtype=float)
+        for idx in range(length):
+            current_atr = float(atr_full[idx]) if idx < len(atr_full) and np.isfinite(atr_full[idx]) else 0.0
+            if current_atr <= 0:
+                continue
+            window = atr_full[max(0, idx - 29): idx + 1]
+            atr_baseline = float(np.nanmean(window)) if len(window) else 0.0
+            if not np.isfinite(atr_baseline) or atr_baseline <= 0:
+                atr_baseline = current_atr
+            atr_normalized_full[idx] = (current_atr / atr_baseline) if atr_baseline > 0 else 0.0
 
         regime_enabled = bool(
             getattr(self, "regime_enabled_check", None)
@@ -537,11 +564,9 @@ class SimulatorMixin:
 
                 active_strategy_type = active_trade.get("strategy_type") or "atr_reversal"
 
-                # Use previous completed bar context to avoid current-bar lookahead.
-                regime_ctx = self._sim_market_context(idx, close, ema51, atr_full, adx_full)
-                adx_now = float(regime_ctx["adx"])
-                atr_now = float(regime_ctx["atr"])
-                atr_normalized = float(regime_ctx["atr_pct"])
+                adx_now = float(adx_full[idx]) if idx < len(adx_full) and np.isfinite(adx_full[idx]) else 0.0
+                atr_normalized = float(atr_normalized_full[idx]) if idx < len(atr_normalized_full) and np.isfinite(atr_normalized_full[idx]) else 0.0
+                regime_is_chop = adx_now < 20.0
                 adx_hist = active_trade.setdefault("regime_adx_hist", [])
                 vol_hist = active_trade.setdefault("regime_vol_hist", [])
                 if adx_now > 0:
@@ -586,15 +611,9 @@ class SimulatorMixin:
 
                 if active_trade.get("exit_mode") == "trend_unlock":
                     active_trade["trend_mode_peak_vol"] = max(float(active_trade.get("trend_mode_peak_vol") or 0.0), atr_normalized)
-                    if len(adx_hist) >= 6 and len(vol_hist) >= 6:
-                        adx_falling = all(adx_hist[-i] < adx_hist[-i - 1] for i in range(1, 4))
-                        adx_below_5bar = adx_hist[-1] < adx_hist[-6]
-                        vol_below_5bar = vol_hist[-1] < vol_hist[-6]
-                        peak_vol = float(active_trade.get("trend_mode_peak_vol") or 0.0)
-                        vol_contracting = vol_hist[-1] < (0.85 * peak_vol) if peak_vol > 0 else False
-                        if adx_falling and adx_below_5bar and vol_below_5bar and vol_contracting:
-                            _close_trade(idx, reason="trend_unlock_cooldown")
-                            continue
+                    if _is_regime_breakdown(active_trade):
+                        _close_trade(idx, reason="trend_unlock_cooldown")
+                        continue
 
                 use_default_ema_exits = active_trade.get("exit_mode") != "trend_unlock"
                 exit_now = False
@@ -603,13 +622,15 @@ class SimulatorMixin:
                     exit_now = True
                     exit_reason = "stop_loss"
                 elif active_strategy_type == "atr_reversal":
+                    ema51_simple = ema51[idx]
+                    cvd_ema51_simple = cvd_ema51[idx]
                     exit_now = (
-                        (signal_side == "long" and ((ema51[idx] > 0 and price_close >= ema51[idx]) or (cvd_ema51[idx] != 0 and cvd_close[idx] >= cvd_ema51[idx])))
-                        or (signal_side == "short" and ((ema51[idx] > 0 and price_close <= ema51[idx]) or (cvd_ema51[idx] != 0 and cvd_close[idx] <= cvd_ema51[idx])))
+                        (signal_side == "long" and ((ema51_simple > 0 and price_close >= ema51_simple) or (cvd_ema51_simple != 0 and cvd_close[idx] >= cvd_ema51_simple)))
+                        or (signal_side == "short" and ((ema51_simple > 0 and price_close <= ema51_simple) or (cvd_ema51_simple != 0 and cvd_close[idx] <= cvd_ema51_simple)))
                     )
                     if exit_now:
                         exit_reason = "atr_reversal_target"
-                elif max_favorable_points > 0:
+                elif active_strategy_type != "atr_reversal" and max_favorable_points > 0:
                     use_open_drive_override = (
                         active_strategy_type == "open_drive"
                         and open_drive_max_profit_giveback_points > 0
@@ -629,9 +650,11 @@ class SimulatorMixin:
                         if exit_now:
                             exit_reason = "max_profit_giveback"
                 if (not exit_now) and active_strategy_type == "ema_cross" and use_default_ema_exits:
-                    exit_now = (signal_side == "long" and cvd_cross_below_ema10) or (signal_side == "short" and cvd_cross_above_ema10)
+                    ema_cross_exit_long = cvd_cross_below_ema10 or (regime_is_chop and (price_cross_below_ema10 or price_close < ema10[idx]))
+                    ema_cross_exit_short = cvd_cross_above_ema10 or (regime_is_chop and (price_cross_above_ema10 or price_close > ema10[idx]))
+                    exit_now = (signal_side == "long" and ema_cross_exit_long) or (signal_side == "short" and ema_cross_exit_short)
                     if exit_now:
-                        exit_reason = "ema_cross_exit"
+                        exit_reason = "ema_cross_exit_chop" if regime_is_chop else "ema_cross_exit"
                 elif (not exit_now) and active_strategy_type == "atr_divergence":
                     exit_now = (signal_side == "long" and price_cross_above_ema51) or (signal_side == "short" and price_cross_below_ema51)
                     if exit_now:
@@ -657,9 +680,11 @@ class SimulatorMixin:
                     active_trade["last_price_close"] = float(close[idx])
                     active_trade["last_ema10"] = float(ema10[idx])
                     active_trade["last_ema51"] = float(ema51[idx])
+                    active_trade["last_ema51_simple"] = float(ema51[idx])
                     active_trade["last_cvd_close"] = float(cvd_close[idx])
                     active_trade["last_cvd_ema10"] = float(cvd_ema10[idx])
                     active_trade["last_cvd_ema51"] = float(cvd_ema51[idx])
+                    active_trade["last_cvd_ema51_simple"] = float(cvd_ema51[idx])
 
             allowed_for_bar = None
             if sim_regime_engine is not None:
@@ -804,9 +829,11 @@ class SimulatorMixin:
                 "last_price_close": entry_price,
                 "last_ema10": float(ema10[idx]),
                 "last_ema51": float(ema51[idx]),
+                "last_ema51_simple": float(ema51[idx]),
                 "last_cvd_close": float(cvd_close[idx]),
                 "last_cvd_ema10": float(cvd_ema10[idx]),
                 "last_cvd_ema51": float(cvd_ema51[idx]),
+                "last_cvd_ema51_simple": float(cvd_ema51[idx]),
                 "regime_adx_hist": [],
                 "regime_vol_hist": [],
                 "exit_mode": "default",
@@ -839,9 +866,11 @@ class SimulatorMixin:
                 active_trade["last_price_close"] = float(close[idx])
                 active_trade["last_ema10"] = float(ema10[idx])
                 active_trade["last_ema51"] = float(ema51[idx])
+                active_trade["last_ema51_simple"] = float(ema51[idx])
                 active_trade["last_cvd_close"] = float(cvd_close[idx])
                 active_trade["last_cvd_ema10"] = float(cvd_ema10[idx])
                 active_trade["last_cvd_ema51"] = float(cvd_ema51[idx])
+                active_trade["last_cvd_ema51_simple"] = float(cvd_ema51[idx])
 
         if active_trade:
             _close_trade(length - 1, reason="simulation_end")
