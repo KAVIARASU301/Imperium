@@ -356,13 +356,16 @@ class SimulatorMixin:
                 exit_price = float(active_trade["entry_price"])
 
             trade_snapshot = dict(active_trade)
-            signal_side = trade_snapshot["signal_side"]
+            # ── Always derive side from the trade being closed, never from the
+            # outer loop's signal_side which may have been overwritten by the
+            # incoming opposite signal that triggered this close.
+            closed_side = trade_snapshot["signal_side"]
             market_ctx = self._sim_market_context(idx, close, ema51, atr_full, adx_full)
 
             # ── Anchor P&L (always) ──────────────────────────────────────────
             anchor_pnl = (
                 exit_price - trade_snapshot["entry_price"]
-                if signal_side == "long"
+                if closed_side == "long"
                 else trade_snapshot["entry_price"] - exit_price
             )
 
@@ -373,7 +376,7 @@ class SimulatorMixin:
                 for stk in sim_stacker.stack_entries:
                     stk_pnl = (
                         exit_price - stk.entry_price
-                        if signal_side == "long"
+                        if closed_side == "long"
                         else stk.entry_price - exit_price
                     )
                     result["total_points"] += float(stk_pnl)
@@ -400,7 +403,7 @@ class SimulatorMixin:
                 "trend(prev)=%s adx(prev)=%.2f atr(prev)=%.2f atr%%(prev)=%.4f",
                 idx,
                 self.all_timestamps[idx],
-                signal_side,
+                closed_side,
                 trade_snapshot.get("strategy_type", "unknown"),
                 float(trade_snapshot.get("entry_price", exit_price)),
                 exit_price,
@@ -456,17 +459,21 @@ class SimulatorMixin:
                     continue
 
                 if sim_stacker is not None:
-                    # ── LIFO UNWIND first: if market reversed, exit breached stacks ──
-                    _unwind_stacks(idx)
+                    # ── LIFO UNWIND first: exit breached stacks before anything else ──
+                    # Must happen before the stack-add check so we don't re-add at a
+                    # level we just unwound on this same bar.
+                    _did_unwind = _unwind_stacks(idx)
 
-                    # ── Then check if we can add new stacks (favorable move) ──
-                    while sim_stacker.should_add_stack(float(price_close)):
-                        sim_stacker.add_stack(entry_price=float(price_close), bar_idx=idx)
-                        result["stacked_positions"] += 1
-                        if not sim_stacker.can_stack_more:
-                            break
+                    # ── Add new stacks only if no unwind happened this bar ──────────
+                    # Prevents immediate re-stacking at the exact level just unwound.
+                    if not _did_unwind:
+                        while sim_stacker.should_add_stack(float(price_close)):
+                            sim_stacker.add_stack(entry_price=float(price_close), bar_idx=idx)
+                            result["stacked_positions"] += 1
+                            if not sim_stacker.can_stack_more:
+                                break
 
-                signal_side = active_trade["signal_side"]
+                signal_side = active_trade["signal_side"]  # always read from trade, not outer loop
                 sl_underlying = active_trade["sl_underlying"]
 
                 favorable_move = (

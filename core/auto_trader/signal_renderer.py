@@ -579,6 +579,35 @@ class SignalRendererMixin:
             },
         }
 
+        # ── Sync strategy_masks with the active signal filter ─────────────────
+        # The short_mask / long_mask passed to the simulator are already filtered,
+        # but strategy_masks sub-masks still contain ALL strategy signals.  If we
+        # don't zero-out the non-selected strategies here, _resolve_signal_side_and_strategy
+        # inside the simulator will fire on strategies the user has hidden — making the
+        # isolated signal analysis completely wrong.
+        if selected_filters < all_filters:
+            _filter_to_strategy = {
+                self.SIGNAL_FILTER_ATR_ONLY:          ["atr_reversal"],
+                self.SIGNAL_FILTER_EMA_CROSS_ONLY:    ["ema_cross"],
+                self.SIGNAL_FILTER_BREAKOUT_ONLY:     ["range_breakout"],
+                self.SIGNAL_FILTER_CVD_BREAKOUT_ONLY: ["cvd_range_breakout"],
+                self.SIGNAL_FILTER_OTHERS:            ["atr_divergence"],
+                self.SIGNAL_FILTER_OPEN_DRIVE_ONLY:   ["open_drive"],
+            }
+            _allowed_strategies: set[str] = set()
+            for _filt_const, _strat_list in _filter_to_strategy.items():
+                if _filt_const in selected_filters:
+                    _allowed_strategies.update(_strat_list)
+            # open_drive always passes through if its global checkbox is enabled
+            if bool(self.open_drive_enabled_check.isChecked()):
+                _allowed_strategies.add("open_drive")
+
+            _zero = np.zeros(length, dtype=bool)
+            for _side in ("short", "long"):
+                for _strat in list(strategy_masks[_side].keys()):
+                    if _strat not in _allowed_strategies:
+                        strategy_masks[_side][_strat] = _zero.copy()
+
         # Keep the latest plotted masks available for simulator replay.
         self._latest_sim_x_arr = x_arr
         self._latest_sim_short_mask = short_mask
