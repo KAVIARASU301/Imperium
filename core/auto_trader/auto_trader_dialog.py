@@ -81,6 +81,8 @@ class AutoTraderDialog(RegimeTabMixin, SetupPanelMixin, SetupSettingsMigrationMi
 
     ROUTE_BUY_EXIT_PANEL = "buy_exit_panel"
     ROUTE_DIRECT = "direct"
+    ORDER_TYPE_MARKET = "MARKET"
+    ORDER_TYPE_LIMIT = "LIMIT"
 
     STRATEGY_PRIORITY_KEYS = (
         "atr_reversal",
@@ -514,6 +516,14 @@ class AutoTraderDialog(RegimeTabMixin, SetupPanelMixin, SetupSettingsMigrationMi
         self.automation_route_combo.addItem("Direct", self.ROUTE_DIRECT)
         self.automation_route_combo.setCurrentIndex(0)
         self.automation_route_combo.currentIndexChanged.connect(self._on_automation_settings_changed)
+
+        self.automation_order_type_combo = QComboBox()
+        self.automation_order_type_combo.setFixedWidth(180)
+        self.automation_order_type_combo.setStyleSheet(compact_combo_style)
+        self.automation_order_type_combo.addItem("Market", self.ORDER_TYPE_MARKET)
+        self.automation_order_type_combo.addItem("Limit", self.ORDER_TYPE_LIMIT)
+        self.automation_order_type_combo.setCurrentIndex(0)
+        self.automation_order_type_combo.currentIndexChanged.connect(self._on_automation_settings_changed)
 
         self.setup_btn = QPushButton("Setup")
         self.setup_btn.setFixedHeight(24)
@@ -1185,6 +1195,7 @@ class AutoTraderDialog(RegimeTabMixin, SetupPanelMixin, SetupSettingsMigrationMi
         self.dynamic_exit_cvd_range_breakout_check.blockSignals(True)
         self.dynamic_exit_open_drive_check.blockSignals(True)
         self.automation_route_combo.blockSignals(True)
+        self.automation_order_type_combo.blockSignals(True)
         self.atr_base_ema_input.blockSignals(True)
         self.atr_distance_input.blockSignals(True)
         self.cvd_atr_distance_input.blockSignals(True)
@@ -1271,6 +1282,11 @@ class AutoTraderDialog(RegimeTabMixin, SetupPanelMixin, SetupSettingsMigrationMi
         _apply_combo_value(
             self.automation_route_combo,
             _read_setting("route", self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL),
+            fallback_index=0,
+        )
+        _apply_combo_value(
+            self.automation_order_type_combo,
+            _read_setting("order_type", self.automation_order_type_combo.currentData() or self.ORDER_TYPE_MARKET),
             fallback_index=0,
         )
 
@@ -1471,6 +1487,7 @@ class AutoTraderDialog(RegimeTabMixin, SetupPanelMixin, SetupSettingsMigrationMi
         self.dynamic_exit_cvd_range_breakout_check.blockSignals(False)
         self.dynamic_exit_open_drive_check.blockSignals(False)
         self.automation_route_combo.blockSignals(False)
+        self.automation_order_type_combo.blockSignals(False)
         self.atr_base_ema_input.blockSignals(False)
         self.atr_distance_input.blockSignals(False)
         self.cvd_atr_distance_input.blockSignals(False)
@@ -1575,6 +1592,7 @@ class AutoTraderDialog(RegimeTabMixin, SetupPanelMixin, SetupSettingsMigrationMi
             "max_profit_giveback_strategies": self._selected_max_giveback_strategies(),
             "dynamic_exit_trend_following_strategies": self._selected_dynamic_exit_strategies(),
             "route": self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL,
+            "order_type": self.automation_order_type_combo.currentData() or self.ORDER_TYPE_MARKET,
             "atr_base_ema": int(self.atr_base_ema_input.value()),
             "atr_distance": float(self.atr_distance_input.value()),
             "cvd_atr_distance": float(self.cvd_atr_distance_input.value()),
@@ -1679,6 +1697,7 @@ class AutoTraderDialog(RegimeTabMixin, SetupPanelMixin, SetupSettingsMigrationMi
             "open_drive_tick_drawdown_limit_points": float(self.open_drive_tick_drawdown_limit_input.value()),
             "atr_trailing_step_points": float(self.atr_trailing_step_input.value()),
             "route": self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL,
+            "order_type": self.automation_order_type_combo.currentData() or self.ORDER_TYPE_MARKET,
             "signal_filter": self._selected_signal_filter(),
             "signal_filters": self._selected_signal_filters(),
             "priority_list": active_priority_list,
@@ -3388,6 +3407,7 @@ class AutoTraderDialog(RegimeTabMixin, SetupPanelMixin, SetupSettingsMigrationMi
                     "price_close": current_price,
                     "stoploss_points": float(self.automation_stoploss_input.value()),
                     "route": self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL,
+                    "order_type": self.automation_order_type_combo.currentData() or self.ORDER_TYPE_MARKET,
                     "timestamp": unwind_ts,
                     "is_stack_unwind": True,          # ← coordinator routes this as EXIT
                     "stack_number": entry.stack_number,
@@ -3425,6 +3445,7 @@ class AutoTraderDialog(RegimeTabMixin, SetupPanelMixin, SetupSettingsMigrationMi
                 "price_close": current_price,
                 "stoploss_points": float(self.automation_stoploss_input.value()),
                 "route": self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL,
+                "order_type": self.automation_order_type_combo.currentData() or self.ORDER_TYPE_MARKET,
                 "timestamp": stack_ts,
                 "is_stack": True,
                 "stack_number": stack_num,

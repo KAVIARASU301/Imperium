@@ -262,6 +262,7 @@ class SignalRendererMixin:
             "adx": current_adx,
             "atr_normalized": float(atr_normalized) if np.isfinite(atr_normalized) else 0.0,
             "route": self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL,
+            "order_type": self.automation_order_type_combo.currentData() or self.ORDER_TYPE_MARKET,
             "signal_filter": self._selected_signal_filter(),
             "priority_list": active_priority_list,
             "strategy_priorities": strategy_priorities,
@@ -736,6 +737,7 @@ class SignalRendererMixin:
             "atr_trailing_step_points": float(self.atr_trailing_step_input.value()),
             "atr": current_atr,
             "route": self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL,
+            "order_type": self.automation_order_type_combo.currentData() or self.ORDER_TYPE_MARKET,
             "timestamp": closed_bar_ts,
         }
 

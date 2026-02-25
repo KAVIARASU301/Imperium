@@ -10,6 +10,7 @@ from PySide6.QtCore import QTimer
 from core.execution.paper_trading_manager import PaperTradingManager
 from core.auto_trader.stacker import StackerState
 from utils.data_models import Contract, OptionType, Position
+from utils.pricing_utils import calculate_smart_limit_price
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,9 @@ class CvdAutomationCoordinator:
         is_stack = bool(payload.get("is_stack"))  # stacker pyramid entry flag
         is_stack_unwind = bool(payload.get("is_stack_unwind"))  # LIFO unwind exit
         route = payload.get("route") or state.get("route") or "buy_exit_panel"
+        order_type = str(payload.get("order_type") or state.get("order_type") or w.trader.ORDER_TYPE_MARKET).upper()
+        if order_type not in {w.trader.ORDER_TYPE_MARKET, w.trader.ORDER_TYPE_LIMIT}:
+            order_type = w.trader.ORDER_TYPE_MARKET
         active_trade = self.positions.get(token)
 
         # ── LIFO UNWIND: exit a specific stacked position ────────────────────
@@ -210,7 +214,8 @@ class CvdAutomationCoordinator:
         order_params = {
             "contract": contract,
             "quantity": quantity,
-            "order_type": w.trader.ORDER_TYPE_MARKET,
+            "order_type": order_type,
+            "price": calculate_smart_limit_price(contract) if order_type == w.trader.ORDER_TYPE_LIMIT else None,
             "product": w.settings.get('default_product', w.trader.PRODUCT_MIS),
             "transaction_type": w.trader.TRANSACTION_TYPE_BUY,
             "stop_loss_price": None,
@@ -230,6 +235,10 @@ class CvdAutomationCoordinator:
             if w.buy_exit_panel.option_type != desired_option_type:
                 w.buy_exit_panel.option_type = desired_option_type
                 w.buy_exit_panel._update_ui_for_option_type()
+            if hasattr(w.buy_exit_panel, "order_type_combo"):
+                combo_idx = w.buy_exit_panel.order_type_combo.findData(order_type)
+                if combo_idx >= 0:
+                    w.buy_exit_panel.order_type_combo.setCurrentIndex(combo_idx)
             order_details = w.buy_exit_panel.build_order_details()
             if order_details and order_details.get('strikes'):
                 all_tradingsymbols = [s['contract'].tradingsymbol for s in order_details['strikes'] if s.get('contract') and getattr(s['contract'], 'tradingsymbol', None)]
@@ -250,6 +259,7 @@ class CvdAutomationCoordinator:
                         instrument_lot_quantity = w.instrument_data[symbol].get('lot_size', 1)
                         order_details['total_quantity_per_strike'] = order_details.get('lot_size', 1) * instrument_lot_quantity
                         order_details['product'] = w.settings.get('default_product', 'MIS')
+                        order_details['order_type'] = order_type
                         order_details['trade_status'] = 'ALGO'
                         order_details['strategy_name'] = strategy_type
                         w._execute_orders(order_details)
@@ -273,6 +283,7 @@ class CvdAutomationCoordinator:
             "tradingsymbols": all_tradingsymbols if route == "buy_exit_panel" else [tracked_tradingsymbol],
             "signal_side": signal_side,
             "route": route,
+            "order_type": order_type,
             "signal_timestamp": payload.get("timestamp"),
             "strategy_type": strategy_type,
             "stoploss_points": stoploss_points,
@@ -353,6 +364,7 @@ class CvdAutomationCoordinator:
                     instrument_lot_quantity = w.instrument_data[symbol].get('lot_size', 1)
                     order_details['total_quantity_per_strike'] = order_details.get('lot_size', 1) * instrument_lot_quantity
                     order_details['product'] = w.settings.get('default_product', 'MIS')
+                    order_details['order_type'] = order_type
                     w._execute_orders(order_details)
             else:
                 logger.warning("[AUTO] Failed to build order details from buy_exit_panel")

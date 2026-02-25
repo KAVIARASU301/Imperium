@@ -61,6 +61,7 @@ class ExecutionFacade:
         num_lots = order_details_for_dialog.get("lot_size", 1)
         order_details_for_dialog["total_quantity_per_strike"] = num_lots * instrument_lot_quantity
         order_details_for_dialog["product"] = self._get_settings().get("default_product", "MIS")
+        order_details_for_dialog["order_type"] = str(order_details_from_panel.get("order_type") or "MARKET").upper()
         order_details_for_dialog["stop_loss_price"] = order_details_from_panel.get("stop_loss_price")
         order_details_for_dialog["target_price"] = order_details_from_panel.get("target_price")
         order_details_for_dialog["trailing_stop_loss"] = order_details_from_panel.get("trailing_stop_loss")

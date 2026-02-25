@@ -6,7 +6,7 @@ from typing import cast
 from PySide6.QtWidgets import QGraphicsEffect
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
-    QGroupBox, QRadioButton, QButtonGroup, QFrame, QAbstractSpinBox
+    QGroupBox, QRadioButton, QButtonGroup, QFrame, QAbstractSpinBox, QComboBox
 )
 from PySide6.QtCore import Signal, QSettings
 from PySide6.QtGui import QCursor, QFont
@@ -145,6 +145,13 @@ class BuyExitPanel(QWidget):
         layout.addWidget(QLabel("Strike Selection Logic:"), 3, 0, 1, 2, Qt.AlignmentFlag.AlignCenter)
         radio_widget = self._create_radio_buttons()
         layout.addWidget(radio_widget, 4, 0, 1, 2, Qt.AlignmentFlag.AlignCenter)
+
+        layout.addWidget(QLabel("Order Type:"), 5, 0)
+        self.order_type_combo = QComboBox()
+        self.order_type_combo.addItem("Market", "MARKET")
+        self.order_type_combo.addItem("Limit", "LIMIT")
+        self.order_type_combo.currentIndexChanged.connect(lambda *_: self._persist_settings())
+        layout.addWidget(self.order_type_combo, 5, 1)
         return group
 
     def _create_spinbox(self):
@@ -440,6 +447,7 @@ class BuyExitPanel(QWidget):
         return {
             "symbol": self.current_symbol,
             "option_type": self.option_type,
+            "order_type": self.selected_order_type,
             "expiry": self.expiry,
             "contracts_above": self.contracts_above,
             "contracts_below": self.contracts_below,
@@ -466,6 +474,7 @@ class BuyExitPanel(QWidget):
         return {
             "symbol": self.current_symbol,
             "option_type": self.option_type,
+            "order_type": self.selected_order_type,
             "expiry": self.expiry,
             "contracts_above": 0,
             "contracts_below": 0,
@@ -565,6 +574,10 @@ class BuyExitPanel(QWidget):
                 self.radio_buttons[idx].setChecked(True)
                 self.radio_buttons[idx].blockSignals(False)
                 self.radio_history.append(idx)
+
+            saved_order_type = str(self._settings.value("order_type", "MARKET")).upper()
+            combo_idx = self.order_type_combo.findData(saved_order_type)
+            self.order_type_combo.setCurrentIndex(combo_idx if combo_idx >= 0 else 0)
         except Exception as e:
             logger.warning(f"Failed to load BuyExit panel settings: {e}")
         finally:
@@ -579,9 +592,14 @@ class BuyExitPanel(QWidget):
             self._settings.setValue("contracts_above", self.above_spin.value())
             selected = [i for i, b in enumerate(self.radio_buttons) if b.isChecked()]
             self._settings.setValue("selected_radios", selected)
+            self._settings.setValue("order_type", self.selected_order_type)
             self._settings.sync()
         except Exception as e:
             logger.warning(f"Failed to persist BuyExit panel settings: {e}")
+
+    @property
+    def selected_order_type(self) -> str:
+        return str(self.order_type_combo.currentData() or "MARKET").upper()
 
     def _get_skip_strategy(self):
         selected = {i for i, b in enumerate(self.radio_buttons) if b.isChecked()}

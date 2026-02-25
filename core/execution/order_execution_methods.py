@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QMessageBox
 from utils.data_models import Contract, Position
 from core.execution.execution_stack import ExecutionRequest
 from core.execution.paper_trading_manager import PaperTradingManager
+from utils.pricing_utils import calculate_smart_limit_price
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,10 @@ class OrderExecutionMethods:
         total_quantity_per_strike = confirmed_order_details.get('total_quantity_per_strike', 0)
         trade_status = str(confirmed_order_details.get("trade_status") or "MANUAL").upper()
         strategy_name = str(confirmed_order_details.get("strategy_name") or "N/A")
+        order_type = str(
+            confirmed_order_details.get("order_type")
+            or self.window.trader.ORDER_TYPE_MARKET
+        ).upper()
 
         if total_quantity_per_strike == 0:
             logger.error("Total quantity per strike is zero in confirmed_order_details.")
@@ -59,18 +64,22 @@ class OrderExecutionMethods:
                     'transaction_type': self.window.trader.TRANSACTION_TYPE_BUY,
                     'quantity': total_quantity_per_strike,
                     'product': order_product,
-                    'order_type': self.window.trader.ORDER_TYPE_MARKET,
+                    'order_type': order_type,
                 }
+                limit_price = None
+                if order_type == self.window.trader.ORDER_TYPE_LIMIT:
+                    limit_price = float(calculate_smart_limit_price(contract_to_trade))
+                    order_args['price'] = limit_price
                 execution_request = ExecutionRequest(
                     tradingsymbol=contract_to_trade.tradingsymbol,
                     transaction_type=self.window.trader.TRANSACTION_TYPE_BUY,
                     quantity=int(total_quantity_per_strike),
-                    order_type=self.window.trader.ORDER_TYPE_MARKET,
+                    order_type=order_type,
                     product=order_product,
                     ltp=float(getattr(contract_to_trade, 'ltp', 0.0) or 0.0),
                     bid=float(getattr(contract_to_trade, 'bid', 0.0) or 0.0),
                     ask=float(getattr(contract_to_trade, 'ask', 0.0) or 0.0),
-                    limit_price=None,
+                    limit_price=limit_price,
                     urgency=str(confirmed_order_details.get('execution_urgency') or 'normal'),
                     participation_rate=float(confirmed_order_details.get('participation_rate') or 0.15),
                     execution_algo=str(confirmed_order_details.get('execution_algo') or 'IMMEDIATE'),
@@ -94,7 +103,7 @@ class OrderExecutionMethods:
                     successful_orders_info.append(
                         {'order_id': placed_order_ids[-1], 'symbol': contract_to_trade.tradingsymbol,
                          'quantity': total_quantity_per_strike,
-                         'price': contract_to_trade.ltp})
+                         'price': limit_price if limit_price is not None else contract_to_trade.ltp})
                     continue
 
                 for order_id in placed_order_ids:

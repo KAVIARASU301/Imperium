@@ -125,6 +125,7 @@ class SetupPanelMixin:
         _w(self.automation_stoploss_input)
         _w(self.max_profit_giveback_input)
         _wc(self.automation_route_combo)
+        _wc(self.automation_order_type_combo)
         auto_frm.addRow("Stop Loss",         self.automation_stoploss_input)
         auto_frm.addRow("Max Giveback",      self.max_profit_giveback_input)
 
@@ -155,6 +156,7 @@ class SetupPanelMixin:
             trend_exit_lay.addWidget(cb)
         auto_frm.addRow("Trend Exit On", trend_exit_row)
         auto_frm.addRow("Route",       self.automation_route_combo)
+        auto_frm.addRow("Order Type",  self.automation_order_type_combo)
         c1.addWidget(auto_grp)
 
         # ── Stacker ───────────────────────────────────────────────────────

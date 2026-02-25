@@ -173,6 +173,10 @@ class OrderConfirmationDialog(QDialog):
         option_tag = self._create_tag_label(option_name, tag_object_name)
         tags_layout.addWidget(option_tag)
 
+        order_type = str(od.get("order_type", "MARKET") or "MARKET").upper()
+        order_type_tag = self._create_tag_label(order_type, "orderTypeTag")
+        tags_layout.addWidget(order_type_tag)
+
         # This logic appears to be missing from the original file, it has been added for completeness
         qty_per_strike = od.get('total_quantity_per_strike', od.get('lot_size', 1) * od.get('lot_quantity', 1))
         num_lots = od.get('lot_size', 1)
@@ -278,12 +282,13 @@ class OrderConfirmationDialog(QDialog):
             #symbolLabel { color: #FFFFFF; font-size: 26px; font-weight: 300; }
             #infoLabel { color: #A9B1C3; font-size: 11px; font-weight: bold; }
 
-            #buyTag, #callTag, #putTag {
+            #buyTag, #callTag, #putTag, #orderTypeTag {
                 font-size: 10px; font-weight: bold; border-radius: 4px; padding: 4px 8px;
             }
             #buyTag { background-color: #29C7C9; color: #161A25; }
             #callTag { background-color: rgba(41, 199, 201, 0.2); color: #29C7C9; }
             #putTag { background-color: rgba(248, 81, 73, 0.2); color: #F85149; }
+            #orderTypeTag { background-color: rgba(156, 202, 244, 0.2); color: #9CCAF4; }
 
             #listHeader { color: #8A9BA8; font-size: 10px; font-weight: bold; text-transform: uppercase; }
             #strikeScrollArea {
