@@ -263,7 +263,11 @@ class ImperiumMainWindow(QMainWindow):
             self.market_data_worker.data_received.connect(self.trader.update_market_data, Qt.QueuedConnection)
 
         self.pending_order_refresh_timer = QTimer(self)
-        self.pending_order_refresh_timer.setInterval(1000)
+        # Single-shot safety refresh used only on fresh pending-order creation.
+        # Keep this non-repeating to avoid hammering position refreshes all day
+        # when limit orders remain open.
+        self.pending_order_refresh_timer.setSingleShot(True)
+        self.pending_order_refresh_timer.setInterval(2500)
         self.pending_order_refresh_timer.timeout.connect(self._refresh_positions)
 
         self._processed_live_exit_orders: set[str] = set()

@@ -82,12 +82,13 @@ class OrderDialogService:
                     widget.animate_stack_to(target_pos)
                 y_pos -= widget.height() + spacing
 
-        if pending_orders and not w.pending_order_refresh_timer.isActive():
-            logger.info("Pending orders detected. Starting 1-second position refresh timer.")
+        # Avoid continuous position polling while limit orders remain pending.
+        # Trigger only a single delayed refresh when new pending toasts appear.
+        if new_widget_ids and hasattr(w, "pending_order_refresh_timer"):
+            logger.info(
+                "New pending order toast(s) detected. Triggering one-shot position refresh."
+            )
             w.pending_order_refresh_timer.start()
-        elif not pending_orders and w.pending_order_refresh_timer.isActive():
-            logger.info("No more pending orders. Stopping refresh timer.")
-            w.pending_order_refresh_timer.stop()
 
     def cancel_order_by_id(self, order_id: str):
         w = self.main_window

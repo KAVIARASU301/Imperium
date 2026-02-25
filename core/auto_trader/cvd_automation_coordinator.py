@@ -432,7 +432,8 @@ class CvdAutomationCoordinator:
         tradingsymbol = tradingsymbols[0] if tradingsymbols else None
         positions = [p for p in (w.position_manager.get_position(s) for s in tradingsymbols) if p]
         if not positions:
-            if tradingsymbol and w._has_pending_order_for_symbol(tradingsymbol):
+            strategy_type = active_trade.get("strategy_type")
+            if strategy_type != "open_drive" and tradingsymbol and w._has_pending_order_for_symbol(tradingsymbol):
                 w._start_cvd_pending_retry(token)
                 return
             w._stop_cvd_pending_retry(token)
@@ -693,7 +694,7 @@ class CvdAutomationCoordinator:
         tracked_symbol = tradingsymbol or active_trade.get("tradingsymbol")
         if tracked_symbol and w.position_manager.get_position(tracked_symbol):
             return
-        if tracked_symbol and w._has_pending_order_for_symbol(tracked_symbol):
+        if active_trade.get("strategy_type") != "open_drive" and tracked_symbol and w._has_pending_order_for_symbol(tracked_symbol):
             w._start_cvd_pending_retry(token)
             return
         self.positions.pop(token, None)
@@ -710,7 +711,7 @@ class CvdAutomationCoordinator:
                 continue
             if w.position_manager.get_position(tradingsymbol):
                 continue
-            if w._has_pending_order_for_symbol(tradingsymbol):
+            if active_trade.get("strategy_type") != "open_drive" and w._has_pending_order_for_symbol(tradingsymbol):
                 w._start_cvd_pending_retry(token)
                 continue
             removed_tokens.append(token)

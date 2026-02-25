@@ -1,6 +1,6 @@
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
 from PySide6.QtCore import QTimer
@@ -415,6 +415,22 @@ class OrderExecutionMethods:
                 [], [{'symbol': contract_to_trade.tradingsymbol,
                       'error': "Order rejected or status not confirmed"}])
 
+    def _is_retry_window_open(self, active_trade: dict) -> bool:
+        strategy_type = str(active_trade.get("strategy_type") or "").lower()
+        if strategy_type != "open_drive":
+            return True
+
+        signal_timestamp = active_trade.get("signal_timestamp")
+        if not signal_timestamp:
+            return False
+
+        try:
+            parsed_ts = datetime.fromisoformat(str(signal_timestamp).replace("Z", "+00:00"))
+        except Exception:
+            return False
+
+        return (datetime.now(parsed_ts.tzinfo) - parsed_ts) <= timedelta(minutes=3)
+
     def has_pending_order_for_symbol(self, tradingsymbol: str | None) -> bool:
         if not tradingsymbol:
             return False
@@ -430,7 +446,17 @@ class OrderExecutionMethods:
         if isinstance(self.window.trader, PaperTradingManager):
             return
 
-        if token not in self.window._cvd_automation_positions:
+        active_trade = self.window._cvd_automation_positions.get(token)
+        if not active_trade:
+            self.stop_cvd_pending_retry(token)
+            return
+
+        if active_trade.get("pending_retry_disabled"):
+            return
+
+        if not self._is_retry_window_open(active_trade):
+            active_trade["pending_retry_disabled"] = True
+            logger.info("[AUTO] Skipping pending-order retry outside window for token=%s", token)
             self.stop_cvd_pending_retry(token)
             return
 
@@ -458,6 +484,23 @@ class OrderExecutionMethods:
         active_trade = self.window._cvd_automation_positions.get(token)
         if not active_trade:
             self.stop_cvd_pending_retry(token)
+            return
+
+        if active_trade.get("pending_retry_disabled"):
+            self.stop_cvd_pending_retry(token)
+            return
+
+        attempts = int(active_trade.get("pending_retry_attempts") or 0)
+        if attempts >= 6:
+            active_trade["pending_retry_disabled"] = True
+            self.stop_cvd_pending_retry(token)
+            logger.warning("[AUTO] Pending retry limit reached for token=%s; stopping retries", token)
+            return
+
+        if not self._is_retry_window_open(active_trade):
+            active_trade["pending_retry_disabled"] = True
+            self.stop_cvd_pending_retry(token)
+            logger.info("[AUTO] Pending retry window expired for token=%s", token)
             return
 
         tradingsymbol = active_trade.get("tradingsymbol")
@@ -525,6 +568,7 @@ class OrderExecutionMethods:
             tradingsymbol,
             retry_price,
         )
+        active_trade["pending_retry_attempts"] = attempts + 1
         self.execute_single_strike_order(retry_params)
 
     def execute_strategy_orders(self, order_params_list: List[dict], strategy_name: Optional[str] = None):
