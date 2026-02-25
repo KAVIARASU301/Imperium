@@ -41,6 +41,25 @@ class CvdAutomationCoordinator:
         vol_contracting = vol_hist[-1] < (0.85 * peak_vol) if peak_vol > 0 else False
         return adx_falling and adx_below_5bar and vol_below_5bar and vol_contracting
 
+    @staticmethod
+    def _to_int(value, default: int) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return int(default)
+
+    def _automation_window_for_token(self, token: int | None = None) -> tuple[time, time]:
+        state = self.market_state.get(token, {}) if token is not None else {}
+        start_hour = max(0, min(23, self._to_int(state.get("automation_start_hour"), 9)))
+        start_minute = max(0, min(59, self._to_int(state.get("automation_start_minute"), 15)))
+        cutoff_hour = max(0, min(23, self._to_int(state.get("automation_cutoff_hour"), 15)))
+        cutoff_minute = max(0, min(59, self._to_int(state.get("automation_cutoff_minute"), 15)))
+        return time(start_hour, start_minute), time(cutoff_hour, cutoff_minute)
+
+    def is_before_start(self, token: int | None = None) -> bool:
+        start_time, _ = self._automation_window_for_token(token)
+        return datetime.now().time() < start_time
+
     def handle_signal(self, payload: dict):
         w = self.main_window
         token = payload.get("instrument_token")
@@ -51,9 +70,13 @@ class CvdAutomationCoordinator:
         if dialog and hasattr(dialog, "_record_detected_signal"):
             dialog._record_detected_signal(payload)
 
-        if self.is_cutoff_reached():
-            self.enforce_cutoff_exit(reason="AUTO_3PM_CUTOFF")
-            logger.info("[AUTO] Ignoring CVD signal after 3:00 PM cutoff.")
+        if self.is_cutoff_reached(token):
+            self.enforce_cutoff_exit(reason="AUTO_3PM_CUTOFF", token=token)
+            logger.info("[AUTO] Ignoring CVD signal after configured cutoff.")
+            return
+
+        if self.is_before_start(token):
+            logger.debug("[AUTO] Ignoring CVD signal before configured start time.")
             return
 
         state = self.market_state.get(token, {})
@@ -432,8 +455,8 @@ class CvdAutomationCoordinator:
             return
 
         self.market_state[token] = payload
-        if self.is_cutoff_reached():
-            self.enforce_cutoff_exit(reason="AUTO_3PM_CUTOFF")
+        if self.is_cutoff_reached(token):
+            self.enforce_cutoff_exit(reason="AUTO_3PM_CUTOFF", token=token)
             return
 
         active_trade = self.positions.get(token)
@@ -649,14 +672,19 @@ class CvdAutomationCoordinator:
             "last_cvd_ema51_simple": cvd_ema51_simple,
         })
 
-    def is_cutoff_reached(self) -> bool:
-        return datetime.now().time() >= time(15, 0)
+    def is_cutoff_reached(self, token: int | None = None) -> bool:
+        _, cutoff_time = self._automation_window_for_token(token)
+        return datetime.now().time() >= cutoff_time
 
-    def enforce_cutoff_exit(self, reason: str = "AUTO_3PM_CUTOFF"):
+    def enforce_cutoff_exit(self, reason: str = "AUTO_3PM_CUTOFF", token: int | None = None):
         w = self.main_window
         if not self.positions:
             return
-        for token, active_trade in list(self.positions.items()):
+        tokens_to_exit = [token] if token is not None else list(self.positions.keys())
+        for token in tokens_to_exit:
+            active_trade = self.positions.get(token)
+            if not active_trade:
+                continue
             tradingsymbols = [s for s in (active_trade.get("tradingsymbols") or [active_trade.get("tradingsymbol")]) if s]
             for symbol in tradingsymbols:
                 position = w.position_manager.get_position(symbol)

@@ -19,6 +19,25 @@ logger = logging.getLogger(__name__)
 
 class SimulatorMixin:
     @staticmethod
+    def _time_is_before(lhs: time, rhs: time) -> bool:
+        return (lhs.hour, lhs.minute, lhs.second) < (rhs.hour, rhs.minute, rhs.second)
+
+    @staticmethod
+    def _time_is_on_or_after(lhs: time, rhs: time) -> bool:
+        return (lhs.hour, lhs.minute, lhs.second) >= (rhs.hour, rhs.minute, rhs.second)
+
+    def _sim_time_window(self) -> tuple[time, time]:
+        start_hour = int(getattr(self, "automation_start_time_hour_input", None).value()) if getattr(self, "automation_start_time_hour_input", None) is not None else 9
+        start_minute = int(getattr(self, "automation_start_time_minute_input", None).value()) if getattr(self, "automation_start_time_minute_input", None) is not None else 15
+        cutoff_hour = int(getattr(self, "automation_cutoff_time_hour_input", None).value()) if getattr(self, "automation_cutoff_time_hour_input", None) is not None else 15
+        cutoff_minute = int(getattr(self, "automation_cutoff_time_minute_input", None).value()) if getattr(self, "automation_cutoff_time_minute_input", None) is not None else 15
+        return time(start_hour, start_minute), time(cutoff_hour, cutoff_minute)
+
+    @staticmethod
+    def _max_time(a: time, b: time) -> time:
+        return a if (a.hour, a.minute, a.second) >= (b.hour, b.minute, b.second) else b
+
+    @staticmethod
     def _sim_market_context(
             idx: int,
             close: np.ndarray,
@@ -465,9 +484,11 @@ class SimulatorMixin:
             )
             return True
 
+        sim_start_time, sim_cutoff_time = self._sim_time_window()
+
         for idx in range(length):
             ts = self.all_timestamps[idx]
-            if ts.time() >= time(15, 0):
+            if self._time_is_on_or_after(ts.time(), sim_cutoff_time):
                 if active_trade:
                     _close_trade(idx, reason="session_close")
                 continue
@@ -674,8 +695,11 @@ class SimulatorMixin:
                 int(getattr(self, "open_drive_time_minute_input", None).value())
                 if getattr(self, "open_drive_time_minute_input", None) is not None else 17,
             )
-            intraday_start_time = open_drive_entry_time if signal_strategy == "open_drive" else time(9, 20)
-            if ts.time() < intraday_start_time or ts.time() >= time(15, 0):
+            intraday_start_time = self._max_time(
+                sim_start_time,
+                open_drive_entry_time if signal_strategy == "open_drive" else sim_start_time,
+            )
+            if self._time_is_before(ts.time(), intraday_start_time) or self._time_is_on_or_after(ts.time(), sim_cutoff_time):
                 _log_signal_event(idx, "SKIP", signal_side, signal_strategy, "outside_trading_window")
                 continue
 

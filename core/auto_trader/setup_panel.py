@@ -155,8 +155,24 @@ class SetupPanelMixin:
         ):
             trend_exit_lay.addWidget(cb)
         auto_frm.addRow("Trend Exit On", trend_exit_row)
+        auto_time_row = QWidget()
+        auto_time_lay = QHBoxLayout(auto_time_row)
+        auto_time_lay.setContentsMargins(0, 0, 0, 0)
+        auto_time_lay.setSpacing(4)
+        auto_time_lay.addWidget(self.automation_start_time_hour_input)
+        auto_time_lay.addWidget(QLabel(":"))
+        auto_time_lay.addWidget(self.automation_start_time_minute_input)
+        auto_time_lay.addSpacing(8)
+        auto_time_lay.addWidget(QLabel("to"))
+        auto_time_lay.addSpacing(8)
+        auto_time_lay.addWidget(self.automation_cutoff_time_hour_input)
+        auto_time_lay.addWidget(QLabel(":"))
+        auto_time_lay.addWidget(self.automation_cutoff_time_minute_input)
+        auto_time_lay.addStretch()
+
         auto_frm.addRow("Route",       self.automation_route_combo)
         auto_frm.addRow("Order Type",  self.automation_order_type_combo)
+        auto_frm.addRow("Time Window", auto_time_row)
         c1.addWidget(auto_grp)
 
         # ── Stacker ───────────────────────────────────────────────────────

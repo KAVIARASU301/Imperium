@@ -527,6 +527,34 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.automation_order_type_combo.setCurrentIndex(0)
         self.automation_order_type_combo.currentIndexChanged.connect(self._on_automation_settings_changed)
 
+        self.automation_start_time_hour_input = QSpinBox()
+        self.automation_start_time_hour_input.setRange(0, 23)
+        self.automation_start_time_hour_input.setValue(9)
+        self.automation_start_time_hour_input.setFixedWidth(52)
+        self.automation_start_time_hour_input.setStyleSheet(compact_spinbox_style)
+        self.automation_start_time_hour_input.valueChanged.connect(self._on_automation_settings_changed)
+
+        self.automation_start_time_minute_input = QSpinBox()
+        self.automation_start_time_minute_input.setRange(0, 59)
+        self.automation_start_time_minute_input.setValue(15)
+        self.automation_start_time_minute_input.setFixedWidth(52)
+        self.automation_start_time_minute_input.setStyleSheet(compact_spinbox_style)
+        self.automation_start_time_minute_input.valueChanged.connect(self._on_automation_settings_changed)
+
+        self.automation_cutoff_time_hour_input = QSpinBox()
+        self.automation_cutoff_time_hour_input.setRange(0, 23)
+        self.automation_cutoff_time_hour_input.setValue(15)
+        self.automation_cutoff_time_hour_input.setFixedWidth(52)
+        self.automation_cutoff_time_hour_input.setStyleSheet(compact_spinbox_style)
+        self.automation_cutoff_time_hour_input.valueChanged.connect(self._on_automation_settings_changed)
+
+        self.automation_cutoff_time_minute_input = QSpinBox()
+        self.automation_cutoff_time_minute_input.setRange(0, 59)
+        self.automation_cutoff_time_minute_input.setValue(15)
+        self.automation_cutoff_time_minute_input.setFixedWidth(52)
+        self.automation_cutoff_time_minute_input.setStyleSheet(compact_spinbox_style)
+        self.automation_cutoff_time_minute_input.valueChanged.connect(self._on_automation_settings_changed)
+
         self.setup_btn = QPushButton("Setup")
         self.setup_btn.setFixedHeight(24)
         self.setup_btn.setMinimumWidth(88)
@@ -1198,6 +1226,10 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.dynamic_exit_open_drive_check.blockSignals(True)
         self.automation_route_combo.blockSignals(True)
         self.automation_order_type_combo.blockSignals(True)
+        self.automation_start_time_hour_input.blockSignals(True)
+        self.automation_start_time_minute_input.blockSignals(True)
+        self.automation_cutoff_time_hour_input.blockSignals(True)
+        self.automation_cutoff_time_minute_input.blockSignals(True)
         self.atr_base_ema_input.blockSignals(True)
         self.atr_distance_input.blockSignals(True)
         self.cvd_atr_distance_input.blockSignals(True)
@@ -1291,6 +1323,10 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
             _read_setting("order_type", self.automation_order_type_combo.currentData() or self.ORDER_TYPE_MARKET),
             fallback_index=0,
         )
+        self.automation_start_time_hour_input.setValue(_read_setting("automation_start_hour", 9, int))
+        self.automation_start_time_minute_input.setValue(_read_setting("automation_start_minute", 15, int))
+        self.automation_cutoff_time_hour_input.setValue(_read_setting("automation_cutoff_hour", 15, int))
+        self.automation_cutoff_time_minute_input.setValue(_read_setting("automation_cutoff_minute", 15, int))
 
         self.atr_base_ema_input.setValue(
             _read_setting("atr_base_ema", self.atr_base_ema_input.value(), int)
@@ -1490,6 +1526,10 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.dynamic_exit_open_drive_check.blockSignals(False)
         self.automation_route_combo.blockSignals(False)
         self.automation_order_type_combo.blockSignals(False)
+        self.automation_start_time_hour_input.blockSignals(False)
+        self.automation_start_time_minute_input.blockSignals(False)
+        self.automation_cutoff_time_hour_input.blockSignals(False)
+        self.automation_cutoff_time_minute_input.blockSignals(False)
         self.atr_base_ema_input.blockSignals(False)
         self.atr_distance_input.blockSignals(False)
         self.cvd_atr_distance_input.blockSignals(False)
@@ -1603,6 +1643,10 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
             "dynamic_exit_trend_following_strategies": self._selected_dynamic_exit_strategies(),
             "route": self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL,
             "order_type": self.automation_order_type_combo.currentData() or self.ORDER_TYPE_MARKET,
+            "automation_start_hour": int(self.automation_start_time_hour_input.value()),
+            "automation_start_minute": int(self.automation_start_time_minute_input.value()),
+            "automation_cutoff_hour": int(self.automation_cutoff_time_hour_input.value()),
+            "automation_cutoff_minute": int(self.automation_cutoff_time_minute_input.value()),
             "atr_base_ema": int(self.atr_base_ema_input.value()),
             "atr_distance": float(self.atr_distance_input.value()),
             "cvd_atr_distance": float(self.cvd_atr_distance_input.value()),
@@ -1712,6 +1756,10 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
             "atr_trailing_step_points": float(self.atr_trailing_step_input.value()),
             "route": self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL,
             "order_type": self.automation_order_type_combo.currentData() or self.ORDER_TYPE_MARKET,
+            "automation_start_hour": int(self.automation_start_time_hour_input.value()),
+            "automation_start_minute": int(self.automation_start_time_minute_input.value()),
+            "automation_cutoff_hour": int(self.automation_cutoff_time_hour_input.value()),
+            "automation_cutoff_minute": int(self.automation_cutoff_time_minute_input.value()),
             "signal_filter": self._selected_signal_filter(),
             "signal_filters": self._selected_signal_filters(),
             "priority_list": active_priority_list,
