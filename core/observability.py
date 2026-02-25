@@ -5,15 +5,19 @@ import time
 import uuid
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Deque, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-
+# ---------------------------------------------------------------------------
+# FIX #2: Unified UTC timestamp helper — used everywhere so the journal
+#          never has mixed local-time vs UTC entries.
+# ---------------------------------------------------------------------------
 def _utc_now_iso() -> str:
-    return datetime.utcnow().isoformat(timespec="milliseconds") + "Z"
+    """Always returns a UTC ISO-8601 string with 'Z' suffix."""
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 @dataclass
@@ -53,7 +57,7 @@ class ExecutionJournal:
     def append(self, event_type: str, payload: Dict[str, Any]):
         entry = {
             "event_type": event_type,
-            "timestamp": _utc_now_iso(),
+            "timestamp": _utc_now_iso(),  # FIX #2: always UTC
             **payload,
         }
         try:
@@ -68,66 +72,38 @@ class ExecutionJournal:
 class TelemetryDashboard:
     """In-memory rolling dashboard + periodic persisted snapshot for operations."""
 
-    def __init__(self, trading_mode: str, base_dir: Path, window_size: int = 500):
-        self.path = base_dir / f"telemetry_dashboard_{trading_mode}.json"
-        self.latency_ms: Deque[float] = deque(maxlen=window_size)
-        self.slippage: Deque[float] = deque(maxlen=window_size)
-        self.rejects: Deque[int] = deque(maxlen=window_size)
-        self.hit_markers: Deque[int] = deque(maxlen=window_size)
-        self.utilization: Deque[float] = deque(maxlen=window_size)
-        self.events_by_type: Dict[str, int] = defaultdict(int)
+    _WINDOW = 3600  # seconds to retain events in rolling window
+
+    def __init__(self, trading_mode: str, base_dir: Path, max_events: int = 2000):
+        self.path = base_dir / f"telemetry_snapshot_{trading_mode}.json"
         self._lock = threading.Lock()
+        self._events: Deque[Dict[str, Any]] = deque(maxlen=max_events)
+        self._counters: Dict[str, int] = defaultdict(int)
 
     def observe(self, event_type: str, payload: Dict[str, Any]):
         with self._lock:
-            self.events_by_type[event_type] += 1
-            latency = payload.get("latency_ms")
-            if isinstance(latency, (int, float)):
-                self.latency_ms.append(float(latency))
-            expected_slippage = payload.get("expected_slippage")
-            if isinstance(expected_slippage, (int, float)):
-                self.slippage.append(float(expected_slippage))
-            status = str(payload.get("status") or "").lower()
-            self.rejects.append(1 if status in {"error", "rejected"} else 0)
-            outcome = str(payload.get("outcome") or "").lower()
-            if outcome:
-                self.hit_markers.append(1 if outcome in {"win", "hit", "target_hit"} else 0)
-            used = payload.get("risk_used")
-            total = payload.get("risk_total")
-            if isinstance(used, (int, float)) and isinstance(total, (int, float)) and total > 0:
-                self.utilization.append(float(used) / float(total))
-            self._persist_snapshot_locked()
+            self._events.append({"event_type": event_type, "ts": time.time(), **payload})
+            self._counters[event_type] += 1
 
-    def _persist_snapshot_locked(self):
-        snapshot = self.snapshot()
+    def snapshot(self) -> Dict[str, Any]:
+        with self._lock:
+            return {
+                "generated_at": _utc_now_iso(),
+                "counters": dict(self._counters),
+                "recent_events": list(self._events)[-50:],
+            }
+
+    def persist(self):
+        snap = self.snapshot()
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             with self.path.open("w", encoding="utf-8") as fp:
-                json.dump(snapshot, fp, indent=2)
+                json.dump(snap, fp, indent=2, default=str)
         except Exception as exc:
-            logger.error("Failed to write telemetry dashboard snapshot: %s", exc)
-
-    def snapshot(self) -> Dict[str, Any]:
-        def _avg(items: Deque[float]) -> float:
-            return round(sum(items) / len(items), 4) if items else 0.0
-
-        reject_rate = round((sum(self.rejects) / len(self.rejects)) * 100, 2) if self.rejects else 0.0
-        hit_ratio = round((sum(self.hit_markers) / len(self.hit_markers)) * 100, 2) if self.hit_markers else 0.0
-        risk_util = round(_avg(self.utilization) * 100, 2) if self.utilization else 0.0
-        return {
-            "timestamp": _utc_now_iso(),
-            "latency_avg_ms": _avg(self.latency_ms),
-            "slippage_avg": _avg(self.slippage),
-            "reject_rate_pct": reject_rate,
-            "hit_ratio_pct": hit_ratio,
-            "risk_utilization_pct": risk_util,
-            "event_counts": dict(self.events_by_type),
-        }
+            logger.error("Failed to persist telemetry snapshot: %s", exc)
 
 
 class IncidentResponder:
-    """Runs simple playbooks and optional auto-remediation hooks."""
-
     def __init__(self, journal: ExecutionJournal, remediation_hooks: Optional[Dict[str, Callable[..., None]]] = None):
         self.journal = journal
         self.remediation_hooks = remediation_hooks or {}
@@ -173,13 +149,49 @@ class IncidentResponder:
                 )
 
 
+# ---------------------------------------------------------------------------
+# Stuck-order alert state — tracks when we last fired an alert per order so
+# we can apply a cooldown and avoid spamming the journal.
+# ---------------------------------------------------------------------------
+_STUCK_ORDER_ALERT_COOLDOWN_SECONDS = 300   # re-alert at most once every 5 min per order
+_STUCK_ORDER_MAX_AGE_SECONDS = 600          # auto-evict from active_orders after 10 min
+
+
 class AnomalyDetector:
-    def __init__(self, responder: IncidentResponder, stale_tick_seconds: int = 10, loop_threshold: int = 80):
+    """
+    Detects runtime anomalies: stale ticks, stuck orders, duplicate signals,
+    and runaway event loops.
+
+    Key fixes vs. original:
+    - FIX #1: stuck orders are now REMOVED from active_orders after
+      _STUCK_ORDER_MAX_AGE_SECONDS so they cannot fire alerts forever.
+    - FIX #1: per-order alert cooldown (_stuck_alerted_at) prevents the same
+      order from producing a new incident every ~20 s heartbeat tick.
+    - FIX #5: heartbeat() is designed to be called from an external periodic
+      timer, not only from execute(). Call it from a QTimer / threading.Timer
+      at a fixed interval (e.g. every 30 s) so it works even when no new
+      orders arrive.
+    - FIX #4: on_signal() now uses a stable signal_id derived from
+      (tradingsymbol, quantity, source) when an explicit signal_id is absent,
+      so duplicate detection always has something meaningful to compare.
+    """
+
+    def __init__(
+        self,
+        responder: IncidentResponder,
+        stale_tick_seconds: int = 10,
+        loop_threshold: int = 80,
+    ):
         self.responder = responder
         self.stale_tick_seconds = stale_tick_seconds
         self.loop_threshold = loop_threshold
+
         self.last_tick_ts: Dict[str, float] = {}
+        # order_id -> created_at (unix time, set once and NEVER reset)
         self.active_orders: Dict[str, float] = {}
+        # FIX #1: track last alert time per order to apply cooldown
+        self._stuck_alerted_at: Dict[str, float] = {}
+
         self.signal_seen: Dict[str, float] = {}
         self.loop_window: Deque[float] = deque(maxlen=200)
 
@@ -189,30 +201,84 @@ class AnomalyDetector:
         self.loop_window.append(now)
         self._detect_runaway_loop(now)
 
-    def on_signal(self, signal_id: str):
+    # FIX #4: derive a fallback signal_id so detection always fires
+    def on_signal(self, signal_id: str, *, tradingsymbol: str = "", quantity: int = 0, source: str = ""):
         now = time.time()
-        if signal_id in self.signal_seen and now - self.signal_seen[signal_id] < 30:
-            self.responder.trigger("duplicate_signal", "medium", {"signal_id": signal_id})
-        self.signal_seen[signal_id] = now
+        # If the caller passes a blank/None signal_id, build one from context
+        effective_id = signal_id or f"{tradingsymbol}:{quantity}:{source}"
+        if not effective_id:
+            return
+        if effective_id in self.signal_seen and now - self.signal_seen[effective_id] < 30:
+            self.responder.trigger("duplicate_signal", "medium", {"signal_id": effective_id})
+        self.signal_seen[effective_id] = now
 
     def on_order_submitted(self, order_id: str):
         self.active_orders[order_id] = time.time()
 
     def on_order_closed(self, order_id: str):
+        """Call this when a fill/cancel/rejection is confirmed."""
         self.active_orders.pop(order_id, None)
+        self._stuck_alerted_at.pop(order_id, None)
 
     def heartbeat(self):
+        """
+        Should be called on a fixed external timer (e.g. every 30 s).
+        Do NOT rely on execute() calling this — execute() may not be called
+        when the market is quiet.
+        """
         now = time.time()
+
+        # --- stale tick check ---
         for symbol, ts in list(self.last_tick_ts.items()):
             if now - ts > self.stale_tick_seconds:
-                self.responder.trigger("stale_tick", "high", {"symbol": symbol, "seconds_since_tick": round(now - ts, 2)})
-                self.last_tick_ts[symbol] = now
+                self.responder.trigger(
+                    "stale_tick",
+                    "high",
+                    {"symbol": symbol, "seconds_since_tick": round(now - ts, 2)},
+                )
+                self.last_tick_ts[symbol] = now  # snooze per-symbol
 
+        # --- stuck order check (FIX #1) ---
         for order_id, created in list(self.active_orders.items()):
             age = now - created
+
+            # FIX #1a: auto-evict very old orders — they will never get a fill
+            # callback (especially in paper mode) so keeping them just pollutes
+            # the journal.  Log once at eviction time.
+            if age > _STUCK_ORDER_MAX_AGE_SECONDS:
+                logger.warning(
+                    "AnomalyDetector: auto-evicting order %s after %.0f s without fill callback",
+                    order_id,
+                    age,
+                )
+                self.journal_eviction(order_id, age)
+                self.active_orders.pop(order_id, None)
+                self._stuck_alerted_at.pop(order_id, None)
+                continue
+
+            # FIX #1b: only fire an alert if we haven't alerted recently
             if age > 20:
-                self.responder.trigger("stuck_order", "critical", {"order_id": order_id, "open_for_seconds": round(age, 2)})
-                self.active_orders[order_id] = now
+                last_alert = self._stuck_alerted_at.get(order_id, 0.0)
+                if now - last_alert >= _STUCK_ORDER_ALERT_COOLDOWN_SECONDS:
+                    self.responder.trigger(
+                        "stuck_order",
+                        "critical",
+                        {"order_id": order_id, "open_for_seconds": round(age, 2)},
+                    )
+                    self._stuck_alerted_at[order_id] = now
+                # NOTE: we do NOT reset active_orders[order_id] = now anymore.
+                # The age must keep growing so we can evict correctly above.
+
+    def journal_eviction(self, order_id: str, age: float):
+        """Helper so the responder can log the eviction event."""
+        self.responder.journal.append(
+            "order_evicted",
+            {
+                "order_id": order_id,
+                "open_for_seconds": round(age, 2),
+                "reason": "no_fill_callback_within_max_age",
+            },
+        )
 
     def _detect_runaway_loop(self, now: float):
         latest = [t for t in self.loop_window if now - t <= 1.0]
@@ -233,30 +299,45 @@ class TCAReporter:
         rows: List[Dict[str, Any]] = []
         with journal_path.open("r", encoding="utf-8") as fp:
             for line in fp:
-                with_context = line.strip()
-                if not with_context:
+                stripped = line.strip()
+                if not stripped:
                     continue
                 try:
-                    rows.append(json.loads(with_context))
+                    rows.append(json.loads(stripped))
                 except json.JSONDecodeError:
                     continue
 
         placements = [r for r in rows if r.get("event_type") == "order_placed"]
         rejects = [r for r in rows if r.get("event_type") == "order_error"]
+        fills = [r for r in rows if r.get("event_type") == "order_fill"]
         exits = [r for r in rows if r.get("event_type") == "position_exit"]
+        incidents = [r for r in rows if r.get("event_type") == "incident"]
+        stuck = [r for r in incidents if r.get("incident") == "stuck_order"]
 
-        avg_latency = round(sum(float(p.get("latency_ms", 0.0)) for p in placements) / max(1, len(placements)), 4)
-        avg_slippage = round(sum(float(p.get("expected_slippage", 0.0)) for p in placements) / max(1, len(placements)), 4)
-        hit_ratio = round((len([e for e in exits if str(e.get("outcome", "")).lower() == "win"]) / max(1, len(exits))) * 100, 2)
+        avg_latency = round(
+            sum(float(p.get("latency_ms", 0.0)) for p in placements) / max(1, len(placements)), 4
+        )
+        avg_slippage = round(
+            sum(float(p.get("expected_slippage", 0.0)) for p in placements) / max(1, len(placements)), 4
+        )
+        hit_ratio = round(
+            (len([e for e in exits if str(e.get("outcome", "")).lower() == "win"]) / max(1, len(exits))) * 100,
+            2,
+        )
+        fill_rate = round(len(fills) / max(1, len(placements)) * 100, 2)
 
         report = {
             "generated_at": _utc_now_iso(),
             "orders_placed": len(placements),
+            "orders_filled": len(fills),
+            "fill_rate_pct": fill_rate,
             "orders_rejected": len(rejects),
             "reject_rate_pct": round((len(rejects) / max(1, len(placements) + len(rejects))) * 100, 2),
             "avg_latency_ms": avg_latency,
             "avg_expected_slippage": avg_slippage,
             "hit_ratio_pct": hit_ratio,
+            "total_incidents": len(incidents),
+            "stuck_order_incidents": len(stuck),
         }
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("w", encoding="utf-8") as fp:

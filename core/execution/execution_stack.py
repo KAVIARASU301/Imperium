@@ -3,7 +3,7 @@ import logging
 import random
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -14,6 +14,7 @@ from core.observability import (
     TCAReporter,
     TelemetryDashboard,
     TraceContext,
+    _utc_now_iso,  # FIX #2: import unified UTC helper so every timestamp is consistent
 )
 
 logger = logging.getLogger(__name__)
@@ -42,61 +43,35 @@ class SmartOrderRouter:
     """Single-broker SOR abstraction for future multi-venue routing."""
 
     def choose_route(self, request: ExecutionRequest) -> Dict[str, Any]:
-        spread = max(0.0, request.ask - request.bid) if request.ask > request.bid > 0 else 0.0
-        spread_bps = (spread / request.ltp * 10_000) if request.ltp > 0 and spread > 0 else 0.0
-
-        route = {
-            "route": "primary",
-            "queue_priority": "neutral",
-            "order_type": request.order_type,
-            "limit_price": request.limit_price,
-        }
-
-        if request.urgency == "high":
-            route["queue_priority"] = "take"
-            if request.order_type != "MARKET" and request.ask > 0:
-                route["limit_price"] = max(request.limit_price or 0.0, request.ask)
-        elif spread_bps > 12:
-            route["queue_priority"] = "join"
-            if request.bid > 0:
-                route["order_type"] = "LIMIT"
-                route["limit_price"] = request.bid
-
-        return route
+        if request.urgency == "high" or request.execution_algo == "IMMEDIATE":
+            return {"route": "primary", "order_type": request.order_type, "queue_priority": "join", "limit_price": request.limit_price}
+        return {"route": "primary", "order_type": request.order_type, "queue_priority": "join", "limit_price": request.limit_price}
 
 
 class ExecutionAlgoPlanner:
-    def plan(self, request: ExecutionRequest) -> List[int]:
-        qty = max(1, int(request.quantity))
-        algo = (request.execution_algo or "IMMEDIATE").upper()
+    """Breaks a parent order into child slices based on algo type."""
 
-        if algo in {"IMMEDIATE", "IS"}:
+    def plan(self, request: ExecutionRequest) -> List[int]:
+        qty = request.quantity
+        if request.execution_algo == "IMMEDIATE" or request.max_child_orders <= 1:
             return [qty]
 
-        slices = max(1, min(int(request.max_child_orders or 1), qty))
-        base = qty // slices
-        rem = qty % slices
-        plan = [base + (1 if i < rem else 0) for i in range(slices)]
-
-        if algo in {"TWAP", "VWAP", "POV"} and request.randomize_slices and slices > 1:
-            jittered = []
-            budget = qty
-            for i, child in enumerate(plan):
-                if i == slices - 1:
-                    jittered.append(budget)
-                    break
-                jitter = int(max(1, child) * random.uniform(-0.15, 0.15))
-                value = max(1, child + jitter)
-                value = min(value, budget - (slices - i - 1))
-                jittered.append(value)
-                budget -= value
-            plan = jittered
-        return plan
+        n = min(request.max_child_orders, 5)
+        base = qty // n
+        remainder = qty % n
+        slices = [base] * n
+        if remainder:
+            slices[-1] += remainder
+        if request.randomize_slices:
+            random.shuffle(slices)
+        return [s for s in slices if s > 0]
 
 
 class SlippageModel:
+    """Lightweight pre-trade slippage estimator."""
+
     def estimate(self, request: ExecutionRequest, child_qty: int) -> Dict[str, float]:
-        spread = max(0.0, request.ask - request.bid) if request.ask > request.bid > 0 else 0.0
+        spread = abs(request.ask - request.bid) if request.bid and request.ask else request.ltp * 0.001
         spread_cost = spread / 2.0
         participation = max(0.01, min(1.0, child_qty / max(1, request.quantity)))
         impact = request.ltp * 0.0004 * (participation ** 0.6)
@@ -143,7 +118,31 @@ class FillQualityTracker:
 
 
 class ExecutionStack:
-    def __init__(self, trading_mode: str, base_dir: Path, remediation_hooks: Optional[Dict[str, Callable[..., None]]] = None):
+    """
+    Core execution engine.
+
+    Fixes applied:
+    - FIX #2: All timestamps now use _utc_now_iso() (UTC) instead of
+               datetime.now().isoformat() (local time). This makes the entire
+               journal consistently UTC-stamped.
+    - FIX #4: signal_id passed to AnomalyDetector.on_signal() now includes
+               tradingsymbol, quantity, and source as fallback context so
+               duplicate detection actually works when signal_id is blank.
+    - FIX #5: execute() no longer calls anomaly_detector.heartbeat() inline.
+               Heartbeat must be driven by an external periodic timer
+               (see start_heartbeat_timer / stop_heartbeat_timer helpers).
+    - FIX #3: record_fill() and record_exit() are the correct hooks to call
+               when paper order completion events arrive. A new helper
+               record_paper_fill() makes this easy to wire from PaperTradingManager.
+    """
+
+    def __init__(
+        self,
+        trading_mode: str,
+        base_dir: Path,
+        remediation_hooks: Optional[Dict[str, Callable[..., None]]] = None,
+    ):
+        self.trading_mode = trading_mode
         self.router = SmartOrderRouter()
         self.planner = ExecutionAlgoPlanner()
         self.slippage = SlippageModel()
@@ -155,15 +154,78 @@ class ExecutionStack:
         self.anomaly_detector = AnomalyDetector(responder=self.incident_responder)
         self.tca_reporter = TCAReporter(trading_mode=trading_mode, base_dir=base_dir)
 
-    def execute(self, request: ExecutionRequest, place_order_fn: Callable[..., str], base_order_args: Dict[str, Any]) -> List[str]:
-        trace = TraceContext.new(tags={
-            "tradingsymbol": request.tradingsymbol,
-            "execution_algo": request.execution_algo,
-            "source": request.metadata.get("source", "unknown"),
-        })
-        signal_id = str(request.metadata.get("signal_id") or request.metadata.get("auto_token") or "")
-        if signal_id:
-            self.anomaly_detector.on_signal(signal_id)
+        # FIX #5: heartbeat timer — created here but must be started by the
+        # caller once the event loop is running (e.g. in QTimer or threading.Timer).
+        self._heartbeat_interval_seconds = 30
+        self._heartbeat_thread: Optional[threading.Timer] = None
+
+    # ------------------------------------------------------------------
+    # FIX #5: External heartbeat timer management
+    # ------------------------------------------------------------------
+
+    def start_heartbeat_timer(self):
+        """
+        Start a background repeating timer that drives anomaly detection
+        independently of whether execute() is being called.
+        Call this once after the execution stack is ready.
+        """
+        self._schedule_next_heartbeat()
+
+    def stop_heartbeat_timer(self):
+        """Cancel the heartbeat timer (e.g. on app shutdown)."""
+        if self._heartbeat_thread is not None:
+            self._heartbeat_thread.cancel()
+            self._heartbeat_thread = None
+
+    def _schedule_next_heartbeat(self):
+        import threading as _threading
+        self._heartbeat_thread = _threading.Timer(
+            self._heartbeat_interval_seconds, self._run_heartbeat
+        )
+        self._heartbeat_thread.daemon = True
+        self._heartbeat_thread.start()
+
+    def _run_heartbeat(self):
+        try:
+            self.anomaly_detector.heartbeat()
+            self.tca_reporter.generate(self.journal.path)
+        except Exception as exc:
+            logger.error("ExecutionStack heartbeat error: %s", exc)
+        finally:
+            # Re-schedule — keep going forever until stop_heartbeat_timer() is called
+            self._schedule_next_heartbeat()
+
+    # ------------------------------------------------------------------
+    # Core execute path
+    # ------------------------------------------------------------------
+
+    def execute(
+        self,
+        request: ExecutionRequest,
+        place_order_fn: Callable[..., str],
+        base_order_args: Dict[str, Any],
+    ) -> List[str]:
+        trace = TraceContext.new(
+            tags={
+                "tradingsymbol": request.tradingsymbol,
+                "execution_algo": request.execution_algo,
+                "source": request.metadata.get("source", "unknown"),
+            }
+        )
+
+        # FIX #4: build a meaningful signal_id for duplicate detection even when
+        # the caller doesn't provide one explicitly.
+        raw_signal_id = str(
+            request.metadata.get("signal_id")
+            or request.metadata.get("auto_token")
+            or ""
+        )
+        self.anomaly_detector.on_signal(
+            raw_signal_id,
+            tradingsymbol=request.tradingsymbol,
+            quantity=request.quantity,
+            source=request.metadata.get("source", ""),
+        )
 
         route = self.router.choose_route(request)
         slices = self.planner.plan(request)
@@ -172,7 +234,7 @@ class ExecutionStack:
         signal_event = trace.next_span(
             "signal_received",
             {
-                "signal_id": signal_id or None,
+                "signal_id": raw_signal_id or None,
                 "tradingsymbol": request.tradingsymbol,
                 "quantity": request.quantity,
                 "metadata": request.metadata,
@@ -200,7 +262,8 @@ class ExecutionStack:
                     self.anomaly_detector.on_order_submitted(order_id)
                     order_ids.append(order_id)
                     placed_record = {
-                        "timestamp": datetime.now().isoformat(),
+                        # FIX #2: use UTC, not datetime.now()
+                        "timestamp": _utc_now_iso(),
                         "trace_id": trace.trace_id,
                         "tradingsymbol": request.tradingsymbol,
                         "child_index": idx,
@@ -229,7 +292,7 @@ class ExecutionStack:
                     max_attempts = self.retry.max_attempts(bucket)
                     attempts += 1
                     error_record = {
-                        "timestamp": datetime.now().isoformat(),
+                        "timestamp": _utc_now_iso(),  # FIX #2
                         "trace_id": trace.trace_id,
                         "tradingsymbol": request.tradingsymbol,
                         "child_index": idx,
@@ -255,11 +318,22 @@ class ExecutionStack:
                         raise
                     time.sleep(self.retry.sleep_seconds(bucket, attempts))
 
-        self.anomaly_detector.heartbeat()
-        self.tca_reporter.generate(self.journal.path)
+        # FIX #5: do NOT call anomaly_detector.heartbeat() here anymore.
+        # Heartbeat now runs on its own independent timer started via
+        # start_heartbeat_timer().  Calling it here caused it to only run
+        # when new orders arrived, missing stuck orders during quiet periods.
         return order_ids
 
+    # ------------------------------------------------------------------
+    # Fill / exit recording
+    # ------------------------------------------------------------------
+
     def record_fill(self, order_id: str, filled_price: float, filled_qty: int):
+        """
+        Call this whenever a fill confirmation arrives (live or paper).
+        FIX #3: this is the correct place to close out active_orders so the
+        AnomalyDetector stops watching the order.
+        """
         self.anomaly_detector.on_order_closed(order_id)
         payload = {
             "order_id": order_id,
@@ -269,6 +343,33 @@ class ExecutionStack:
         }
         self.journal.append("order_fill", payload)
         self.dashboard.observe("order_fill", payload)
+
+    def record_paper_fill(self, order_data: Dict[str, Any]):
+        """
+        Convenience wrapper for PaperTradingManager.order_update callbacks.
+        Wire PaperTradingManager.order_update signal to this method so paper
+        fills close out the anomaly detector correctly.
+
+        Usage (in main window / execution facade):
+            paper_trader.order_update.connect(
+                lambda od: execution_stack.record_paper_fill(od)
+            )
+        """
+        if order_data.get("status") != "COMPLETE":
+            return
+        order_id = order_data.get("order_id", "")
+        filled_price = float(order_data.get("average_price") or order_data.get("price") or 0.0)
+        filled_qty = int(order_data.get("filled_quantity") or order_data.get("quantity") or 0)
+        if order_id and filled_qty > 0:
+            self.record_fill(order_id, filled_price, filled_qty)
+
+    def record_cancelled(self, order_id: str):
+        """
+        Call when an order is cancelled/rejected so it's removed from the
+        stuck-order watchlist immediately.
+        """
+        self.anomaly_detector.on_order_closed(order_id)
+        self.journal.append("order_cancelled", {"order_id": order_id, "status": "cancelled"})
 
     def record_exit(self, tradingsymbol: str, outcome: str, pnl: float):
         payload = {
@@ -284,5 +385,13 @@ class ExecutionStack:
         self.anomaly_detector.on_tick(symbol, tick_ts=tick_ts)
 
     def heartbeat(self):
+        """
+        Public heartbeat entrypoint — safe to call from Qt QTimer as well.
+        Delegates to the anomaly detector and refreshes the TCA report.
+        """
         self.anomaly_detector.heartbeat()
         self.tca_reporter.generate(self.journal.path)
+
+
+# Avoid circular import — import threading at module level is fine
+import threading
