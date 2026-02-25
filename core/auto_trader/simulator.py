@@ -219,13 +219,13 @@ class SimulatorMixin:
         color = "#66BB6A" if points >= 0 else "#EF5350"
         stacker_part = ""
         if results.get("stacked_positions", 0) > 0:
-            uw = results.get("unwind_wins", 0)
             ul = results.get("unwind_losses", 0)
+            upts = results.get("unwind_points_lost", 0.0)
             sw = results.get("stack_exit_wins", 0)
             sl = results.get("stack_exit_losses", 0)
-            # Unwinds = LIFO exits when market reversed through entry price (mostly losses/BE)
+            # Unwinds = LIFO exits when market reversed through entry price (always losses/BE)
             # Stack exits = stacks closed profitably with anchor signal
-            stacker_part = f" | Unwinds {uw}W/{ul}L | StackExit {sw}W/{sl}L"
+            stacker_part = f" | Unwinds {ul}L ({upts:+.2f}pts) | StackExit {sw}W/{sl}L"
         summary = (
             f"Sim: Trades {results['trades']} | Skipped {results['skipped']} | "
             f"Wins {results['wins']} / Losses {results['losses']}{stacker_part} | "
@@ -309,7 +309,7 @@ class SimulatorMixin:
             "skipped_line_keys": set(), "total_points": 0.0,
             "trades": 0, "wins": 0, "losses": 0, "skipped": 0,
             "stacked_positions": 0, "stacked_unwinds": 0,
-            "unwind_wins": 0, "unwind_losses": 0,
+            "unwind_wins": 0, "unwind_losses": 0, "unwind_points_lost": 0.0,
             "stack_exit_wins": 0, "stack_exit_losses": 0,
         }
 
@@ -439,6 +439,7 @@ class SimulatorMixin:
                     result["unwind_wins"] += 1
                 else:
                     result["unwind_losses"] += 1
+                    result["unwind_points_lost"] += float(stack_pnl)  # stack_pnl is negative here
             sim_stacker.remove_stacks(to_unwind)
             logger.debug(
                 "[SIM STACKER] Unwound %d stack(s) at bar %d price=%.2f",
