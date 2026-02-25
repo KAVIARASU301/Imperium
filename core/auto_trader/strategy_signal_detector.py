@@ -1199,9 +1199,6 @@ class StrategySignalDetector:
                 self.active_ema_cross_long = False
                 self.ema_cross_entry_idx = -1
 
-        # Incremental cache for heavy breakout computations
-        self._range_breakout_cache: dict[str, object] = {}
-
         # Check SHORT exit
         if self.active_ema_cross_short:
             if (price_close[current_idx] > price_ema10[current_idx] or
@@ -1209,8 +1206,5 @@ class StrategySignalDetector:
                 exit_short = True
                 self.active_ema_cross_short = False
                 self.ema_cross_entry_idx = -1
-
-        # Incremental cache for heavy breakout computations
-        self._range_breakout_cache: dict[str, object] = {}
 
         return exit_long, exit_short

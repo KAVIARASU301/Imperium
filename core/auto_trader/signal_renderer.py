@@ -273,6 +273,8 @@ class SignalRendererMixin:
             "cvd_ema10": new_cvd_ema10,
             "cvd_ema51": new_cvd_ema51,
             "timestamp": ts_str,
+            "regime_trend": getattr(getattr(self, "_current_regime", None), "trend", None),
+            "regime_volatility": getattr(getattr(self, "_current_regime", None), "volatility", None),
         })
 
 
@@ -476,6 +478,42 @@ class SignalRendererMixin:
                 breakout_switch_mode=self._selected_breakout_switch_mode(),
             )
 
+        adx_arr = compute_adx(
+            np.array(self.all_price_high_data, dtype=float),
+            np.array(self.all_price_low_data, dtype=float),
+            np.array(self.all_price_data, dtype=float),
+            period=14,
+        )
+
+        def _apply_chop_filter(mask: np.ndarray, strategy: str) -> np.ndarray:
+            if not np.any(mask):
+                return mask
+            filtered = mask.copy()
+            for signal_idx in np.where(mask)[0]:
+                if is_chop_regime(
+                    idx=int(signal_idx),
+                    strategy_type=strategy,
+                    price=price_data,
+                    ema_slow=price_slow_filter,
+                    atr=atr_values,
+                    adx=adx_arr,
+                    chop_filter_atr_reversal=getattr(self, "_chop_filter_atr_reversal", True),
+                    chop_filter_ema_cross=getattr(self, "_chop_filter_ema_cross", True),
+                    chop_filter_atr_divergence=getattr(self, "_chop_filter_atr_divergence", True),
+                    chop_filter_cvd_range_breakout=getattr(self, "_chop_filter_cvd_range_breakout", False),
+                ):
+                    filtered[int(signal_idx)] = False
+            return filtered
+
+        short_atr_reversal = _apply_chop_filter(short_atr_reversal, "atr_reversal")
+        long_atr_reversal = _apply_chop_filter(long_atr_reversal, "atr_reversal")
+        short_ema_cross = _apply_chop_filter(short_ema_cross, "ema_cross")
+        long_ema_cross = _apply_chop_filter(long_ema_cross, "ema_cross")
+        short_divergence = _apply_chop_filter(short_divergence, "atr_divergence")
+        long_divergence = _apply_chop_filter(long_divergence, "atr_divergence")
+        short_cvd_range_breakout = _apply_chop_filter(short_cvd_range_breakout, "cvd_range_breakout")
+        long_cvd_range_breakout = _apply_chop_filter(long_cvd_range_breakout, "cvd_range_breakout")
+
         selected_filters = set(self._selected_signal_filters())
         all_filters = {
             self.SIGNAL_FILTER_ATR_ONLY,
@@ -512,10 +550,6 @@ class SignalRendererMixin:
                 short_mask |= short_open_drive
                 long_mask |= long_open_drive
 
-        # ── FIX: Open drive lines must ALWAYS draw when enabled, regardless
-        # of the active signal_filter. They represent a time-specific trigger
-        # so they should always be visible on the chart even when a filter is
-        # narrowing the general signal set.
         if bool(self.open_drive_enabled_check.isChecked()):
             short_mask = short_mask | short_open_drive
             long_mask = long_mask | long_open_drive
@@ -558,18 +592,20 @@ class SignalRendererMixin:
             and self.regime_enabled_check.isChecked()
         )
         if regime_enabled and self.all_timestamps:
-            adx_arr = compute_adx(
-                np.array(self.all_price_high_data, dtype=float),
-                np.array(self.all_price_low_data, dtype=float),
-                np.array(self.all_price_data, dtype=float),
-                period=14,
-            )
-            bar_time = self.all_timestamps[-1]
-            self._current_regime = regime_engine.classify(
-                adx=adx_arr,
-                atr=atr_values,
-                bar_time=bar_time,
-            )
+            closed_idx = self._latest_closed_bar_index()
+            if closed_idx is not None:
+                bar_time = self.all_timestamps[closed_idx]
+                bar_day = bar_time.date()
+                if getattr(self, "_regime_session_day", None) != bar_day:
+                    regime_engine.reset_session()
+                    self._regime_session_day = bar_day
+                self._current_regime = regime_engine.classify(
+                    adx=adx_arr[:closed_idx + 1],
+                    atr=atr_values[:closed_idx + 1],
+                    bar_time=bar_time,
+                )
+            else:
+                self._current_regime = None
         else:
             self._current_regime = None
 
@@ -582,8 +618,8 @@ class SignalRendererMixin:
             regime_indicator.update_regime(self._current_regime)
 
         # Update regime badge in setup dialog (if open)
-        if hasattr(self, "_update_regime_badge") and self._current_regime is not None:
-            self._update_regime_badge(self._current_regime)
+        if hasattr(self, "update_regime_badge") and self._current_regime is not None:
+            self.update_regime_badge(self._current_regime)
 
         # ───────────────────────── DRAW LINES ─────────────────────────
         new_keys = set()

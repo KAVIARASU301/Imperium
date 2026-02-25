@@ -22,7 +22,7 @@ class GovernanceDecision:
 class SignalGovernance:
     """Lightweight institutional-style guardrails for strategy signals."""
 
-    STRATEGIES = ("atr_reversal", "atr_divergence", "ema_cross", "range_breakout")
+    STRATEGIES = ("atr_reversal", "atr_divergence", "ema_cross", "range_breakout", "cvd_range_breakout", "open_drive")
 
     def __init__(self):
         self.deploy_mode = "canary"  # shadow | canary | live
@@ -39,7 +39,9 @@ class SignalGovernance:
             "atr_reversal": 0.24,
             "atr_divergence": 0.20,
             "ema_cross": 0.26,
-            "range_breakout": 0.30,
+            "range_breakout": 0.20,
+            "cvd_range_breakout": 0.06,
+            "open_drive": 0.04,
         }
         self.strategy_weights = dict(self._base_strategy_weights)
         self.strategy_weight_window_days = 5
@@ -53,9 +55,9 @@ class SignalGovernance:
         self._last_edge_idx_by_strategy = {name: -1 for name in self.STRATEGIES}
         self._regime_snapshot = None  # MarketRegime from RegimeEngine, set each redraw
         self.regime_strategy_matrix = {
-            "trend": {"atr_reversal": True, "atr_divergence": True, "ema_cross": True, "range_breakout": True},
-            "chop": {"atr_reversal": True, "atr_divergence": False, "ema_cross": False, "range_breakout": False},
-            "high_vol": {"atr_reversal": True, "atr_divergence": True, "ema_cross": True, "range_breakout": False},
+            "trend": {"atr_reversal": True, "atr_divergence": True, "ema_cross": True, "range_breakout": True, "cvd_range_breakout": True, "open_drive": True},
+            "chop": {"atr_reversal": True, "atr_divergence": False, "ema_cross": False, "range_breakout": False, "cvd_range_breakout": True, "open_drive": True},
+            "high_vol": {"atr_reversal": True, "atr_divergence": True, "ema_cross": True, "range_breakout": False, "cvd_range_breakout": False, "open_drive": True},
         }
 
     @staticmethod
@@ -211,10 +213,7 @@ class SignalGovernance:
 
         regime = self.classify_regime(price_close, ema10, ema51, atr)
         legacy_enabled = self.regime_strategy_matrix.get(regime, {}).get(strategy_type, True)
-        if enabled_flag is None:
-            enabled = legacy_enabled
-        else:
-            enabled = enabled_flag if not enabled_flag else legacy_enabled
+        enabled = enabled_flag if enabled_flag is not None else legacy_enabled
         if not legacy_enabled and enabled_flag is None:
             reasons.append(f"regime_block:{regime}")
 

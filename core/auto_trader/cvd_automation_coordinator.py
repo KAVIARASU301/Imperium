@@ -462,6 +462,8 @@ class CvdAutomationCoordinator:
         cvd_ema51_simple = _to_finite_float(payload.get("cvd_ema51_simple"), cvd_ema51)
         adx = _to_finite_float(payload.get("adx"), 0.0)
         atr_normalized = _to_finite_float(payload.get("atr_normalized"), 0.0)
+        regime_trend = payload.get("regime_trend")
+        regime_is_chop = (regime_trend == "CHOP") or (regime_trend is None and adx < 20.0)
 
         signal_side = active_trade.get("signal_side")
         strategy_type = active_trade.get("strategy_type") or "atr_reversal"
@@ -574,8 +576,14 @@ class CvdAutomationCoordinator:
 
         use_default_ema_exits = active_trade.get("exit_mode") != "trend_unlock"
 
-        if not exit_reason and strategy_type == "ema_cross" and use_default_ema_exits and ((signal_side == "long" and cvd_cross_below_ema10) or (signal_side == "short" and cvd_cross_above_ema10)):
-            exit_reason = "AUTO_EMA10_CROSS"
+        ema_cross_exit_long = cvd_cross_below_ema10 or (regime_is_chop and (price_cross_below_ema10 or price_close < ema10))
+        ema_cross_exit_short = cvd_cross_above_ema10 or (regime_is_chop and (price_cross_above_ema10 or price_close > ema10))
+
+        if not exit_reason and strategy_type == "ema_cross" and use_default_ema_exits and (
+                (signal_side == "long" and ema_cross_exit_long)
+                or (signal_side == "short" and ema_cross_exit_short)
+        ):
+            exit_reason = "AUTO_EMA10_CROSS_CHOP" if regime_is_chop else "AUTO_EMA10_CROSS"
         elif not exit_reason and strategy_type == "atr_divergence" and ((signal_side == "long" and price_cross_above_ema51) or (signal_side == "short" and price_cross_below_ema51)):
             exit_reason = "AUTO_EMA51_CROSS"
         elif not exit_reason and strategy_type in {"range_breakout", "cvd_range_breakout"} and use_default_ema_exits and ((signal_side == "long" and (price_cross_below_ema10 or price_cross_below_ema51)) or (signal_side == "short" and (price_cross_above_ema10 or price_cross_above_ema51))):

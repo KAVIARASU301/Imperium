@@ -62,41 +62,50 @@ class RegimeConfig:
         ("STRONG_TREND", "NORMAL_VOL"): {
             "atr_reversal": False, "atr_divergence": True,
             "ema_cross": True,     "range_breakout": True,
+            "cvd_range_breakout": True, "open_drive": True,
         },
         ("STRONG_TREND", "HIGH_VOL"): {
             "atr_reversal": False, "atr_divergence": True,
             "ema_cross": True,     "range_breakout": False,
+            "cvd_range_breakout": False, "open_drive": True,
         },
         ("STRONG_TREND", "LOW_VOL"): {
             "atr_reversal": False, "atr_divergence": True,
             "ema_cross": True,     "range_breakout": True,
+            "cvd_range_breakout": False, "open_drive": True,
         },
         # WEAK trend: all on but reduced confidence
         ("WEAK_TREND", "NORMAL_VOL"): {
             "atr_reversal": True, "atr_divergence": True,
             "ema_cross": True,    "range_breakout": True,
+            "cvd_range_breakout": True, "open_drive": True,
         },
         ("WEAK_TREND", "HIGH_VOL"): {
             "atr_reversal": True,  "atr_divergence": True,
             "ema_cross": True,     "range_breakout": False,
+            "cvd_range_breakout": False, "open_drive": True,
         },
         ("WEAK_TREND", "LOW_VOL"): {
             "atr_reversal": True,  "atr_divergence": False,
             "ema_cross": False,    "range_breakout": False,
+            "cvd_range_breakout": False, "open_drive": True,
         },
         # CHOP: reversal only, breakout/cross disabled
         ("CHOP", "NORMAL_VOL"): {
             "atr_reversal": True,  "atr_divergence": False,
             "ema_cross": False,    "range_breakout": False,
+            "cvd_range_breakout": True, "open_drive": True,
         },
         ("CHOP", "HIGH_VOL"): {
             "atr_reversal": True,  "atr_divergence": False,
             "ema_cross": False,    "range_breakout": False,
+            "cvd_range_breakout": False, "open_drive": True,
         },
         ("CHOP", "LOW_VOL"): {
             # Low vol chop → nothing fires, too thin
             "atr_reversal": False, "atr_divergence": False,
             "ema_cross": False,    "range_breakout": False,
+            "cvd_range_breakout": False, "open_drive": False,
         },
     })
 
@@ -177,6 +186,7 @@ class RegimeEngine:
 
         # ATR rolling baseline (session-scoped)
         self._atr_baseline: deque[float] = deque(maxlen=self.config.atr_rolling_window)
+        self._last_classified_bar_key = None
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -202,8 +212,17 @@ class RegimeEngine:
         adx_val = float(adx[idx])
         atr_val = float(atr[idx])
 
-        # Update rolling ATR baseline
-        self._atr_baseline.append(atr_val)
+        bar_key = None
+        if isinstance(bar_time, datetime):
+            bar_key = bar_time.isoformat()
+        elif bar_time is not None:
+            bar_key = str(bar_time)
+
+        is_new_bar = bar_key is None or bar_key != self._last_classified_bar_key
+
+        # Update rolling ATR baseline only once per closed bar
+        if is_new_bar:
+            self._atr_baseline.append(atr_val)
         rolling_atr = float(np.mean(self._atr_baseline)) if self._atr_baseline else atr_val
         atr_ratio = atr_val / max(rolling_atr, 1e-9)
 
@@ -211,21 +230,23 @@ class RegimeEngine:
         raw_trend = self._classify_trend(adx_val, adx, idx)
         raw_vol   = self._classify_vol(atr_ratio)
 
-        # Push into confirmation buffers
-        self._trend_buffer.append(raw_trend)
-        self._vol_buffer.append(raw_vol)
+        if is_new_bar:
+            # Push into confirmation buffers only once per closed bar.
+            self._trend_buffer.append(raw_trend)
+            self._vol_buffer.append(raw_vol)
 
-        # Confirm only when N consecutive bars agree
-        self._confirmed_trend = self._confirm(
-            self._trend_buffer,
-            self._confirmed_trend,
-            self.config.adx_confirmation_bars,
-        )
-        self._confirmed_vol = self._confirm(
-            self._vol_buffer,
-            self._confirmed_vol,
-            self.config.vol_confirmation_bars,
-        )
+            # Confirm only when N consecutive bars agree
+            self._confirmed_trend = self._confirm(
+                self._trend_buffer,
+                self._confirmed_trend,
+                self.config.adx_confirmation_bars,
+            )
+            self._confirmed_vol = self._confirm(
+                self._vol_buffer,
+                self._confirmed_vol,
+                self.config.vol_confirmation_bars,
+            )
+            self._last_classified_bar_key = bar_key
 
         session = self._classify_session(bar_time)
         allowed = self._resolve_strategy_matrix(self._confirmed_trend, self._confirmed_vol, session)
@@ -248,6 +269,7 @@ class RegimeEngine:
         self._vol_buffer.clear()
         self._confirmed_trend = "WEAK_TREND"
         self._confirmed_vol   = "NORMAL_VOL"
+        self._last_classified_bar_key = None
 
     def update_config(self, config: RegimeConfig):
         """Hot-swap config from UI settings change."""
