@@ -589,8 +589,6 @@ class SimulatorMixin:
                     )
                     if exit_now:
                         exit_reason = "open_drive_ema_exit"
-                else:
-                    exit_now = False
 
                 if exit_now:
                     _close_trade(idx, reason=exit_reason if exit_reason != "none" else "rule_exit")
@@ -671,17 +669,20 @@ class SimulatorMixin:
 
             if active_trade:
                 if active_trade["signal_side"] == signal_side:
+                    # In live mode we do not open a fresh anchor in the same
+                    # direction while one is already active; stacker handles
+                    # scaling separately. Always skip same-side re-entry.
                     last_signal_time = active_trade.get("signal_timestamp")
                     elapsed_min = 0.0
                     if last_signal_time:
                         elapsed_min = (ts - last_signal_time).total_seconds() / 60.0
-                    if elapsed_min < stack_window_minutes:
-                        result["skipped"] += 1
-                        result["skipped_x"].append(float(x_arr[idx]))
-                        result["skipped_y"].append(float((high[idx] + y_offset[idx]) if signal_side == "short" else (low[idx] - y_offset[idx])))
-                        result["skipped_line_keys"].add(f"{'S' if signal_side == 'short' else 'L'}:{idx}")
-                        _log_signal_event(idx, "SKIP", signal_side, signal_strategy, "same_side_stack_window")
-                        continue
+                    result["skipped"] += 1
+                    result["skipped_x"].append(float(x_arr[idx]))
+                    result["skipped_y"].append(float((high[idx] + y_offset[idx]) if signal_side == "short" else (low[idx] - y_offset[idx])))
+                    result["skipped_line_keys"].add(f"{'S' if signal_side == 'short' else 'L'}:{idx}")
+                    skip_reason = "same_side_stack_window" if elapsed_min < stack_window_minutes else "same_side_position_open"
+                    _log_signal_event(idx, "SKIP", signal_side, signal_strategy, skip_reason)
+                    continue
                 else:
                     active_strategy = active_trade.get("strategy_type")
                     active_priority = self._strategy_priority(active_strategy)
