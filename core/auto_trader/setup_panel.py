@@ -642,6 +642,15 @@ class SetupPanelMixin:
         self.show_grid_lines_check.toggled.connect(self._on_setup_visual_settings_changed)
         app_frm.addRow("Grid", self.show_grid_lines_check)
 
+        self.show_trend_change_markers_check = QCheckBox("Show trend change markers")
+        self.show_trend_change_markers_check.setChecked(False)
+        self.show_trend_change_markers_check.setToolTip(
+            "Mark every regime transition (trend/vol change) with a vertical line.\n"
+            "Shows: Trend, Volatility, Session, ADX, Vol ratio. Requires Regime Engine enabled."
+        )
+        self.show_trend_change_markers_check.toggled.connect(self._on_trend_change_markers_toggled)
+        app_frm.addRow("Trend Change", self.show_trend_change_markers_check)
+
         # Background images
         def _bg_row(target, label_attr, upload_attr, clear_attr):
             row = QHBoxLayout()
