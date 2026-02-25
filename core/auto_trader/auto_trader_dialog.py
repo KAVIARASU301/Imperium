@@ -34,6 +34,7 @@ from utils.cpr_calculator import CPRCalculator
 from core.auto_trader.regime_engine import RegimeEngine, RegimeConfig
 from core.auto_trader.regime_tab_mixin import RegimeTabMixin
 from core.auto_trader.regime_indicator import RegimeIndicator
+from core.auto_trader.trend_change_markers import TrendChangeMarkersMixin
 logger = logging.getLogger(__name__)
 
 
@@ -41,7 +42,7 @@ logger = logging.getLogger(__name__)
 # Auto Trader DIalog
 # =============================================================================
 
-class AutoTraderDialog(RegimeTabMixin, SetupPanelMixin, SetupSettingsMigrationMixin, SignalRendererMixin, SimulatorMixin, QDialog):
+class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin, SetupSettingsMigrationMixin, SignalRendererMixin, SimulatorMixin, QDialog):
     REFRESH_INTERVAL_MS = 3000
     LIVE_TICK_MAX_POINTS = 6000
     LIVE_TICK_REPAINT_MS = 80
@@ -233,6 +234,7 @@ class AutoTraderDialog(RegimeTabMixin, SetupPanelMixin, SetupSettingsMigrationMi
         self.setAttribute(Qt.WA_NoSystemBackground, False)
 
         self._setup_ui()
+        self._init_trend_change_markers()
         self._load_persisted_setup_values()
         self._connect_signals()
 
@@ -1548,6 +1550,14 @@ class AutoTraderDialog(RegimeTabMixin, SetupPanelMixin, SetupSettingsMigrationMi
         self._apply_visual_settings()
         self._update_atr_reversal_markers()
 
+        # ── Restore trend change markers toggle ───────────────────────────────
+        if hasattr(self, "show_trend_change_markers_check"):
+            self.show_trend_change_markers_check.blockSignals(True)
+            self.show_trend_change_markers_check.setChecked(
+                _read_setting("show_trend_change_markers", False, bool)
+            )
+            self.show_trend_change_markers_check.blockSignals(False)
+
         # ── Regime engine: restore persisted thresholds & strategy matrix ──
         _regime_scalar_keys = [
             "regime_enabled", "regime_adx_strong", "regime_adx_weak",
@@ -1653,6 +1663,10 @@ class AutoTraderDialog(RegimeTabMixin, SetupPanelMixin, SetupSettingsMigrationMi
             "show_cpr_labels": self.show_cpr_labels_check.isChecked(),
             "cpr_narrow_threshold": float(self.cpr_narrow_threshold_input.value()),
             "cpr_wide_threshold": float(self.cpr_wide_threshold_input.value()),
+            "show_trend_change_markers": (
+                self.show_trend_change_markers_check.isChecked()
+                if hasattr(self, "show_trend_change_markers_check") else False
+            ),
             **self._regime_settings_to_dict(),
         }
 
@@ -2523,6 +2537,7 @@ class AutoTraderDialog(RegimeTabMixin, SetupPanelMixin, SetupSettingsMigrationMi
         self._clear_simulation_markers()
         self._clear_confluence_lines()
         self._clear_cpr_levels()
+        self._clear_trend_change_markers()
 
         # Clear EMA curves
         self.cvd_ema10_curve.clear()
@@ -2947,9 +2962,18 @@ class AutoTraderDialog(RegimeTabMixin, SetupPanelMixin, SetupSettingsMigrationMi
                 self.price_ema51_curve.setOpacity(opacity)
                 self.cvd_ema51_curve.setOpacity(opacity)
 
+        # Cache arrays needed by TrendChangeMarkersMixin._refresh_trend_change_markers
+        _price_h = np.array(self.all_price_high_data, dtype=float)
+        _price_l = np.array(self.all_price_low_data, dtype=float)
+        _price_c = np.array(self.all_price_data, dtype=float)
+        self._latest_x_arr   = np.array(x_indices, dtype=float)
+        self._latest_atr_arr = calculate_atr(_price_h, _price_l, _price_c, period=14)
+        self._latest_adx_arr = compute_adx(_price_h, _price_l, _price_c, period=14)
+
         self._update_atr_reversal_markers()
         self._update_ema_legends()
         self._render_cpr_levels()
+        self._refresh_trend_change_markers()
 
     def _update_ema_legends(self):
         """EMA legends are disabled to keep chart area unobstructed."""
