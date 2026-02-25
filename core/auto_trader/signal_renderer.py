@@ -19,7 +19,6 @@ from core.auto_trader.stacker import StackerState
 logger = logging.getLogger(__name__)
 
 
-
 class SignalRendererMixin:
     def _on_atr_settings_changed(self, *_):
         """Recompute ATR markers from plotted data without refetching history."""
@@ -27,8 +26,6 @@ class SignalRendererMixin:
         self.strategy_detector.ATR_FLAT_VELOCITY_PCT = float(self.atr_flat_velocity_pct_input.value())
         self._update_atr_reversal_markers()
         self._persist_setup_values()
-
-
 
     def _update_atr_reversal_markers(self):
         """Update ATR reversal triangles using currently plotted price and CVD series."""
@@ -181,8 +178,6 @@ class SignalRendererMixin:
 
         self._emit_automation_market_state()
 
-
-
     def _emit_automation_market_state(self):
         if not self._last_plot_x_indices or not self.all_price_data or not self.all_cvd_data:
             return
@@ -278,8 +273,6 @@ class SignalRendererMixin:
             "regime_volatility": getattr(getattr(self, "_current_regime", None), "volatility", None),
         })
 
-
-
     def _latest_closed_bar_index(self) -> int | None:
         if not self.all_timestamps:
             return None
@@ -305,8 +298,6 @@ class SignalRendererMixin:
 
     # ------------------------------------------------------------------
 
-
-
     def _on_atr_marker_filter_changed(self, *_):
         """Handle ATR marker display filter changes"""
         if hasattr(self, "setup_atr_marker_filter_combo"):
@@ -316,16 +307,12 @@ class SignalRendererMixin:
         self._update_atr_reversal_markers()
         self._persist_setup_values()
 
-
-
     def _on_setup_atr_marker_filter_changed(self, *_):
         self.atr_marker_filter_combo.blockSignals(True)
         self.atr_marker_filter_combo.setCurrentIndex(self.setup_atr_marker_filter_combo.currentIndex())
         self.atr_marker_filter_combo.blockSignals(False)
         self._update_atr_reversal_markers()
         self._persist_setup_values()
-
-
 
     def _clear_confluence_lines(self):
         """Remove all confluence vertical lines from both charts."""
@@ -492,16 +479,16 @@ class SignalRendererMixin:
             filtered = mask.copy()
             for signal_idx in np.where(mask)[0]:
                 if is_chop_regime(
-                    idx=int(signal_idx),
-                    strategy_type=strategy,
-                    price=price_data,
-                    ema_slow=price_slow_filter,
-                    atr=atr_values,
-                    adx=adx_arr,
-                    chop_filter_atr_reversal=getattr(self, "_chop_filter_atr_reversal", True),
-                    chop_filter_ema_cross=getattr(self, "_chop_filter_ema_cross", True),
-                    chop_filter_atr_divergence=getattr(self, "_chop_filter_atr_divergence", True),
-                    chop_filter_cvd_range_breakout=getattr(self, "_chop_filter_cvd_range_breakout", False),
+                        idx=int(signal_idx),
+                        strategy_type=strategy,
+                        price=price_data,
+                        ema_slow=price_slow_filter,
+                        atr=atr_values,
+                        adx=adx_arr,
+                        chop_filter_atr_reversal=getattr(self, "_chop_filter_atr_reversal", True),
+                        chop_filter_ema_cross=getattr(self, "_chop_filter_ema_cross", True),
+                        chop_filter_atr_divergence=getattr(self, "_chop_filter_atr_divergence", True),
+                        chop_filter_cvd_range_breakout=getattr(self, "_chop_filter_cvd_range_breakout", False),
                 ):
                     filtered[int(signal_idx)] = False
             return filtered
@@ -579,38 +566,17 @@ class SignalRendererMixin:
             },
         }
 
-        # ── Snapshot RAW masks BEFORE strategy-filter zeroing ─────────────────
-        # The simulator needs these unfiltered masks so it can gate signals via
-        # the regime engine bar-by-bar historically.  If we gave the simulator
-        # the already-filtered masks, enabling/disabling regime would have no
-        # effect (signals already absent/present from the current-bar regime pass).
-        _raw_short = np.zeros(length, dtype=bool)
-        _raw_long = np.zeros(length, dtype=bool)
-        for _strat_masks in strategy_masks.get("short", {}).values():
-            if _strat_masks is not None and len(_strat_masks) >= length:
-                _raw_short |= np.asarray(_strat_masks[:length], dtype=bool)
-        for _strat_masks in strategy_masks.get("long", {}).values():
-            if _strat_masks is not None and len(_strat_masks) >= length:
-                _raw_long |= np.asarray(_strat_masks[:length], dtype=bool)
-        self._latest_sim_raw_short_mask = _raw_short
-        self._latest_sim_raw_long_mask = _raw_long
-        import copy as _copy
-        self._latest_sim_raw_strategy_masks = _copy.deepcopy(strategy_masks)
-
         # ── Sync strategy_masks with the active signal filter ─────────────────
-        # The short_mask / long_mask passed to the simulator are already filtered,
-        # but strategy_masks sub-masks still contain ALL strategy signals.  If we
-        # don't zero-out the non-selected strategies here, _resolve_signal_side_and_strategy
-        # inside the simulator will fire on strategies the user has hidden — making the
-        # isolated signal analysis completely wrong.
+        # Apply the user's UI signal filter first so that both the confluence lines
+        # and the historical simulator properly ignore unselected strategies.
         if selected_filters < all_filters:
             _filter_to_strategy = {
-                self.SIGNAL_FILTER_ATR_ONLY:          ["atr_reversal"],
-                self.SIGNAL_FILTER_EMA_CROSS_ONLY:    ["ema_cross"],
-                self.SIGNAL_FILTER_BREAKOUT_ONLY:     ["range_breakout"],
+                self.SIGNAL_FILTER_ATR_ONLY: ["atr_reversal"],
+                self.SIGNAL_FILTER_EMA_CROSS_ONLY: ["ema_cross"],
+                self.SIGNAL_FILTER_BREAKOUT_ONLY: ["range_breakout"],
                 self.SIGNAL_FILTER_CVD_BREAKOUT_ONLY: ["cvd_range_breakout"],
-                self.SIGNAL_FILTER_OTHERS:            ["atr_divergence"],
-                self.SIGNAL_FILTER_OPEN_DRIVE_ONLY:   ["open_drive"],
+                self.SIGNAL_FILTER_OTHERS: ["atr_divergence"],
+                self.SIGNAL_FILTER_OPEN_DRIVE_ONLY: ["open_drive"],
             }
             _allowed_strategies: set[str] = set()
             for _filt_const, _strat_list in _filter_to_strategy.items():
@@ -626,6 +592,23 @@ class SignalRendererMixin:
                     if _strat not in _allowed_strategies:
                         strategy_masks[_side][_strat] = _zero.copy()
 
+        # ── Snapshot RAW masks (now reflecting UI signal filters) ─────────────
+        # The simulator uses these masks to replay historical regime states, but
+        # they must still respect the user's explicit strategy selections.
+        _raw_short = np.zeros(length, dtype=bool)
+        _raw_long = np.zeros(length, dtype=bool)
+        for _strat_masks in strategy_masks.get("short", {}).values():
+            if _strat_masks is not None and len(_strat_masks) >= length:
+                _raw_short |= np.asarray(_strat_masks[:length], dtype=bool)
+        for _strat_masks in strategy_masks.get("long", {}).values():
+            if _strat_masks is not None and len(_strat_masks) >= length:
+                _raw_long |= np.asarray(_strat_masks[:length], dtype=bool)
+
+        self._latest_sim_raw_short_mask = _raw_short
+        self._latest_sim_raw_long_mask = _raw_long
+        import copy as _copy
+        self._latest_sim_raw_strategy_masks = _copy.deepcopy(strategy_masks)
+
         # Keep the latest plotted masks available for simulator replay.
         self._latest_sim_x_arr = x_arr
         self._latest_sim_short_mask = short_mask
@@ -635,9 +618,9 @@ class SignalRendererMixin:
         # ── Regime classification: classify → push to governance + top-bar ──
         regime_engine = getattr(self, "regime_engine", None)
         regime_enabled = (
-            regime_engine is not None
-            and hasattr(self, "regime_enabled_check")
-            and self.regime_enabled_check.isChecked()
+                regime_engine is not None
+                and hasattr(self, "regime_enabled_check")
+                and self.regime_enabled_check.isChecked()
         )
         if regime_enabled and self.all_timestamps:
             closed_idx = self._latest_closed_bar_index()
