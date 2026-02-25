@@ -14,21 +14,6 @@ from core.auto_trader.regime_engine import RegimeEngine
 from core.auto_trader.stacker import StackerState
 
 
-def _is_regime_breakdown(active_trade: dict) -> bool:
-    """Mirror live AUTO regime-breakdown exit trigger."""
-    adx_hist = active_trade.get("regime_adx_hist") or []
-    vol_hist = active_trade.get("regime_vol_hist") or []
-    if len(adx_hist) < 6 or len(vol_hist) < 6:
-        return False
-
-    adx_falling = all(adx_hist[-i] < adx_hist[-i - 1] for i in range(1, 4))
-    adx_below_5bar = adx_hist[-1] < adx_hist[-6]
-    vol_below_5bar = vol_hist[-1] < vol_hist[-6]
-    peak_vol = float(active_trade.get("trend_mode_peak_vol") or 0.0)
-    vol_contracting = vol_hist[-1] < (0.85 * peak_vol) if peak_vol > 0 else False
-    return adx_falling and adx_below_5bar and vol_below_5bar and vol_contracting
-
-
 logger = logging.getLogger(__name__)
 
 
@@ -161,7 +146,6 @@ class SimulatorMixin:
         ordered_strategies = sorted(
             priorities.keys(),
             key=lambda strategy_key: priorities.get(strategy_key, 0),
-            reverse=True,
         )
         for strategy_type in ordered_strategies:
             if allowed_strategies is not None and not allowed_strategies.get(strategy_type, True):
@@ -192,7 +176,7 @@ class SimulatorMixin:
 
             if short_priority == long_priority:
                 return None, None
-            return ("short", short_strategy) if short_priority > long_priority else ("long", long_strategy)
+            return ("short", short_strategy) if short_priority < long_priority else ("long", long_strategy)
 
         if candidate_short:
             return "short", short_strategy
@@ -293,17 +277,6 @@ class SimulatorMixin:
         price_low_full = np.array(self.all_price_low_data[:length], dtype=float)
         atr_full = calculate_atr(price_high_full, price_low_full, close, 14)
         adx_full = compute_adx(price_high_full, price_low_full, close, 14)
-        atr_normalized_full = np.zeros(length, dtype=float)
-        for idx in range(length):
-            current_atr = float(atr_full[idx]) if idx < len(atr_full) and np.isfinite(atr_full[idx]) else 0.0
-            if current_atr <= 0:
-                continue
-            window = atr_full[max(0, idx - 29): idx + 1]
-            atr_baseline = float(np.nanmean(window)) if len(window) else 0.0
-            if not np.isfinite(atr_baseline) or atr_baseline <= 0:
-                atr_baseline = current_atr
-            atr_normalized_full[idx] = (current_atr / atr_baseline) if atr_baseline > 0 else 0.0
-
         regime_enabled = bool(
             getattr(self, "regime_enabled_check", None)
             and self.regime_enabled_check.isChecked()
@@ -317,11 +290,6 @@ class SimulatorMixin:
         max_profit_giveback_points = float(max(0.0, self.max_profit_giveback_input.value()))
         open_drive_max_profit_giveback_points = float(max(0.0, getattr(self, "open_drive_max_profit_giveback_input", None).value() if getattr(self, "open_drive_max_profit_giveback_input", None) is not None else 0.0))
         max_profit_giveback_strategies = set(self._selected_max_giveback_strategies())
-        selected_dynamic_exit = getattr(self, "_selected_dynamic_exit_strategies", None)
-        if callable(selected_dynamic_exit):
-            dynamic_exit_trend_following_strategies = set(selected_dynamic_exit())
-        else:
-            dynamic_exit_trend_following_strategies = {"ema_cross", "range_breakout", "cvd_range_breakout"}
         atr_skip_limit = int(getattr(self, "atr_skip_limit_input", None) and
                              self.atr_skip_limit_input.value() or 0)
 
@@ -565,57 +533,8 @@ class SimulatorMixin:
                 active_strategy_type = active_trade.get("strategy_type") or "atr_reversal"
 
                 adx_now = float(adx_full[idx]) if idx < len(adx_full) and np.isfinite(adx_full[idx]) else 0.0
-                atr_normalized = float(atr_normalized_full[idx]) if idx < len(atr_normalized_full) and np.isfinite(atr_normalized_full[idx]) else 0.0
                 regime_is_chop = adx_now < 20.0
-                adx_hist = active_trade.setdefault("regime_adx_hist", [])
-                vol_hist = active_trade.setdefault("regime_vol_hist", [])
-                if adx_now > 0:
-                    adx_hist.append(adx_now)
-                if atr_normalized > 0:
-                    vol_hist.append(atr_normalized)
-                if len(adx_hist) > 50:
-                    del adx_hist[:-50]
-                if len(vol_hist) > 50:
-                    del vol_hist[:-50]
 
-                trend_mode_eligible = active_strategy_type in dynamic_exit_trend_following_strategies
-                stacked_active = bool(sim_stacker is not None and sim_stacker.stack_entries)
-                adx_slope = (adx_hist[-1] - adx_hist[-2]) if len(adx_hist) >= 2 else 0.0
-                vol_slope = (vol_hist[-1] - vol_hist[-2]) if len(vol_hist) >= 2 else 0.0
-                unlock_profit_buffer = max(stop_points or 0.0, 1.0)
-                trend_unlock = (
-                    trend_mode_eligible
-                    and not stacked_active
-                    and favorable_move >= unlock_profit_buffer
-                    and adx_now >= 28.0
-                    and atr_normalized >= 1.15
-                    and adx_slope > 0
-                    and vol_slope > 0
-                    and len(adx_hist) >= 3
-                    and len(vol_hist) >= 3
-                    and adx_hist[-1] > adx_hist[-2] > adx_hist[-3]
-                    and vol_hist[-1] > vol_hist[-2] > vol_hist[-3]
-                )
-                unlock_bar_count = int(active_trade.get("trend_mode_unlock_bar_count") or 0)
-                if trend_unlock:
-                    unlock_bar_count += 1
-                else:
-                    unlock_bar_count = 0
-                    if active_trade.get("exit_mode") == "trend_unlock":
-                        active_trade["exit_mode"] = "default"
-                        active_trade["trend_mode_peak_vol"] = 0.0
-                active_trade["trend_mode_unlock_bar_count"] = unlock_bar_count
-                if unlock_bar_count >= 3 and active_trade.get("exit_mode") != "trend_unlock":
-                    active_trade["exit_mode"] = "trend_unlock"
-                    active_trade["trend_mode_peak_vol"] = atr_normalized
-
-                if active_trade.get("exit_mode") == "trend_unlock":
-                    active_trade["trend_mode_peak_vol"] = max(float(active_trade.get("trend_mode_peak_vol") or 0.0), atr_normalized)
-                    if _is_regime_breakdown(active_trade):
-                        _close_trade(idx, reason="trend_unlock_cooldown")
-                        continue
-
-                use_default_ema_exits = active_trade.get("exit_mode") != "trend_unlock"
                 exit_now = False
                 exit_reason = "none"
                 if hit_stop:
@@ -649,7 +568,7 @@ class SimulatorMixin:
                         exit_now = giveback_points >= effective_giveback_points
                         if exit_now:
                             exit_reason = "max_profit_giveback"
-                if (not exit_now) and active_strategy_type == "ema_cross" and use_default_ema_exits:
+                if (not exit_now) and active_strategy_type == "ema_cross":
                     ema_cross_exit_long = cvd_cross_below_ema10 or (regime_is_chop and (price_cross_below_ema10 or price_close < ema10[idx]))
                     ema_cross_exit_short = cvd_cross_above_ema10 or (regime_is_chop and (price_cross_above_ema10 or price_close > ema10[idx]))
                     exit_now = (signal_side == "long" and ema_cross_exit_long) or (signal_side == "short" and ema_cross_exit_short)
@@ -659,11 +578,11 @@ class SimulatorMixin:
                     exit_now = (signal_side == "long" and price_cross_above_ema51) or (signal_side == "short" and price_cross_below_ema51)
                     if exit_now:
                         exit_reason = "atr_divergence_exit"
-                elif (not exit_now) and active_strategy_type in {"range_breakout", "cvd_range_breakout"} and use_default_ema_exits:
+                elif (not exit_now) and active_strategy_type in {"range_breakout", "cvd_range_breakout"}:
                     exit_now = (signal_side == "long" and (price_cross_below_ema10 or price_cross_below_ema51)) or (signal_side == "short" and (price_cross_above_ema10 or price_cross_above_ema51))
                     if exit_now:
                         exit_reason = "breakout_ema_reversal"
-                elif (not exit_now) and active_strategy_type == "open_drive" and use_default_ema_exits:
+                elif (not exit_now) and active_strategy_type == "open_drive":
                     exit_now = (
                         (signal_side == "long" and (price_close < ema10[idx] or cvd_close[idx] < cvd_ema10[idx]))
                         or (signal_side == "short" and (price_close > ema10[idx] or cvd_close[idx] > cvd_ema10[idx]))
@@ -801,12 +720,12 @@ class SimulatorMixin:
                             _log_signal_event(idx, "SKIP", signal_side, signal_strategy, f"atr_skip_limit_wait:{skipped_count}/{atr_skip_limit}")
                             continue
                     # ──────────────────────────────────────────────────────────
-                    elif new_priority <= active_priority:
+                    elif new_priority >= active_priority:
                         result["skipped"] += 1
                         result["skipped_x"].append(float(x_arr[idx]))
                         result["skipped_y"].append(float((high[idx] + y_offset[idx]) if signal_side == "short" else (low[idx] - y_offset[idx])))
                         result["skipped_line_keys"].add(f"{'S' if signal_side == 'short' else 'L'}:{idx}")
-                        _log_signal_event(idx, "SKIP", signal_side, signal_strategy, f"priority_blocked:new={new_priority}<=active={active_priority}")
+                        _log_signal_event(idx, "SKIP", signal_side, signal_strategy, f"priority_blocked:new={new_priority}>=active={active_priority}")
                         continue
                     else:
                         _close_trade(idx, reason="higher_priority_signal")
@@ -834,11 +753,6 @@ class SimulatorMixin:
                 "last_cvd_ema10": float(cvd_ema10[idx]),
                 "last_cvd_ema51": float(cvd_ema51[idx]),
                 "last_cvd_ema51_simple": float(cvd_ema51[idx]),
-                "regime_adx_hist": [],
-                "regime_vol_hist": [],
-                "exit_mode": "default",
-                "trend_mode_unlock_bar_count": 0,
-                "trend_mode_peak_vol": 0.0,
             }
 
             stacker_allowed_for_trade = stacker_enabled and (signal_strategy != "open_drive" or open_drive_stack_enabled)
