@@ -1121,6 +1121,24 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
 
         root.addWidget(self.plot, 1)
 
+        bottom_status_row = QHBoxLayout()
+        bottom_status_row.setContentsMargins(2, 2, 2, 0)
+        bottom_status_row.setSpacing(14)
+
+        self.cpr_status_label = QLabel("CPR: --")
+        self.cpr_status_label.setStyleSheet("color: #8A9BA8; font-size: 11px; font-weight: 700;")
+        self.cpr_status_label.setAlignment(Qt.AlignCenter)
+
+        self.priority_order_label = QLabel("Priority order: --")
+        self.priority_order_label.setStyleSheet("color: #8A9BA8; font-size: 11px; font-weight: 600;")
+        self.priority_order_label.setAlignment(Qt.AlignCenter)
+
+        bottom_status_row.addStretch()
+        bottom_status_row.addWidget(self.cpr_status_label)
+        bottom_status_row.addWidget(self.priority_order_label)
+        bottom_status_row.addStretch()
+        root.addLayout(bottom_status_row)
+
         zero_pen = pg.mkPen("#6C7386", style=Qt.DashLine, width=1)
         self.plot.addItem(pg.InfiniteLine(0, angle=0, pen=zero_pen))
 
@@ -1985,6 +2003,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
                 updated[list_key][strategy_key] = value
         self._cpr_strategy_priorities = updated
         self._persist_setup_values()
+        self._update_cpr_status_bar()
         self._on_automation_settings_changed()
 
     def _on_focus_mode_changed(self, enabled: bool):
@@ -2951,6 +2970,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
     def _log_active_priority_list_if_needed(self):
         key, priorities = self._active_strategy_priorities()
         self._active_priority_list_key = key
+        self._update_cpr_status_bar(key=key, priorities=priorities)
         if self._last_logged_priority_list_key == key:
             return
         self._last_logged_priority_list_key = key
@@ -2960,6 +2980,32 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
             self.CPR_PRIORITY_LIST_LABELS.get(key, key.title()),
             priorities,
         )
+
+    def _update_cpr_status_bar(self, key: str | None = None, priorities: dict[str, int] | None = None):
+        if key is None or priorities is None:
+            key, priorities = self._active_strategy_priorities()
+
+        cpr_text = {
+            "narrow": "Narrow",
+            "wide": "Wide",
+            "neutral": "Neutral",
+            "fallback": "--",
+        }.get(key, key.title())
+
+        if hasattr(self, "cpr_status_label"):
+            self.cpr_status_label.setText(f"CPR: {cpr_text}")
+
+        ranked = sorted(
+            priorities.items(),
+            key=lambda item: (int(item[1]), self.STRATEGY_PRIORITY_KEYS.index(item[0])),
+        )
+        priority_text = ", ".join(
+            f"{rank}. {self.STRATEGY_PRIORITY_LABELS.get(strategy_key, strategy_key)}"
+            for strategy_key, rank in ranked
+        ) if ranked else "--"
+
+        if hasattr(self, "priority_order_label"):
+            self.priority_order_label.setText(f"Priority order: {priority_text}")
 
     def _classify_cpr_width(self, width: float) -> tuple[str, str]:
         narrow = max(0.0, self._cpr_narrow_threshold)
