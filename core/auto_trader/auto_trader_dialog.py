@@ -776,7 +776,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         controls_row.addWidget(signal_filter_label)
 
         self.signal_filter_combo = QComboBox()
-        self.signal_filter_combo.setFixedWidth(180)
+        self.signal_filter_combo.setFixedWidth(200)
         self.signal_filter_combo.setStyleSheet(compact_combo_style)
         self._init_signal_filter_combo(self.signal_filter_combo)
         fit_combo_to_widest_item(self.signal_filter_combo)
