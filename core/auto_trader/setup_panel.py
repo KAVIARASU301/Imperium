@@ -200,6 +200,14 @@ class SetupPanelMixin:
         sig_frm.addRow("ATR Flat Vel%", self.atr_flat_velocity_pct_input)
         sig_frm.addRow("CVD EMA Gap",  self.cvd_ema_gap_input)
 
+        self.ema_cross_use_parent_mask_check = QCheckBox("Require 5m Parent Trend")
+        self.ema_cross_use_parent_mask_check.setChecked(True)
+        self.ema_cross_use_parent_mask_check.setToolTip(
+            "Use 5-minute parent trend as a confluence gate for EMA+CVD Cross signals.\n"
+            "Disable to allow EMA Cross signals without higher-timeframe trend confirmation."
+        )
+        self.ema_cross_use_parent_mask_check.toggled.connect(self._on_breakout_settings_changed)
+
         self.setup_signal_filter_combo = QComboBox()
         self.setup_signal_filter_combo.setStyleSheet(compact_combo_style)
         _wc(self.setup_signal_filter_combo)
@@ -811,8 +819,12 @@ class SetupPanelMixin:
             _strategy_tab(),
             self.STRATEGY_PRIORITY_LABELS["atr_divergence"],
         )
+        ema_cross_grp, ema_cross_frm = _group("EMA & CVD Cross")
+        ema_cross_frm.addRow(_note("Configure EMA+CVD cross confluence behavior."))
+        ema_cross_frm.addRow("Parent Trend", self.ema_cross_use_parent_mask_check)
+
         tabs.addTab(
-            _strategy_tab(),
+            _strategy_tab(ema_cross_grp),
             self.STRATEGY_PRIORITY_LABELS["ema_cross"],
         )
         tabs.addTab(

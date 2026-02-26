@@ -291,7 +291,8 @@ class StrategySignalDetector:
             cvd_data: np.ndarray,
             cvd_ema10: np.ndarray,
             cvd_ema51: np.ndarray,
-            cvd_ema_gap_threshold: float
+            cvd_ema_gap_threshold: float,
+            use_parent_mask: bool = True,
     ) -> tuple[np.ndarray, np.ndarray]:
         """
         EMA & CVD CROSS STRATEGY:
@@ -309,10 +310,14 @@ class StrategySignalDetector:
         if length <= 0:
             return np.array([], dtype=bool), np.array([], dtype=bool)
 
-        parent_long_mask, parent_short_mask = self._build_parent_5m_trend_masks(
-            timestamps=timestamps[:length],
-            price_data=price_data[:length],
-        )
+        if use_parent_mask:
+            parent_long_mask, parent_short_mask = self._build_parent_5m_trend_masks(
+                timestamps=timestamps[:length],
+                price_data=price_data[:length],
+            )
+        else:
+            parent_long_mask = np.ones(length, dtype=bool)
+            parent_short_mask = np.ones(length, dtype=bool)
 
         # Price position checks
         price_above_both_emas = (price_data > price_ema10) & (price_data > price_ema51)

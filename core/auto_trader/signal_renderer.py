@@ -365,7 +365,8 @@ class SignalRendererMixin:
             cvd_data=cvd_data,
             cvd_ema10=cvd_fast_filter,
             cvd_ema51=cvd_slow_filter,
-            cvd_ema_gap_threshold=self.cvd_ema_gap_input.value()
+            cvd_ema_gap_threshold=self.cvd_ema_gap_input.value(),
+            use_parent_mask=self.ema_cross_use_parent_mask_check.isChecked(),
         )
 
         short_divergence, long_divergence = self.strategy_detector.detect_atr_cvd_divergence_strategy(

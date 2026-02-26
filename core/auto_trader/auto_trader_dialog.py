@@ -1240,6 +1240,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.atr_extension_threshold_input.blockSignals(True)
         self.atr_flat_velocity_pct_input.blockSignals(True)
         self.cvd_ema_gap_input.blockSignals(True)
+        self.ema_cross_use_parent_mask_check.blockSignals(True)
         self.signal_filter_combo.blockSignals(True)
         self.atr_marker_filter_combo.blockSignals(True)
         self.setup_signal_filter_combo.blockSignals(True)
@@ -1349,6 +1350,9 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         )
         self.cvd_ema_gap_input.setValue(
             _read_setting("cvd_ema_gap", self.cvd_ema_gap_input.value(), int)
+        )
+        self.ema_cross_use_parent_mask_check.setChecked(
+            _read_setting("ema_cross_use_parent_mask", True, bool)
         )
         _apply_combo_value(
             self.setup_cvd_value_mode_combo,
@@ -1540,6 +1544,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.atr_extension_threshold_input.blockSignals(False)
         self.atr_flat_velocity_pct_input.blockSignals(False)
         self.cvd_ema_gap_input.blockSignals(False)
+        self.ema_cross_use_parent_mask_check.blockSignals(False)
         self.setup_cvd_value_mode_combo.blockSignals(False)
         self.signal_filter_combo.blockSignals(False)
         self.atr_marker_filter_combo.blockSignals(False)
@@ -1657,6 +1662,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
             "atr_extension_threshold": float(self.atr_extension_threshold_input.value()),
             "atr_flat_velocity_pct": float(self.atr_flat_velocity_pct_input.value()),
             "cvd_ema_gap": int(self.cvd_ema_gap_input.value()),
+            "ema_cross_use_parent_mask": self.ema_cross_use_parent_mask_check.isChecked(),
             "cvd_value_mode": self.setup_cvd_value_mode_combo.currentData() or self.CVD_VALUE_MODE_RAW,
             "signal_filter": self._selected_signal_filter(),
             "signal_filters": self._selected_signal_filters(),
