@@ -192,13 +192,11 @@ class SetupPanelMixin:
         _w(self.cvd_atr_distance_input)
         _w(self.atr_extension_threshold_input)
         _w(self.atr_flat_velocity_pct_input)
-        _w(self.cvd_ema_gap_input)
         sig_frm.addRow("ATR Base EMA", self.atr_base_ema_input)
         sig_frm.addRow("ATR Distance", self.atr_distance_input)
         sig_frm.addRow("CVD ATR Dist", self.cvd_atr_distance_input)
         sig_frm.addRow("ATR Ext Min", self.atr_extension_threshold_input)
         sig_frm.addRow("ATR Flat Vel%", self.atr_flat_velocity_pct_input)
-        sig_frm.addRow("CVD EMA Gap",  self.cvd_ema_gap_input)
 
         self.ema_cross_use_parent_mask_check = QCheckBox("Require 5m Parent Trend")
         self.ema_cross_use_parent_mask_check.setChecked(True)
@@ -820,7 +818,9 @@ class SetupPanelMixin:
             self.STRATEGY_PRIORITY_LABELS["atr_divergence"],
         )
         ema_cross_grp, ema_cross_frm = _group("EMA & CVD Cross")
+        _w(self.cvd_ema_gap_input)
         ema_cross_frm.addRow(_note("Configure EMA+CVD cross confluence behavior."))
+        ema_cross_frm.addRow("CVD EMA Gap", self.cvd_ema_gap_input)
         ema_cross_frm.addRow("Parent Trend", self.ema_cross_use_parent_mask_check)
 
         tabs.addTab(
