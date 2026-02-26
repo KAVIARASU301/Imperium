@@ -570,6 +570,11 @@ class SignalRendererMixin:
             },
         }
 
+        parent_long_mask, parent_short_mask = self.strategy_detector._build_parent_5m_trend_masks(
+            timestamps=self.all_timestamps[:length],
+            price_data=price_data[:length],
+        )
+
         # ── Sync strategy_masks with the active signal filter ─────────────────
         # Apply the user's UI signal filter first so that both the confluence lines
         # and the historical simulator properly ignore unselected strategies.
@@ -726,6 +731,33 @@ class SignalRendererMixin:
         if side is None or strategy_type is None:
             return
 
+        decision = self.signal_governance.fuse_signal(
+            strategy_type=strategy_type,
+            side=side,
+            strategy_masks=strategy_masks,
+            closed_idx=closed_idx,
+            price_close=price_data,
+            ema10=price_fast_filter,
+            ema51=price_slow_filter,
+            atr=atr_values,
+            cvd_close=cvd_data,
+            cvd_ema10=cvd_fast_filter,
+            cvd_ema51=cvd_slow_filter,
+            adx=adx_arr,
+            parent_long_mask=parent_long_mask,
+            parent_short_mask=parent_short_mask,
+        )
+        if not decision.can_trade_live:
+            logger.debug(
+                "[GOVERNANCE] blocked signal strategy=%s side=%s conf=%.3f quality=%.3f reasons=%s",
+                strategy_type,
+                side,
+                decision.confidence,
+                decision.signal_quality_score,
+                ",".join(decision.reasons),
+            )
+            return
+
         # ── Regime gate: block automation for strategies disabled by current regime ──
         current_regime = getattr(self, "_current_regime", None)
         if current_regime is not None:
@@ -773,6 +805,11 @@ class SignalRendererMixin:
             "route": self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL,
             "order_type": self.automation_order_type_combo.currentData() or self.ORDER_TYPE_MARKET,
             "timestamp": closed_bar_ts,
+            "governance_confidence": float(decision.confidence),
+            "signal_quality_score": float(decision.signal_quality_score),
+            "governance_reasons": list(decision.reasons),
+            "governance_regime": decision.regime,
+            "governance_deploy_mode": decision.deploy_mode,
         }
 
         QTimer.singleShot(0, lambda p=payload: self.automation_signal.emit(p))

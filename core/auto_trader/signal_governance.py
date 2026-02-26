@@ -6,6 +6,8 @@ from typing import Iterable
 
 import numpy as np
 
+from core.auto_trader.signal_quality_scorer import SignalQualityScorer
+
 
 @dataclass
 class GovernanceDecision:
@@ -17,6 +19,7 @@ class GovernanceDecision:
     can_trade_live: bool
     drift_score: float
     health_score: float
+    signal_quality_score: float = 0.0
 
 
 class SignalGovernance:
@@ -59,6 +62,7 @@ class SignalGovernance:
             "chop": {"atr_reversal": True, "atr_divergence": False, "ema_cross": False, "range_breakout": False, "cvd_range_breakout": True, "open_drive": True},
             "high_vol": {"atr_reversal": True, "atr_divergence": True, "ema_cross": True, "range_breakout": False, "cvd_range_breakout": False, "open_drive": True},
         }
+        self.quality_scorer = SignalQualityScorer(min_score=self.min_confidence_for_live)
 
     @staticmethod
     def _safe_mean(values: Iterable[float], fallback: float = 0.0) -> float:
@@ -194,6 +198,10 @@ class SignalGovernance:
         atr: np.ndarray,
         cvd_close: np.ndarray,
         cvd_ema10: np.ndarray,
+        cvd_ema51: np.ndarray | None = None,
+        adx: np.ndarray | None = None,
+        parent_long_mask: np.ndarray | None = None,
+        parent_short_mask: np.ndarray | None = None,
     ) -> GovernanceDecision:
         self._bar_counter += 1
         reasons: list[str] = []
@@ -252,13 +260,40 @@ class SignalGovernance:
         if health_score < self.health_alert_threshold:
             reasons.append("strategy_health_degraded")
 
-        confidence = (
+        governance_confidence = (
             0.36 * agreement_score
             + 0.22 * stability
             + 0.22 * health_score
             + 0.20 * (1.0 - drift_score)
         )
-        confidence = float(np.clip(confidence * regime_confidence_mult, 0.0, 1.0))
+        governance_confidence = float(np.clip(governance_confidence * regime_confidence_mult, 0.0, 1.0))
+
+        _cvd_ema51 = cvd_ema51 if cvd_ema51 is not None else np.full_like(cvd_close, np.nan)
+        quality_score, quality_breakdown = self.quality_scorer.score(
+            idx=closed_idx,
+            side=side,
+            strategy_type=strategy_type,
+            price_close=price_close,
+            ema51=ema51,
+            atr=atr,
+            adx=adx,
+            cvd_close=cvd_close,
+            cvd_ema10=cvd_ema10,
+            cvd_ema51=_cvd_ema51,
+            parent_long_mask=parent_long_mask,
+            parent_short_mask=parent_short_mask,
+        )
+
+        confidence = float(np.clip(governance_confidence * (0.4 + 0.6 * quality_score), 0.0, 1.0))
+
+        if quality_score < self.quality_scorer.min_score:
+            reasons.append(f"low_signal_quality:{quality_score:.2f}")
+
+        import logging
+        logging.getLogger(__name__).debug(
+            "[QUALITY] %s %s idx=%d %s → final_conf=%.3f",
+            strategy_type, side, closed_idx, quality_breakdown, confidence,
+        )
 
         if confidence < self.min_confidence_for_live:
             reasons.append("low_confidence")
@@ -283,6 +318,7 @@ class SignalGovernance:
             can_trade_live=can_trade_live,
             drift_score=drift_score,
             health_score=health_score,
+            signal_quality_score=quality_score,
         )
 
     @staticmethod
