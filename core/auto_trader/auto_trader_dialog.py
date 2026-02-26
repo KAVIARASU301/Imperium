@@ -185,6 +185,8 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self._live_active_breakout_side: str | None = None  # tracks which side the breakout is on
         self._live_trade_info: dict | None = None
         self._live_stacker_state: StackerState | None = None
+        self._live_stacker_side: str | None = None
+        self._live_stacker_strategy_type: str | None = None
         self._simulator_results: dict | None = None
         self._chart_line_color = "#26A69A"
         self._price_line_color = "#FFE57F"
@@ -1771,6 +1773,8 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
     def reset_stacker(self):
         """Called by coordinator when anchor trade fully exits."""
         self._live_stacker_state = None
+        self._live_stacker_side = None
+        self._live_stacker_strategy_type = None
         logger.debug(
             "[STACKER] State reset after anchor exit for token=%s",
             self.instrument_token,
@@ -3219,6 +3223,23 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
 
         if not self._tick_repaint_timer.isActive():
             self._tick_repaint_timer.start(self.LIVE_TICK_REPAINT_MS)
+
+        # ── STACKER: check stack/unwind on every live underlying tick ──────────
+        if (
+            self._live_stacker_state is not None
+            and self.live_mode
+            and self._live_stacker_side is not None
+        ):
+            tick_ts = ts.isoformat()
+            # x_arr_val is not critical for stack signals — use placeholder for tick-triggered checks
+            self._check_and_emit_stack_signals(
+                side=self._live_stacker_side,
+                strategy_type=self._live_stacker_strategy_type or "atr_reversal",
+                current_price=current_price,
+                current_bar_idx=-1,
+                closed_bar_ts=tick_ts,
+                x_arr_val=0.0,
+            )
 
     def _on_market_data_status_changed(self, status):
         status_text = str(status).strip() if status is not None else ""

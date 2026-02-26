@@ -81,6 +81,11 @@ class StackerState:
 
     def add_stack(self, entry_price: float, bar_idx: int):
         """Record a new stack entry and advance the trigger threshold."""
+        # Dedup guard: avoid double-firing on jittery duplicate ticks near
+        # the same trigger level.
+        if self.stack_entries and abs(self.stack_entries[-1].entry_price - entry_price) < 0.5:
+            return
+
         self.stack_entries.append(StackEntry(
             entry_price=entry_price,
             entry_bar_idx=bar_idx,
