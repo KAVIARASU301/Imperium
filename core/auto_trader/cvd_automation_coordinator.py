@@ -225,6 +225,9 @@ class CvdAutomationCoordinator:
         dynamic_exit_trend_following_strategies = payload.get("dynamic_exit_trend_following_strategies") or state.get("dynamic_exit_trend_following_strategies") or ["ema_cross", "range_breakout", "cvd_range_breakout"]
         if not isinstance(dynamic_exit_trend_following_strategies, (list, tuple, set)):
             dynamic_exit_trend_following_strategies = ["ema_cross", "range_breakout", "cvd_range_breakout"]
+        trend_exit_adx_min = _to_finite_float(payload.get("trend_exit_adx_min"), _to_finite_float(state.get("trend_exit_adx_min"), 28.0))
+        trend_exit_atr_ratio_min = _to_finite_float(payload.get("trend_exit_atr_ratio_min"), _to_finite_float(state.get("trend_exit_atr_ratio_min"), 1.15))
+        trend_exit_confirm_bars = max(1, int(_to_finite_float(payload.get("trend_exit_confirm_bars"), _to_finite_float(state.get("trend_exit_confirm_bars"), 3))))
 
         entry_underlying = float(payload.get("price_close") or state.get("price_close") or 0.0)
         signal_type = payload.get("signal_type") or state.get("signal_filter")
@@ -315,6 +318,9 @@ class CvdAutomationCoordinator:
             "open_drive_tick_drawdown_limit_points": open_drive_tick_drawdown_limit_points,
             "max_profit_giveback_strategies": list(max_profit_giveback_strategies),
             "dynamic_exit_trend_following_strategies": list(dynamic_exit_trend_following_strategies),
+            "trend_exit_adx_min": trend_exit_adx_min,
+            "trend_exit_atr_ratio_min": trend_exit_atr_ratio_min,
+            "trend_exit_confirm_bars": trend_exit_confirm_bars,
             "atr_trailing_step_points": atr_trailing_step_points,
             "entry_underlying": entry_underlying,
             "entry_atr": current_atr if math.isfinite(current_atr) and current_atr > 0 else 0.0,
@@ -578,12 +584,17 @@ class CvdAutomationCoordinator:
         adx_slope = (adx_hist[-1] - adx_hist[-2]) if len(adx_hist) >= 2 else 0.0
         vol_slope = (vol_hist[-1] - vol_hist[-2]) if len(vol_hist) >= 2 else 0.0
         unlock_profit_buffer = max(stoploss_points or 0.0, 1.0)
+
+        trend_exit_adx_min = _to_finite_float(active_trade.get("trend_exit_adx_min"), 28.0)
+        trend_exit_atr_ratio_min = _to_finite_float(active_trade.get("trend_exit_atr_ratio_min"), 1.15)
+        trend_exit_confirm_bars = max(1, int(_to_finite_float(active_trade.get("trend_exit_confirm_bars"), 3)))
+
         trend_unlock = (
             trend_mode_eligible
             and not stacked_active
             and favorable_move >= unlock_profit_buffer
-            and adx >= 28.0
-            and atr_normalized >= 1.15
+            and adx >= trend_exit_adx_min
+            and atr_normalized >= trend_exit_atr_ratio_min
             and adx_slope > 0
             and vol_slope > 0
             and len(adx_hist) >= 3
@@ -600,7 +611,7 @@ class CvdAutomationCoordinator:
                 active_trade["exit_mode"] = "default"
                 active_trade["trend_mode_peak_vol"] = 0.0
         active_trade["trend_mode_unlock_bar_count"] = unlock_bar_count
-        if unlock_bar_count >= 3 and active_trade.get("exit_mode") != "trend_unlock":
+        if unlock_bar_count >= trend_exit_confirm_bars and active_trade.get("exit_mode") != "trend_unlock":
             active_trade["exit_mode"] = "trend_unlock"
             active_trade["trend_mode_peak_vol"] = atr_normalized
             logger.info("[AUTO] Exit mode switched to trend_unlock token=%s strategy=%s", token, strategy_type)

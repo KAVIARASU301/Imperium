@@ -155,6 +155,23 @@ class SetupPanelMixin:
         ):
             trend_exit_lay.addWidget(cb)
         auto_frm.addRow("Trend Exit On", trend_exit_row)
+
+        trend_thresh_widget = QWidget()
+        trend_thresh_lay = QFormLayout(trend_thresh_widget)
+        trend_thresh_lay.setContentsMargins(0, 2, 0, 2)
+        trend_thresh_lay.setSpacing(3)
+        trend_thresh_lay.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+
+        _w(self.trend_exit_adx_min_input)
+        _w(self.trend_exit_atr_ratio_min_input)
+        _w(self.trend_exit_confirm_bars_input)
+
+        trend_thresh_lay.addRow("ADX Min", self.trend_exit_adx_min_input)
+        trend_thresh_lay.addRow("ATR Ratio Min", self.trend_exit_atr_ratio_min_input)
+        trend_thresh_lay.addRow("Confirm Bars", self.trend_exit_confirm_bars_input)
+
+        auto_frm.addRow("Trend Exit Config", trend_thresh_widget)
+
         auto_time_row = QWidget()
         auto_time_lay = QHBoxLayout(auto_time_row)
         auto_time_lay.setContentsMargins(0, 0, 0, 0)

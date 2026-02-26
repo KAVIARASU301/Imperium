@@ -515,6 +515,43 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.dynamic_exit_open_drive_check.setToolTip("Enable regime-aware trend-unlock exits for Open Drive trades.")
         self.dynamic_exit_open_drive_check.toggled.connect(self._on_automation_settings_changed)
 
+        self.trend_exit_adx_min_input = QDoubleSpinBox()
+        self.trend_exit_adx_min_input.setRange(15.0, 45.0)
+        self.trend_exit_adx_min_input.setDecimals(1)
+        self.trend_exit_adx_min_input.setSingleStep(0.5)
+        self.trend_exit_adx_min_input.setValue(28.0)
+        self.trend_exit_adx_min_input.setStyleSheet(compact_spinbox_style)
+        self.trend_exit_adx_min_input.setToolTip(
+            "Minimum ADX value required to activate trend-ride (unlock) mode.\n"
+            "Higher = only unlock in very strong trends. Lower = more permissive.\n"
+            "Institutional default: 28. Aggressive: 24. Conservative: 32."
+        )
+        self.trend_exit_adx_min_input.valueChanged.connect(self._on_automation_settings_changed)
+
+        self.trend_exit_atr_ratio_min_input = QDoubleSpinBox()
+        self.trend_exit_atr_ratio_min_input.setRange(0.80, 2.50)
+        self.trend_exit_atr_ratio_min_input.setDecimals(2)
+        self.trend_exit_atr_ratio_min_input.setSingleStep(0.05)
+        self.trend_exit_atr_ratio_min_input.setValue(1.15)
+        self.trend_exit_atr_ratio_min_input.setStyleSheet(compact_spinbox_style)
+        self.trend_exit_atr_ratio_min_input.setToolTip(
+            "Minimum normalized ATR (current ATR / session baseline) to unlock trend mode.\n"
+            "Ensures unlock only happens when volatility is expanding (trending market).\n"
+            "Default: 1.15. Low vol sessions: try 1.05. High vol: try 1.25."
+        )
+        self.trend_exit_atr_ratio_min_input.valueChanged.connect(self._on_automation_settings_changed)
+
+        self.trend_exit_confirm_bars_input = QSpinBox()
+        self.trend_exit_confirm_bars_input.setRange(1, 8)
+        self.trend_exit_confirm_bars_input.setValue(3)
+        self.trend_exit_confirm_bars_input.setStyleSheet(compact_spinbox_style)
+        self.trend_exit_confirm_bars_input.setToolTip(
+            "Consecutive qualifying bars (ADX + ATR both above threshold) required\n"
+            "before switching to trend-ride mode. Prevents false unlock on a single spike bar.\n"
+            "Default: 3. Faster reaction: 2. Slower/safer: 4-5."
+        )
+        self.trend_exit_confirm_bars_input.valueChanged.connect(self._on_automation_settings_changed)
+
         self.automation_route_combo = QComboBox()
         self.automation_route_combo.setFixedWidth(180)
         self.automation_route_combo.setStyleSheet(compact_combo_style)
@@ -1228,6 +1265,9 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.dynamic_exit_range_breakout_check.blockSignals(True)
         self.dynamic_exit_cvd_range_breakout_check.blockSignals(True)
         self.dynamic_exit_open_drive_check.blockSignals(True)
+        self.trend_exit_adx_min_input.blockSignals(True)
+        self.trend_exit_atr_ratio_min_input.blockSignals(True)
+        self.trend_exit_confirm_bars_input.blockSignals(True)
         self.automation_route_combo.blockSignals(True)
         self.automation_order_type_combo.blockSignals(True)
         self.automation_start_time_hour_input.blockSignals(True)
@@ -1318,6 +1358,9 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         if not isinstance(dynamic_exit_strategies, (list, tuple, set)):
             dynamic_exit_strategies = self._dynamic_exit_strategy_defaults()
         self._apply_dynamic_exit_strategy_selection(list(dynamic_exit_strategies))
+        self.trend_exit_adx_min_input.setValue(_read_setting("trend_exit_adx_min", 28.0, float))
+        self.trend_exit_atr_ratio_min_input.setValue(_read_setting("trend_exit_atr_ratio_min", 1.15, float))
+        self.trend_exit_confirm_bars_input.setValue(_read_setting("trend_exit_confirm_bars", 3, int))
         _apply_combo_value(
             self.automation_route_combo,
             _read_setting("route", self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL),
@@ -1532,6 +1575,9 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.dynamic_exit_range_breakout_check.blockSignals(False)
         self.dynamic_exit_cvd_range_breakout_check.blockSignals(False)
         self.dynamic_exit_open_drive_check.blockSignals(False)
+        self.trend_exit_adx_min_input.blockSignals(False)
+        self.trend_exit_atr_ratio_min_input.blockSignals(False)
+        self.trend_exit_confirm_bars_input.blockSignals(False)
         self.automation_route_combo.blockSignals(False)
         self.automation_order_type_combo.blockSignals(False)
         self.automation_start_time_hour_input.blockSignals(False)
@@ -1650,6 +1696,9 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
             "max_profit_giveback_points": int(self.max_profit_giveback_input.value()),
             "max_profit_giveback_strategies": self._selected_max_giveback_strategies(),
             "dynamic_exit_trend_following_strategies": self._selected_dynamic_exit_strategies(),
+            "trend_exit_adx_min": float(self.trend_exit_adx_min_input.value()),
+            "trend_exit_atr_ratio_min": float(self.trend_exit_atr_ratio_min_input.value()),
+            "trend_exit_confirm_bars": int(self.trend_exit_confirm_bars_input.value()),
             "route": self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL,
             "order_type": self.automation_order_type_combo.currentData() or self.ORDER_TYPE_MARKET,
             "automation_start_hour": int(self.automation_start_time_hour_input.value()),
@@ -1761,6 +1810,9 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
             "max_profit_giveback_points": float(self.max_profit_giveback_input.value()),
             "max_profit_giveback_strategies": self._selected_max_giveback_strategies(),
             "dynamic_exit_trend_following_strategies": self._selected_dynamic_exit_strategies(),
+            "trend_exit_adx_min": float(self.trend_exit_adx_min_input.value()),
+            "trend_exit_atr_ratio_min": float(self.trend_exit_atr_ratio_min_input.value()),
+            "trend_exit_confirm_bars": int(self.trend_exit_confirm_bars_input.value()),
             "open_drive_max_profit_giveback_points": float(self.open_drive_max_profit_giveback_input.value()),
             "open_drive_tick_drawdown_limit_points": float(self.open_drive_tick_drawdown_limit_input.value()),
             "atr_trailing_step_points": float(self.atr_trailing_step_input.value()),
