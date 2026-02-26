@@ -82,8 +82,11 @@ class StackerState:
     def add_stack(self, entry_price: float, bar_idx: int):
         """Record a new stack entry and advance the trigger threshold."""
         # Dedup guard: avoid double-firing on jittery duplicate ticks near
-        # the same trigger level.
+        # the same trigger level. CRITICAL: we MUST still advance next_trigger_points
+        # even when skipping, otherwise the caller's `while should_add_stack()`
+        # loop never terminates (infinite loop / app freeze).
         if self.stack_entries and abs(self.stack_entries[-1].entry_price - entry_price) < 0.5:
+            self.next_trigger_points += self.step_points  # advance trigger so while-loop exits
             return
 
         self.stack_entries.append(StackEntry(
