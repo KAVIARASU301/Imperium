@@ -156,9 +156,9 @@ class MainWindowShell:
     @staticmethod
     def create_main_widgets(window):
         window.buy_exit_panel = BuyExitPanel(window.trader)
-        window.buy_exit_panel.setMinimumSize(200, 300)
+        window.buy_exit_panel.setMinimumSize(200, 320)
         window.account_summary = AccountSummaryWidget()
-        window.account_summary.setMinimumHeight(220)
+        window.account_summary.setMinimumHeight(200)
         window.account_summary.setContentsMargins(3, 0, 3, 0)
         window.strike_ladder = StrikeLadderWidget(window.real_kite_client)
         window.strike_ladder.setMinimumWidth(500)
