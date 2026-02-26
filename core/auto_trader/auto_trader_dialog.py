@@ -183,6 +183,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         # Counts ATR reversal signals suppressed while a breakout trade is active (live mode)
         self._live_atr_skip_count: int = 0
         self._live_active_breakout_side: str | None = None  # tracks which side the breakout is on
+        self._live_trade_info: dict | None = None
         self._live_stacker_state: StackerState | None = None
         self._simulator_results: dict | None = None
         self._chart_line_color = "#26A69A"
@@ -1774,6 +1775,23 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
             "[STACKER] State reset after anchor exit for token=%s",
             self.instrument_token,
         )
+
+    def _set_live_trade_state(self, state: str, trade_info: dict):
+        """Receive coordinator trade updates and keep stacker anchor aligned to fill."""
+        self._live_trade_info = trade_info if isinstance(trade_info, dict) else None
+
+        # Re-anchor stacker to actual fill price from coordinator
+        if state == "entered" and self._live_stacker_state is not None:
+            actual_entry = (trade_info or {}).get("entry_underlying")
+            if actual_entry and actual_entry > 0:
+                self._live_stacker_state.anchor_entry_price = float(actual_entry)
+                # Reset trigger from this correct anchor
+                self._live_stacker_state.next_trigger_points = self._live_stacker_state.step_points
+                logger.info(
+                    "[STACKER] Re-anchored to actual fill: %.2f (was bar close)",
+                    actual_entry,
+                )
+
     def _on_signal_filter_changed(self, *_):
         if getattr(self, "_syncing_signal_filters", False):
             return

@@ -792,8 +792,12 @@ class SignalRendererMixin:
                 step_points=float(self.stacker_step_input.value()),
                 max_stacks=int(self.stacker_max_input.value()),
             )
+            self._live_stacker_side = side
+            self._live_stacker_strategy_type = strategy_type
         else:
             self._live_stacker_state = None
+            self._live_stacker_side = None
+            self._live_stacker_strategy_type = None
 
         # ───────────────────────── STACKER CHECK ─────────────────────────
         if (
