@@ -469,8 +469,13 @@ class SimulatorMixin:
             if not to_unwind:
                 return False
             exit_price = float(close[idx])
+            unwind_slippage_points = 2.0
             for entry in to_unwind:
-                stack_pnl = sim_stacker.compute_partial_pnl([entry], exit_price)
+                stack_pnl = sim_stacker.compute_partial_pnl(
+                    [entry],
+                    exit_price,
+                    slippage_points=unwind_slippage_points,
+                )
                 result["total_points"] += float(stack_pnl)
                 if stack_pnl > 0:
                     result["unwind_wins"] += 1

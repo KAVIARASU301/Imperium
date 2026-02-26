@@ -157,9 +157,8 @@ class StackerState:
         reset the stacking threshold so new stacks can be added again from
         the current top of the remaining pyramid.
         """
-        for e in entries:
-            if e in self.stack_entries:
-                self.stack_entries.remove(e)
+        ids_to_remove = {id(e) for e in entries}
+        self.stack_entries = [s for s in self.stack_entries if id(s) not in ids_to_remove]
 
         # Recalibrate next trigger: resume from the level above the highest
         # remaining stack, measured from the anchor.
@@ -171,11 +170,24 @@ class StackerState:
             # All stacks gone — fresh start from anchor
             self.next_trigger_points = self.step_points
 
-    def compute_partial_pnl(self, entries: list[StackEntry], exit_price: float) -> float:
+        # Keep harvest floor realistic after LIFO unwinds.
+        # Conservative reset: only fully reset when pyramid is empty.
+        if self.profit_harvest_enabled and self._harvest_floor > 0:
+            if not self.stack_entries:
+                self._harvest_floor = 0.0
+
+    def compute_partial_pnl(
+        self,
+        entries: list[StackEntry],
+        exit_price: float,
+        slippage_points: float = 0.0,
+    ) -> float:
         """P&L for a specific set of stack entries being exited early."""
         if self.signal_side == "long":
-            return sum(exit_price - e.entry_price for e in entries)
-        return sum(e.entry_price - exit_price for e in entries)
+            effective_exit = exit_price - slippage_points
+            return sum(effective_exit - e.entry_price for e in entries)
+        effective_exit = exit_price + slippage_points
+        return sum(e.entry_price - effective_exit for e in entries)
 
     # ── FIFO Profit Harvest ────────────────────────────────────────────────
 

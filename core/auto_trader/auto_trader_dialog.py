@@ -3626,8 +3626,10 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
 
         # ── 1. LIFO UNWIND: exit stacks whose entry price was breached ──────
         to_unwind = state.stacks_to_unwind(current_price)
+        unwound_ids: set[int] = set()
         if to_unwind:
             for entry in to_unwind:
+                unwound_ids.add(id(entry))
                 active_priority_list, strategy_priorities = self._active_strategy_priorities()
                 unwind_ts = f"{closed_bar_ts}_unwind{entry.stack_number}"
                 unwind_payload = {
@@ -3665,6 +3667,14 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
             total_pnl = self._get_total_live_pnl()
 
             while state.should_harvest_profit(total_pnl) and state.stack_entries:
+                candidate = state.stack_entries[0]
+                if id(candidate) in unwound_ids:
+                    logger.warning(
+                        "[HARVEST] Skipping STACK_%d — already queued for LIFO unwind this bar",
+                        candidate.stack_number,
+                    )
+                    break
+
                 oldest = state.harvest_oldest_stack()
                 if oldest is None:
                     break
