@@ -13,6 +13,7 @@ from core.auto_trader.indicators import (
     is_chop_regime,
     calculate_regime_trend_filter,
     calculate_vwap,
+    calculate_cvd_zscore,
 )
 from core.auto_trader.stacker import StackerState
 
@@ -74,12 +75,28 @@ class SignalRendererMixin:
                 low_data_array[below_mask] - atr_offset[below_mask],
             )
 
-        # ── CVD markers — EMA 51 + configurable ATR distance + raw gap gate ──
+        # ── CVD markers — Z-Score distance from EMA51 ─────────────────────
+        # FIXED: CVD is a cumulative series. ATR(cvd_high, cvd_low, cvd_close)
+        # is mathematically invalid — true range has no meaning on a running total.
+        # Z-score correctly measures how many std-devs CVD is from its EMA.
         if has_cvd:
-            CVD_ATR_EMA = 51
-            cvd_atr_distance_threshold = float(self.cvd_atr_distance_input.value())
-
             cvd_data_array = np.array(self.all_cvd_data, dtype=float)
+
+            # cvd_atr_distance_input is now re-interpreted as the z-score threshold.
+            # Old default was 11.0 (ATR multiples) → new default should be 2.0 (std devs).
+            # The UI label "CVD ATR Dist" should be renamed "CVD Z-Score Min" in setup_panel.
+            cvd_zscore_threshold = float(self.cvd_atr_distance_input.value())
+
+            # Compute z-score and EMA in one call
+            cvd_zscore, base_ema_c = calculate_cvd_zscore(
+                cvd=cvd_data_array,
+                ema_period=51,
+                zscore_window=50,
+            )
+
+            # Direction masks from sign of z-score
+            above_mask_c = (cvd_zscore >= cvd_zscore_threshold)   # CVD strongly above EMA → potential SHORT
+            below_mask_c = (cvd_zscore <= -cvd_zscore_threshold)  # CVD strongly below EMA → potential LONG
 
             if getattr(self, "all_cvd_high_data", None) and getattr(self, "all_cvd_low_data", None):
                 cvd_high = np.array(self.all_cvd_high_data, dtype=float)
@@ -88,19 +105,9 @@ class SignalRendererMixin:
                 cvd_high = cvd_data_array.copy()
                 cvd_low = cvd_data_array.copy()
 
-            atr_cvd = calculate_atr(cvd_high, cvd_low, cvd_data_array, period=14)
-            base_ema_c = calculate_ema(cvd_data_array, CVD_ATR_EMA)
-            safe_atr_c = np.where(atr_cvd <= 0, np.nan, atr_cvd)
-            distance_c = np.abs(cvd_data_array - base_ema_c) / safe_atr_c
-
-            # ── Extra gate: raw gap between CVD and its EMA must exceed threshold ──
-            cvd_ema_gap_threshold = float(self.cvd_ema_gap_input.value())
-            raw_gap_c = np.abs(cvd_data_array - base_ema_c)
-            gap_mask_c = raw_gap_c > cvd_ema_gap_threshold  # BOTH conditions must hold
-
-            above_mask_c = (distance_c >= cvd_atr_distance_threshold) & (cvd_data_array > base_ema_c) & gap_mask_c
-            below_mask_c = (distance_c >= cvd_atr_distance_threshold) & (cvd_data_array < base_ema_c) & gap_mask_c
-            atr_offset_c = np.nan_to_num(atr_cvd, nan=0.0) * 0.15
+            # Visual offset for marker placement (use rolling std for scaling, not ATR)
+            cvd_rolling_std = pd.Series(cvd_data_array).rolling(20, min_periods=1).std().fillna(0).to_numpy()
+            atr_offset_c = cvd_rolling_std * 0.15
 
             # Simple EMA-side masks (no ATR distance required) — used for weak confluence
             cvd_above_ema51 = cvd_data_array > base_ema_c
@@ -150,7 +157,6 @@ class SignalRendererMixin:
                     )
 
                 if has_cvd:
-                    atr_offset_c = np.nan_to_num(atr_cvd, nan=0.0) * 0.15
                     self.cvd_atr_above_markers.setData(
                         x_arr[confluence_above],
                         cvd_high[confluence_above] + atr_offset_c[confluence_above],

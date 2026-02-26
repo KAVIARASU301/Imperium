@@ -707,15 +707,17 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.cvd_ema_gap_input.valueChanged.connect(self._on_atr_settings_changed)
 
         self.cvd_atr_distance_input = QDoubleSpinBox()
-        self.cvd_atr_distance_input.setRange(0.1, 30.0)
+        self.cvd_atr_distance_input.setRange(0.5, 6.0)
         self.cvd_atr_distance_input.setDecimals(2)
         self.cvd_atr_distance_input.setSingleStep(0.1)
-        self.cvd_atr_distance_input.setValue(11.0)
+        self.cvd_atr_distance_input.setValue(2.0)
         self.cvd_atr_distance_input.setFixedWidth(96)
         self.cvd_atr_distance_input.setStyleSheet(compact_spinbox_style)
         self.cvd_atr_distance_input.setToolTip(
-            "ATR-multiple distance threshold used for CVD ATR reversal markers.\n"
-            "Higher values reduce signal frequency; lower values make CVD reversal detection more sensitive."
+            "Minimum z-score for CVD to trigger a marker/signal.\n"
+            "Z-score = (CVD - EMA51) / rolling_std(CVD, 50 bars)\n"
+            "2.0 = CVD is 2 standard deviations from EMA (institutional default)\n"
+            "1.5 = more sensitive. 2.5 = fewer but stronger signals."
         )
         self.cvd_atr_distance_input.valueChanged.connect(self._on_atr_settings_changed)
 

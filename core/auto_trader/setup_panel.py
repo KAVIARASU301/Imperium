@@ -211,7 +211,7 @@ class SetupPanelMixin:
         _w(self.atr_flat_velocity_pct_input)
         sig_frm.addRow("ATR Base EMA", self.atr_base_ema_input)
         sig_frm.addRow("ATR Distance", self.atr_distance_input)
-        sig_frm.addRow("CVD ATR Dist", self.cvd_atr_distance_input)
+        sig_frm.addRow("CVD Z-Score Min", self.cvd_atr_distance_input)
         sig_frm.addRow("ATR Ext Min", self.atr_extension_threshold_input)
         sig_frm.addRow("ATR Flat Vel%", self.atr_flat_velocity_pct_input)
 

@@ -145,6 +145,43 @@ def calculate_atr(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: 
     return atr
 
 
+def calculate_cvd_zscore(
+    cvd: np.ndarray,
+    ema_period: int = 51,
+    zscore_window: int = 50,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Compute CVD z-score distance from its EMA.
+
+    Replaces ATR-based CVD distance — ATR is mathematically invalid
+    on cumulative series like CVD (the high/low per bar have no true range).
+
+    Returns:
+        zscore      : signed z-score of (CVD - EMA) for each bar
+        cvd_ema     : the EMA51 of CVD (reused downstream)
+
+    Institutional interpretation:
+        |z| > 2.0  → CVD strongly extended  (high confidence reversal zone)
+        |z| > 1.5  → moderate extension
+        |z| < 1.0  → CVD hugging EMA       (low confidence, filter out)
+    """
+    n = len(cvd)
+    zscore = np.zeros(n, dtype=float)
+    cvd_ema = calculate_ema(cvd, ema_period)
+
+    deviation = cvd - cvd_ema  # signed: positive = above EMA
+
+    # Rolling std of deviation over zscore_window bars
+    dev_series = pd.Series(deviation)
+    rolling_std = dev_series.rolling(window=zscore_window, min_periods=max(5, zscore_window // 4)).std().to_numpy()
+
+    # Avoid division by zero
+    safe_std = np.where(rolling_std > 1e-9, rolling_std, np.nan)
+    zscore = np.nan_to_num(deviation / safe_std, nan=0.0)
+
+    return zscore, cvd_ema
+
+
 
 def compute_adx(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) -> np.ndarray:
     length = len(close)
