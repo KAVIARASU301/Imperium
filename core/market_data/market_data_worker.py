@@ -51,6 +51,7 @@ class MarketDataWorker(QObject):
         self._last_http_probe_monotonic = 0.0
         self._kite_ticker_logger = logging.getLogger("kiteconnect.ticker")
         self._kite_ticker_log_level_before_stop: Optional[int] = None
+        self._qt_signals_active = True
 
         # Ensure websocket callback handling runs on the worker's thread.
         self._ticks_received.connect(self._handle_ticks, Qt.QueuedConnection)
@@ -235,16 +236,31 @@ class MarketDataWorker(QObject):
 
     def _on_ticks(self, _, ticks):
         """Callback for receiving ticks."""
-        self._ticks_received.emit(ticks)
+        self._safe_emit(self._ticks_received, ticks, signal_name="_ticks_received")
 
     def _on_connect(self, _, response):
-        self._ws_connected.emit(response)
+        self._safe_emit(self._ws_connected, response, signal_name="_ws_connected")
 
     def _on_close(self, _, code, reason):
-        self._ws_closed.emit(code, str(reason))
+        self._safe_emit(self._ws_closed, code, str(reason), signal_name="_ws_closed")
 
     def _on_error(self, _, code, reason):
-        self._ws_error.emit(int(code), str(reason))
+        self._safe_emit(self._ws_error, int(code), str(reason), signal_name="_ws_error")
+
+    def _safe_emit(self, signal, *args, signal_name: str):
+        """Best-effort emit from non-Qt callbacks during shutdown.
+
+        Twisted/KiteTicker callbacks can race with QObject teardown and raise
+        RuntimeError: "Signal source has been deleted". We guard against that
+        so application shutdown remains clean.
+        """
+        if not self._qt_signals_active:
+            return
+        try:
+            signal.emit(*args)
+        except RuntimeError as exc:
+            self._qt_signals_active = False
+            logger.debug(f"Ignoring late {signal_name} emit during teardown: {exc}")
 
     def _handle_ticks(self, ticks):
         """Qt-thread handler for receiving ticks."""
@@ -439,6 +455,7 @@ class MarketDataWorker(QObject):
         """Stops the worker and closes the WebSocket connection."""
         logger.info("Stopping MarketDataWorker...")
         self.is_intentional_stop = True  # 🔥 Mark as intentional stop
+        self._qt_signals_active = False
         self.reconnect_timer.stop()
         self.heartbeat_timer.stop()
 
