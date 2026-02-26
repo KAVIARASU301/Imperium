@@ -50,7 +50,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
 
     automation_signal = Signal(dict)
     automation_state_signal = Signal(dict)
-    _cvd_tick_received = Signal(float, float)  # internal: marshal WebSocket thread → GUI thread
+    _cvd_tick_received = Signal(float, float, object)  # internal: marshal WebSocket thread → GUI thread
 
     SIGNAL_FILTER_ALL = "all"
     SIGNAL_FILTER_ATR_ONLY = "atr_only"
@@ -161,7 +161,9 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self._ws_status_text: str = "initializing"
         self._is_closing = False
         self._is_loading = False
+        self._chart_ready = False
         self._last_live_refresh_minute: datetime | None = None
+        self._pending_tick_buffer: deque[tuple[datetime, float, float]] = deque()
         self._uploaded_tick_data: pd.DataFrame | None = None
         self._uploaded_tick_source: str = ""
         self._cvd_auth_error_logged = False
@@ -2467,6 +2469,8 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
             from_dt = self.previous_date
 
         self._is_loading = True
+        self._chart_ready = False
+        self._tick_repaint_timer.stop()
 
         # 🔥 Create thread owned by dialog
         self._fetch_thread = QThread(self)
@@ -2510,6 +2514,14 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
             self._cleanup_overlapping_ticks()
             self._recalibrate_live_cvd_offset()
 
+        # Seal opened: flush any ticks that arrived while historical load was running.
+        self._chart_ready = True
+        if self._pending_tick_buffer:
+            while self._pending_tick_buffer:
+                tick_ts, buffered_cvd, buffered_price = self._pending_tick_buffer.popleft()
+                self._process_live_tick(buffered_cvd, buffered_price, tick_ts, allow_repaint=False)
+            self._plot_live_ticks_only()
+
     def _seed_live_cvd_from_historical(self):
         if not self.live_mode or not self.cvd_engine:
             return
@@ -2545,6 +2557,22 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
 
         self._fetch_worker = None
         self._is_loading = False
+
+    def _ts_to_x(self, ts: datetime) -> float:
+        """Canonical timestamp → x conversion used by both historical and live plotting."""
+        if self._current_session_start_ts is None:
+            return 0.0
+
+        tick_ts = pd.Timestamp(ts)
+        session_start = pd.Timestamp(self._current_session_start_ts)
+
+        if tick_ts.tzinfo is not None:
+            tick_ts = tick_ts.tz_localize(None)
+        if session_start.tzinfo is not None:
+            session_start = session_start.tz_localize(None)
+
+        delta_minutes = (tick_ts - session_start).total_seconds() / 60.0
+        return float(self._current_session_x_base) + delta_minutes
 
     def _cleanup_overlapping_ticks(self):
         """
@@ -2723,6 +2751,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
             if is_current_session and not df_cvd_sess.empty:
                 self._current_session_start_ts = df_cvd_sess.index[0]
                 self._current_session_x_base = float(xs[0]) if xs else 0.0
+                xs = [self._ts_to_x(ts) for ts in df_cvd_sess.index]
                 self._current_session_last_cvd_value = float(cvd_y[-1]) if len(cvd_y) else None
                 self._current_session_last_price_value = float(price_y[-1]) if len(price_y) else None
                 self._current_session_last_x = float(xs[-1]) if xs else None  # anchor for live tick line
@@ -2757,7 +2786,8 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
             if not focus_mode:
                 x_offset += len(df_cvd_sess)
 
-        self._plot_live_ticks_only()
+        if self._chart_ready:
+            self._plot_live_ticks_only()
 
         # Time axis formatter
         def time_formatter(values, *_):
@@ -3090,6 +3120,9 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
 
     def _plot_live_ticks_only(self):
         """Plot tick-level CVD overlay on top of minute candles."""
+        if not self._chart_ready:
+            return
+
         if not self._live_tick_points:
             self.today_tick_curve.clear()
             self.price_today_tick_curve.clear()
@@ -3098,7 +3131,6 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         if self._current_session_start_ts is None:
             return
 
-        focus_mode = not self.btn_focus.isChecked()
         session_start_ts = pd.Timestamp(self._current_session_start_ts)
 
         def _align_tick_ts(ts: datetime) -> pd.Timestamp:
@@ -3148,13 +3180,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         for ts, raw_cvd in points:
             tick_ts = _align_tick_ts(ts)
 
-            if focus_mode:
-                tick_dt = tick_ts.to_pydatetime()
-                x = self._time_to_session_index(tick_dt) + (tick_dt.second / 60.0) + (
-                        tick_dt.microsecond / 60_000_000.0)
-            else:
-                minute_offset = (tick_ts - session_start_ts).total_seconds() / 60.0
-                x = self._current_session_x_base + minute_offset
+            x = self._ts_to_x(tick_ts.to_pydatetime())
 
             x_vals.append(x)
             y_vals.append(raw_cvd + self._live_cvd_offset)
@@ -3243,19 +3269,9 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
             self._last_applied_tick_ts = ts
             self._last_applied_cvd_value = cvd_value
             self._last_applied_price_value = last_price
-            self._cvd_tick_received.emit(cvd_value, last_price)
+            self._cvd_tick_received.emit(cvd_value, last_price, ts)
 
-    def _apply_cvd_tick(self, cvd_value: float, last_price: float):
-        """Slot — always called on the GUI thread via queued signal connection."""
-        ts = datetime.now()
-        self._last_live_tick_ts = ts
-
-        # Freeze live-dot motion outside market hours.
-        # Some feeds keep pushing ticks after 15:30; if we keep updating the
-        # timestamp, the blinking dot drifts right and creates empty chart space.
-        if ts.time() < TRADING_START or ts.time() > TRADING_END:
-            return
-
+    def _process_live_tick(self, cvd_value: float, last_price: float, ts: datetime, allow_repaint: bool):
         cvd_mode = self.setup_cvd_value_mode_combo.currentData() or self.CVD_VALUE_MODE_RAW
         transformed_cvd = float(cvd_value)
         if cvd_mode == self.CVD_VALUE_MODE_NORMALIZED:
@@ -3274,8 +3290,27 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         while self._live_price_points and self._live_price_points[0][0].date() < today:
             self._live_price_points.popleft()
 
-        if not self._tick_repaint_timer.isActive():
+        if allow_repaint and self._chart_ready and not self._tick_repaint_timer.isActive():
             self._tick_repaint_timer.start(self.LIVE_TICK_REPAINT_MS)
+
+        return current_price
+
+    def _apply_cvd_tick(self, cvd_value: float, last_price: float, tick_ts: datetime):
+        """Slot — always called on the GUI thread via queued signal connection."""
+        ts = tick_ts if isinstance(tick_ts, datetime) else datetime.now()
+        self._last_live_tick_ts = ts
+
+        # Freeze live-dot motion outside market hours.
+        # Some feeds keep pushing ticks after 15:30; if we keep updating the
+        # timestamp, the blinking dot drifts right and creates empty chart space.
+        if ts.time() < TRADING_START or ts.time() > TRADING_END:
+            return
+
+        if not self._chart_ready:
+            self._pending_tick_buffer.append((ts, float(cvd_value), float(last_price)))
+            return
+
+        current_price = self._process_live_tick(cvd_value, last_price, ts, allow_repaint=True)
 
         # ── STACKER: check stack/unwind on every live underlying tick ──────────
         if (
