@@ -99,7 +99,7 @@ class ExitExecutionMethods:
         if not remaining_positions:
             self.window._publish_status("All positions exited successfully.", 5000, level="success")
             self.window._refresh_positions()
-            self.window._play_sound(success=True)
+            self.window._play_sound(success=True, flow="exit")
             logger.info("Bulk exit completed successfully — no open positions remaining.")
             return
 
@@ -114,7 +114,7 @@ class ExitExecutionMethods:
             ),
         )
 
-        self.window._play_sound(success=False)
+        self.window._play_sound(success=False, flow="exit")
         self.window._refresh_positions()
         logger.warning("Bulk exit incomplete — remaining positions: %s", symbols)
 
@@ -185,7 +185,7 @@ class ExitExecutionMethods:
                 logger.debug("Cached position snapshot for %s (Live exit)", tradingsymbol)
 
             if isinstance(self.window.trader, PaperTradingManager):
-                self.window._play_sound(success=True)
+                self.window._play_sound(success=True, flow="exit")
                 return
 
             time.sleep(0.5)
@@ -205,7 +205,7 @@ class ExitExecutionMethods:
                     5000,
                     level="success",
                 )
-                self.window._play_sound(success=True)
+                self.window._play_sound(success=True, flow="exit")
             else:
                 logger.warning(
                     "Exit order %s for %s placed but confirmation pending or failed.",
@@ -217,7 +217,7 @@ class ExitExecutionMethods:
                     5000,
                     level="warning",
                 )
-                self.window._play_sound(success=False)
+                self.window._play_sound(success=False, flow="exit")
 
         except Exception as exc:
             logger.error("Failed to exit position %s: %s", tradingsymbol, exc, exc_info=True)
@@ -226,7 +226,7 @@ class ExitExecutionMethods:
                 "Exit Order Failed",
                 f"Failed to place exit order for {tradingsymbol}:\n{exc}",
             )
-            self.window._play_sound(success=False)
+            self.window._play_sound(success=False, flow="exit")
         finally:
             self.window._refresh_positions()
 

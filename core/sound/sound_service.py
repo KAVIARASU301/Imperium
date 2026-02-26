@@ -17,14 +17,19 @@ class SoundService(QObject):
         super().__init__(parent)
         self._active_sound_effects: list[QSoundEffect] = []
 
-    def play_notification(self, success: bool = True, ensure_volume: bool = True) -> None:
-        """Play success/failure notification sound and optionally normalize volume temporarily."""
+    def play_notification(
+        self,
+        success: bool = True,
+        ensure_volume: bool = True,
+        flow: str = "entry",
+    ) -> None:
+        """Play order notification sound and optionally normalize volume temporarily."""
         try:
             original_volume = self.get_system_volume() if ensure_volume else None
             if ensure_volume and original_volume is not None:
                 self.set_system_volume(80)
 
-            filename = "Pop.wav" if success else "fail.wav"
+            filename = self._resolve_notification_sound_filename(success=success, flow=flow)
             sound_path = self._resolve_sound_path(filename)
             if sound_path is None:
                 logger.warning("Sound file not found for notification: %s", filename)
@@ -44,6 +49,12 @@ class SoundService(QObject):
 
         except Exception as exc:
             logger.error("Error playing notification sound: %s", exc)
+
+    @staticmethod
+    def _resolve_notification_sound_filename(success: bool, flow: str) -> str:
+        if not success:
+            return "fail.wav"
+        return "exit.wav" if flow == "exit" else "Pop.wav"
 
     def get_system_volume(self) -> Optional[int]:
         """Get system output volume as percentage (0-100)."""

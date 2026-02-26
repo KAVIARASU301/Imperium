@@ -848,9 +848,9 @@ class ImperiumMainWindow(QMainWindow):
 
         # SUCCESS sound for TARGET, FAIL sound for SL
         if reason == "TARGET":
-            self._play_sound(success=True)
+            self._play_sound(success=True, flow="exit")
         else:
-            self._play_sound(success=False)
+            self._play_sound(success=False, flow="exit")
 
     def _sync_positions_to_dialog(self):
         self.position_sync_adapter.sync_positions_to_dialog()
@@ -2294,8 +2294,8 @@ class ImperiumMainWindow(QMainWindow):
     # SECTION 19: SOUND
     # =========================================================================
 
-    def _play_sound(self, success: bool = True):
-        self.sound_service.play_notification(success=success)
+    def _play_sound(self, success: bool = True, flow: str = "entry"):
+        self.sound_service.play_notification(success=success, flow=flow)
 
     # =========================================================================
     # SECTION 20: HELP & INFO DIALOGS
