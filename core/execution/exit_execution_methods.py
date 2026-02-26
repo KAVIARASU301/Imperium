@@ -230,6 +230,52 @@ class ExitExecutionMethods:
         finally:
             self.window._refresh_positions()
 
+
+    def exit_partial_qty(self, tradingsymbol: str, qty_to_exit: int, reason: str = ""):
+        """Exit only a subset of an open position quantity."""
+        position = self.window.position_manager.get_position(tradingsymbol)
+        if not position:
+            logger.warning("[PARTIAL_EXIT] Position %s not found", tradingsymbol)
+            return None
+
+        available_qty = abs(int(position.quantity))
+        requested_qty = abs(int(qty_to_exit or 0))
+        if requested_qty <= 0:
+            logger.warning("[PARTIAL_EXIT] Invalid qty requested for %s: %s", tradingsymbol, qty_to_exit)
+            return None
+        if requested_qty > available_qty:
+            logger.warning(
+                "[PARTIAL_EXIT] Requested %d for %s but only %d available; clipping.",
+                requested_qty,
+                tradingsymbol,
+                available_qty,
+            )
+            requested_qty = available_qty
+
+        transaction_type = (
+            self.window.trader.TRANSACTION_TYPE_SELL
+            if position.quantity > 0
+            else self.window.trader.TRANSACTION_TYPE_BUY
+        )
+
+        order_id = self.window.trader.place_order(
+            variety=self.window.trader.VARIETY_REGULAR,
+            exchange=position.exchange,
+            tradingsymbol=tradingsymbol,
+            transaction_type=transaction_type,
+            quantity=requested_qty,
+            product=position.product,
+            order_type=self.window.trader.ORDER_TYPE_MARKET,
+        )
+        logger.info(
+            "[PARTIAL_EXIT] %s qty=%d order=%s reason=%s",
+            tradingsymbol,
+            requested_qty,
+            order_id,
+            reason,
+        )
+        return order_id
+
     def exit_position_from_dialog(self, symbol_or_pos_data):
         position_to_exit_data = None
         if isinstance(symbol_or_pos_data, str):

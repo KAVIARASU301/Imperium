@@ -39,6 +39,9 @@ class StackEntry:
     entry_price: float
     entry_bar_idx: int
     stack_number: int          # 1-based: 1 = first stack after anchor
+    layer_tag: str = ""       # e.g. STACK_1, STACK_2
+    tradingsymbols: list[str] = field(default_factory=list)
+    qty_per_symbol: int = 0
 
 
 @dataclass
@@ -54,6 +57,8 @@ class StackerState:
     max_stacks: int                          # user-set cap (1-5)
     stack_entries: list[StackEntry] = field(default_factory=list)
     next_trigger_points: float = 0.0        # next threshold from anchor
+    anchor_tradingsymbols: list[str] = field(default_factory=list)
+    anchor_qty_per_symbol: int = 0
 
     def __post_init__(self):
         self.next_trigger_points = self.step_points  # first trigger = 1x step
@@ -79,7 +84,13 @@ class StackerState:
             return False
         return self.favorable_move(current_price) >= self.next_trigger_points
 
-    def add_stack(self, entry_price: float, bar_idx: int):
+    def add_stack(
+        self,
+        entry_price: float,
+        bar_idx: int,
+        tradingsymbols: list[str] | None = None,
+        qty_per_symbol: int = 0,
+    ):
         """Record a new stack entry and advance the trigger threshold."""
         # Dedup guard: avoid double-firing on jittery duplicate ticks near
         # the same trigger level. CRITICAL: we MUST still advance next_trigger_points
@@ -93,6 +104,9 @@ class StackerState:
             entry_price=entry_price,
             entry_bar_idx=bar_idx,
             stack_number=len(self.stack_entries) + 1,
+            layer_tag=f"STACK_{len(self.stack_entries) + 1}",
+            tradingsymbols=list(tradingsymbols or []),
+            qty_per_symbol=int(qty_per_symbol or 0),
         ))
         self.next_trigger_points += self.step_points   # advance to next level
 

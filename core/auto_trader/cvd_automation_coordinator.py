@@ -102,38 +102,56 @@ class CvdAutomationCoordinator:
                 return
             stack_num = payload.get("stack_number", 0)
             stack_entry_price = payload.get("stack_entry_price", 0.0)
-            # Retrieve the specific tradingsymbol for this stack slot (if tracked)
-            stacked_syms = active_trade.get("stacked_tradingsymbols", [])
-            # Try to find by stack number (1-based index)
-            target_sym = None
-            if stacked_syms and 0 < stack_num <= len(stacked_syms):
-                target_sym = stacked_syms[stack_num - 1]
-            elif stacked_syms:
-                # fallback: unwind the last tracked stack symbol
-                target_sym = stacked_syms[-1]
+            stack_layers = active_trade.get("stack_layers", [])
+            if not stack_layers and active_trade.get("stacked_tradingsymbols"):
+                stack_layers = [
+                    {
+                        "stack_number": idx + 1,
+                        "layer_tag": f"STACK_{idx + 1}",
+                        "tradingsymbols": [sym],
+                        "qty_per_symbol": int(active_trade.get("quantity") or 0),
+                        "entry_price": 0.0,
+                    }
+                    for idx, sym in enumerate(active_trade.get("stacked_tradingsymbols", []))
+                    if sym
+                ]
+                active_trade["stack_layers"] = stack_layers
+            target_layer = next((layer for layer in stack_layers if layer.get("stack_number") == stack_num), None)
+            if target_layer is None and stack_layers:
+                target_layer = stack_layers[-1]
 
-            if target_sym:
-                position = w.position_manager.get_position(target_sym)
-                if position:
-                    self.exit_position_automated(position, reason=f"AUTO_STACK_UNWIND#{stack_num}")
-                    # Remove from tracked list
-                    try:
-                        stacked_syms.remove(target_sym)
-                    except ValueError:
-                        pass
-                    active_trade["stacked_tradingsymbols"] = stacked_syms
-                    logger.info(
-                        "[STACKER] Unwound stack #%d (%s) entry=%.2f current=%.2f",
-                        stack_num, target_sym, stack_entry_price,
-                        float(payload.get("price_close", 0)),
-                    )
-                else:
-                    logger.warning("[STACKER] Unwind target %s not found in position manager", target_sym)
+            if target_layer:
+                anchor_syms = set(active_trade.get("tradingsymbols", []))
+                for target_sym in target_layer.get("tradingsymbols", []):
+                    position = w.position_manager.get_position(target_sym)
+                    if not position:
+                        logger.warning("[STACKER] Unwind target %s not found in position manager", target_sym)
+                        continue
+                    if target_sym in anchor_syms:
+                        self._exit_partial_qty(
+                            w,
+                            target_sym,
+                            qty_to_exit=int(target_layer.get("qty_per_symbol") or 0),
+                            reason=f"AUTO_STACK_UNWIND#{stack_num}",
+                        )
+                    else:
+                        self.exit_position_automated(position, reason=f"AUTO_STACK_UNWIND#{stack_num}")
+                active_trade["stack_layers"] = [
+                    layer for layer in stack_layers if layer.get("stack_number") != target_layer.get("stack_number")
+                ]
+                logger.info(
+                    "[STACKER] Unwound stack #%d (%s) entry=%.2f current=%.2f",
+                    stack_num,
+                    target_layer.get("layer_tag", "UNKNOWN"),
+                    stack_entry_price,
+                    float(payload.get("price_close", 0)),
+                )
             else:
                 logger.warning(
-                    "[STACKER] No stacked symbol found for unwind #%d token=%s "
-                    "(stacked_tradingsymbols=%s)",
-                    stack_num, token, stacked_syms,
+                    "[STACKER] No stack layer found for unwind #%d token=%s (stack_layers=%s)",
+                    stack_num,
+                    token,
+                    stack_layers,
                 )
             return  # always return — never place a new order on unwind
 
@@ -296,11 +314,18 @@ class CvdAutomationCoordinator:
                 w._execute_single_strike_order(order_params)
                 placed_syms = [contract.tradingsymbol]
 
-            # ── Track stacked symbols so unwind can exit the right position ──
+            # ── Track each stack as a tagged layer (not flat index list) ──
             if active_trade is not None and placed_syms:
-                stacked = active_trade.setdefault("stacked_tradingsymbols", [])
-                stacked.extend(placed_syms)
-                logger.debug("[STACKER] Tracked stack symbols: %s (total=%d)", placed_syms, len(stacked))
+                stack_num = int(payload.get("stack_number") or 0) or len(active_trade.get("stack_layers", [])) + 1
+                layer_record = {
+                    "stack_number": stack_num,
+                    "layer_tag": f"STACK_{stack_num}",
+                    "tradingsymbols": placed_syms,
+                    "qty_per_symbol": int(order_details.get("total_quantity_per_strike", 0)) if order_details else int(quantity),
+                    "entry_price": float(payload.get("price_close", 0.0)),
+                }
+                active_trade.setdefault("stack_layers", []).append(layer_record)
+                logger.debug("[STACKER] Tracked stack layer: %s", layer_record)
 
             return  # ← do NOT update positions dict for stack entries
 
@@ -343,6 +368,7 @@ class CvdAutomationCoordinator:
             "trend_mode_peak_vol": 0.0,
             "regime_adx_hist": [],
             "regime_vol_hist": [],
+            "stack_layers": [],
         }
 
         # ── Stacker: init state for anchor, or record stack entry ─────────
@@ -372,6 +398,8 @@ class CvdAutomationCoordinator:
                     signal_side=signal_side,
                     step_points=float(dialog.stacker_step_input.value()),
                     max_stacks=int(dialog.stacker_max_input.value()),
+                    anchor_tradingsymbols=list(all_tradingsymbols if route == "buy_exit_panel" else [tracked_tradingsymbol]),
+                    anchor_qty_per_symbol=int(quantity),
                 )
                 logger.info(
                     "[STACKER] Anchor registered: token=%s side=%s price=%.2f step=%.0f max=%d",
@@ -580,7 +608,7 @@ class CvdAutomationCoordinator:
             exit_reason = "AUTO_MAX_PROFIT_GIVEBACK"
 
         trend_mode_eligible = strategy_type in dynamic_exit_trend_following_strategies
-        stacked_active = bool(active_trade.get("stacked_tradingsymbols"))
+        stacked_active = bool(active_trade.get("stack_layers") or active_trade.get("stacked_tradingsymbols"))
         adx_slope = (adx_hist[-1] - adx_hist[-2]) if len(adx_hist) >= 2 else 0.0
         vol_slope = (vol_hist[-1] - vol_hist[-2]) if len(vol_hist) >= 2 else 0.0
         unlock_profit_buffer = max(stoploss_points or 0.0, 1.0)
@@ -655,16 +683,7 @@ class CvdAutomationCoordinator:
             exit_reason = "AUTO_ATR_REVERSAL_EXIT"
 
         if exit_reason:
-            for pos in positions:
-                self.exit_position_automated(pos, reason=exit_reason)
-            # Also exit any remaining stacked positions that weren't unwound yet
-            if active_trade:
-                remaining_stacked = active_trade.get("stacked_tradingsymbols", [])
-                for sym in remaining_stacked:
-                    stk_pos = w.position_manager.get_position(sym)
-                    if stk_pos:
-                        self.exit_position_automated(stk_pos, reason=f"{exit_reason}_STACK")
-                        logger.info("[STACKER] Exiting remaining stack on anchor exit: %s", sym)
+            self._exit_anchor_and_stack_layers(token=token, w=w, reason=exit_reason, positions=positions)
             if self.positions.pop(token, None) is not None:
                 # Reset stacker state and notify the dialog
                 self._stacker_states.pop(token, None)
@@ -696,11 +715,7 @@ class CvdAutomationCoordinator:
             active_trade = self.positions.get(token)
             if not active_trade:
                 continue
-            tradingsymbols = [s for s in (active_trade.get("tradingsymbols") or [active_trade.get("tradingsymbol")]) if s]
-            for symbol in tradingsymbols:
-                position = w.position_manager.get_position(symbol)
-                if position:
-                    self.exit_position_automated(position, reason=reason)
+            self._exit_anchor_and_stack_layers(token=token, w=w, reason=reason)
             w._stop_cvd_pending_retry(token)
             self.positions.pop(token, None)
             self._stacker_states.pop(token, None)
@@ -731,6 +746,19 @@ class CvdAutomationCoordinator:
                     token = int(token_raw)
                 except (TypeError, ValueError):
                     continue
+                if "stack_layers" not in trade:
+                    legacy_stacked = trade.get("stacked_tradingsymbols", []) or []
+                    trade["stack_layers"] = [
+                        {
+                            "stack_number": idx + 1,
+                            "layer_tag": f"STACK_{idx + 1}",
+                            "tradingsymbols": [sym],
+                            "qty_per_symbol": int(trade.get("quantity") or 0),
+                            "entry_price": 0.0,
+                        }
+                        for idx, sym in enumerate(legacy_stacked)
+                        if sym
+                    ]
                 self.positions[token] = trade
         except Exception as exc:
             logger.error("[AUTO] Failed to load CVD automation state: %s", exc, exc_info=True)
@@ -791,6 +819,48 @@ class CvdAutomationCoordinator:
         ladder_row = w.strike_ladder.contracts.get(w.strike_ladder.atm_strike, {})
         option_key = "CE" if signal_side == "long" else "PE"
         return ladder_row.get(option_key)
+
+    def _exit_anchor_and_stack_layers(self, token: int, w, reason: str, positions: list[Position] | None = None):
+        active_trade = self.positions.get(token)
+        if not active_trade:
+            return
+
+        exited_symbols: set[str] = set()
+        if positions is not None:
+            for pos in positions:
+                exited_symbols.add(pos.tradingsymbol)
+                self.exit_position_automated(pos, reason=reason)
+        else:
+            for symbol in [s for s in (active_trade.get("tradingsymbols") or [active_trade.get("tradingsymbol")]) if s]:
+                position = w.position_manager.get_position(symbol)
+                if position:
+                    exited_symbols.add(symbol)
+                    self.exit_position_automated(position, reason=reason)
+
+        for layer in active_trade.get("stack_layers", []):
+            layer_tag = layer.get("layer_tag", "STACK")
+            for sym in layer.get("tradingsymbols", []):
+                if sym in exited_symbols:
+                    continue
+                stk_pos = w.position_manager.get_position(sym)
+                if stk_pos:
+                    self.exit_position_automated(stk_pos, reason=f"{reason}_CLEANUP_{layer_tag}")
+                    logger.info("[STACKER] Exiting remaining stack on anchor exit: %s (%s)", sym, layer_tag)
+
+    def _exit_partial_qty(self, w, tradingsymbol: str, qty_to_exit: int, reason: str):
+        if qty_to_exit <= 0:
+            logger.warning("[STACKER] Invalid partial unwind qty=%s for %s", qty_to_exit, tradingsymbol)
+            return
+        try:
+            order_id = w.execution_service.exit_methods.exit_partial_qty(
+                tradingsymbol=tradingsymbol,
+                qty_to_exit=qty_to_exit,
+                reason=reason,
+            )
+            if order_id:
+                w._refresh_positions()
+        except Exception as exc:
+            logger.error("[STACKER] Partial unwind failed for %s: %s", tradingsymbol, exc, exc_info=True)
 
     def exit_position_automated(self, position: Position, reason: str = "AUTO"):
         w = self.main_window
