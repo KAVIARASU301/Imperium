@@ -152,6 +152,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self._current_session_x_base: float = 0.0
         self._current_session_last_cvd_value: float | None = None
         self._current_session_last_price_value: float | None = None
+        self._current_session_last_x: float | None = None  # x coord of last historical candle
         self._current_session_cumulative_volume: int = 0
         self._current_session_volume_scale: float = 1.0
         self._live_cvd_offset: float = 0.0
@@ -465,22 +466,22 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.max_profit_giveback_input.valueChanged.connect(self._on_automation_settings_changed)
 
         self.max_giveback_atr_reversal_check = QCheckBox("ATR Rev")
-        self.max_giveback_atr_reversal_check.setChecked(True)
+        self.max_giveback_atr_reversal_check.setChecked(False)
         self.max_giveback_atr_reversal_check.setToolTip("Apply max profit giveback exit to ATR Reversal trades.")
         self.max_giveback_atr_reversal_check.toggled.connect(self._on_automation_settings_changed)
 
         self.max_giveback_ema_cross_check = QCheckBox("EMA Cross")
-        self.max_giveback_ema_cross_check.setChecked(True)
+        self.max_giveback_ema_cross_check.setChecked(False)
         self.max_giveback_ema_cross_check.setToolTip("Apply max profit giveback exit to EMA Cross trades.")
         self.max_giveback_ema_cross_check.toggled.connect(self._on_automation_settings_changed)
 
         self.max_giveback_atr_divergence_check = QCheckBox("ATR Div")
-        self.max_giveback_atr_divergence_check.setChecked(True)
+        self.max_giveback_atr_divergence_check.setChecked(False)
         self.max_giveback_atr_divergence_check.setToolTip("Apply max profit giveback exit to ATR Divergence trades.")
         self.max_giveback_atr_divergence_check.toggled.connect(self._on_automation_settings_changed)
 
         self.max_giveback_range_breakout_check = QCheckBox("Breakout")
-        self.max_giveback_range_breakout_check.setChecked(True)
+        self.max_giveback_range_breakout_check.setChecked(False)
         self.max_giveback_range_breakout_check.setToolTip("Apply max profit giveback exit to Range Breakout trades.")
         self.max_giveback_range_breakout_check.toggled.connect(self._on_automation_settings_changed)
 
@@ -1906,6 +1907,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self._live_price_points.clear()
         self._current_session_last_cvd_value = None
         self._current_session_last_price_value = None
+        self._current_session_last_x = None
         self._current_session_cumulative_volume = 0
         self._current_session_volume_scale = 1.0
         self.all_timestamps.clear()
@@ -1950,6 +1952,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self._live_price_points.clear()
         self._current_session_last_cvd_value = None
         self._current_session_last_price_value = None
+        self._current_session_last_x = None
         self._current_session_cumulative_volume = 0
         self._current_session_volume_scale = 1.0
         self._last_plot_x_indices = []
@@ -2335,13 +2338,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
 
     @classmethod
     def _max_giveback_strategy_defaults(cls) -> tuple[str, ...]:
-        return (
-            cls.MAX_GIVEBACK_STRATEGY_ATR_REVERSAL,
-            cls.MAX_GIVEBACK_STRATEGY_EMA_CROSS,
-            cls.MAX_GIVEBACK_STRATEGY_ATR_DIVERGENCE,
-            cls.MAX_GIVEBACK_STRATEGY_RANGE_BREAKOUT,
-            cls.MAX_GIVEBACK_STRATEGY_CVD_RANGE_BREAKOUT,
-        )
+        return ()
 
     def _selected_max_giveback_strategies(self) -> list[str]:
         selected: list[str] = []
@@ -2551,38 +2548,20 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self._live_cvd_offset = float(self._current_session_last_cvd_value) - latest_live_raw_cvd
 
     def _downsample_live_points(self, points: list[tuple[datetime, float]]) -> list[tuple[datetime, float]]:
+        """
+        Downsample live tick points while preserving time-order to avoid overlap lines.
+
+        Uses stride-based uniform sampling which keeps points strictly time-ordered.
+        No min/max bucket extremes — those cause the line to zigzag back in time.
+        Always keeps first and last point for clean anchor + live-edge connection.
+        """
         if len(points) <= self.LIVE_TICK_DOWNSAMPLE_TARGET:
             return points
 
-        if self.LIVE_TICK_DOWNSAMPLE_TARGET <= 10:
-            step = max(1, len(points) // max(self.LIVE_TICK_DOWNSAMPLE_TARGET, 1))
-            return points[::step]
-
-        bucket_count = max(1, self.LIVE_TICK_DOWNSAMPLE_TARGET // 5)
-        bucket_size = max(1, len(points) // bucket_count)
-        price_map = {ts: px for ts, px in self._live_price_points}
-        selected: list[tuple[datetime, float]] = []
-
-        for start in range(0, len(points), bucket_size):
-            bucket = points[start:start + bucket_size]
-            if not bucket:
-                continue
-
-            bucket_extremes = [
-                bucket[0],
-                min(bucket, key=lambda item: item[1]),
-                max(bucket, key=lambda item: item[1]),
-                min(bucket, key=lambda item: price_map.get(item[0], float("inf"))),
-                max(bucket, key=lambda item: price_map.get(item[0], float("-inf"))),
-                bucket[-1],
-            ]
-            selected.extend(bucket_extremes)
-
-        selected = sorted(set(selected), key=lambda item: item[0])
-        if len(selected) > self.LIVE_TICK_DOWNSAMPLE_TARGET:
-            idx = np.linspace(0, len(selected) - 1, self.LIVE_TICK_DOWNSAMPLE_TARGET, dtype=int)
-            selected = [selected[i] for i in idx]
-        return selected
+        # Uniform stride: pick evenly spaced indices, always include first and last
+        idx = np.linspace(0, len(points) - 1, self.LIVE_TICK_DOWNSAMPLE_TARGET, dtype=int)
+        # linspace already includes 0 and len-1, so first/last are always kept
+        return [points[i] for i in idx]
 
     # =========================================================================
     # SECTION 7: CHART RENDERING & PLOTTING
@@ -2631,6 +2610,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         sessions = sorted(cvd_df["session"].unique())
         self._current_session_last_cvd_value = None
         self._current_session_last_price_value = None
+        self._current_session_last_x = None
         self._current_session_cumulative_volume = 0
         self._current_session_volume_scale = 1.0
 
@@ -2687,6 +2667,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
                 self._current_session_x_base = float(xs[0]) if xs else 0.0
                 self._current_session_last_cvd_value = float(cvd_y[-1]) if len(cvd_y) else None
                 self._current_session_last_price_value = float(price_y[-1]) if len(price_y) else None
+                self._current_session_last_x = float(xs[-1]) if xs else None  # anchor for live tick line
                 self._current_session_cumulative_volume = int(cumulative_volume[-1]) if len(cumulative_volume) else 0
                 self._current_session_volume_scale = float(cumulative_volume[-1]) if len(cumulative_volume) else 1.0
 
@@ -3091,6 +3072,20 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         y_vals: list[float] = []
         price_vals: list[float] = []
         price_map = {ts: px for ts, px in self._live_price_points}
+
+        # ── Anchor point ────────────────────────────────────────────────────
+        # Prepend the last historical candle's close as the first point of the
+        # live tick line.  This eliminates the visual gap between the historical
+        # curve and the live overlay — the two lines now share an exact endpoint.
+        if (
+            self._current_session_last_x is not None
+            and self._current_session_last_cvd_value is not None
+            and self._current_session_last_price_value is not None
+        ):
+            x_vals.append(self._current_session_last_x)
+            y_vals.append(float(self._current_session_last_cvd_value))
+            price_vals.append(float(self._current_session_last_price_value))
+        # ────────────────────────────────────────────────────────────────────
 
         for ts, raw_cvd in points:
             tick_ts = _align_tick_ts(ts)
