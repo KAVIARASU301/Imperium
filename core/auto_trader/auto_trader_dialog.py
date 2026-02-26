@@ -909,12 +909,6 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         )
         self.harvest_threshold_input.valueChanged.connect(self._on_stacker_settings_changed)
 
-        controls_row.addWidget(self.stacker_enabled_check)
-        controls_row.addWidget(self.stacker_step_input)
-        controls_row.addWidget(self.stacker_max_input)
-        controls_row.addWidget(self.harvest_enabled_check)
-        controls_row.addWidget(self.harvest_threshold_input)
-
         self._build_setup_dialog(compact_combo_style, compact_spinbox_style)
 
         toolbar_block_layout.addLayout(controls_row)
@@ -926,10 +920,22 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         status_row.addWidget(self.tick_upload_btn)
         status_row.addWidget(self.tick_clear_btn)
         status_row.addWidget(self.automate_toggle)
+        status_row.addWidget(self.stacker_enabled_check)
+        status_row.addWidget(self.stacker_step_input)
+        status_row.addWidget(self.stacker_max_input)
+        status_row.addWidget(self.harvest_enabled_check)
+        status_row.addWidget(self.harvest_threshold_input)
         status_row.addWidget(self.regime_indicator)
-        status_row.addWidget(self.simulator_summary_label)
         status_row.addStretch()
         toolbar_block_layout.addLayout(status_row)
+
+        # ================= ROW 4: SIMULATOR SUMMARY =================
+        simulator_row = QHBoxLayout()
+        simulator_row.setContentsMargins(0, 0, 0, 4)
+        simulator_row.setSpacing(8)
+        simulator_row.addWidget(self.simulator_summary_label)
+        simulator_row.addStretch()
+        toolbar_block_layout.addLayout(simulator_row)
 
         toolbar_block.adjustSize()
         toolbar_block.setMaximumWidth(toolbar_block.sizeHint().width())
@@ -1221,7 +1227,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
 
         self.ws_status_label = QLabel("Live feed: connecting…")
         self.ws_status_label.setStyleSheet("color: #FFB74D; font-size: 11px; font-weight: 600;")
-        root.addWidget(self.ws_status_label)
+        self.ws_status_label.hide()
 
     def _connect_signals(self):
         self.navigator.date_changed.connect(self._on_date_changed)
