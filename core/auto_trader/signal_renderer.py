@@ -796,6 +796,18 @@ class SignalRendererMixin:
                 step_points=float(self.stacker_step_input.value()),
                 max_stacks=int(self.stacker_max_input.value()),
             )
+
+            harvest_enabled = bool(
+                getattr(self, "harvest_enabled_check", None)
+                and self.harvest_enabled_check.isChecked()
+            )
+            harvest_threshold = (
+                float(self.harvest_threshold_input.value())
+                if hasattr(self, "harvest_threshold_input") else 0.0
+            )
+            if harvest_enabled and harvest_threshold > 0:
+                self._live_stacker_state.setup_harvest(harvest_threshold)
+
             self._live_stacker_side = side
             self._live_stacker_strategy_type = strategy_type
         else:

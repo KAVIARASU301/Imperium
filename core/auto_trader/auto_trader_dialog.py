@@ -882,6 +882,37 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         )
         self.stacker_max_input.valueChanged.connect(self._on_stacker_settings_changed)
 
+        # ── Profit Harvest widgets ──────────────────────────────────────────
+        self.harvest_enabled_check = QCheckBox("Harvest")
+        self.harvest_enabled_check.setChecked(False)
+        self.harvest_enabled_check.setToolTip(
+            "FIFO Profit Harvest: when total PnL crosses the threshold,\n"
+            "exit the oldest stack (STACK_1) to lock in profit.\n"
+            "Works alongside LIFO unwind — these are independent.\n"
+            "LIFO: defends against reversals.\n"
+            "Harvest: locks profit when you're winning."
+        )
+        self.harvest_enabled_check.toggled.connect(self._on_stacker_settings_changed)
+
+        self.harvest_threshold_input = QDoubleSpinBox()
+        self.harvest_threshold_input.setPrefix("₹")
+        self.harvest_threshold_input.setRange(500, 500000)
+        self.harvest_threshold_input.setValue(10000)
+        self.harvest_threshold_input.setSingleStep(1000)
+        self.harvest_threshold_input.setDecimals(0)
+        self.harvest_threshold_input.setStyleSheet(compact_spinbox_style)
+        self.harvest_threshold_input.setToolTip(
+            "Lock profit every time total PnL gains this much.\n"
+            "Example: ₹10,000 → harvest at ₹10K, then ₹20K, then ₹30K..."
+        )
+        self.harvest_threshold_input.valueChanged.connect(self._on_stacker_settings_changed)
+
+        controls_row.addWidget(self.stacker_enabled_check)
+        controls_row.addWidget(self.stacker_step_input)
+        controls_row.addWidget(self.stacker_max_input)
+        controls_row.addWidget(self.harvest_enabled_check)
+        controls_row.addWidget(self.harvest_threshold_input)
+
         self._build_setup_dialog(compact_combo_style, compact_spinbox_style)
 
         toolbar_block_layout.addLayout(controls_row)
@@ -1304,6 +1335,8 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.stacker_enabled_check.setChecked(_read_setting("stacker_enabled", False, bool))
         self.stacker_step_input.setValue(_read_setting("stacker_step_points", 20, int))
         self.stacker_max_input.setValue(_read_setting("stacker_max_stacks", 2, int))
+        self.harvest_enabled_check.setChecked(_read_setting("harvest_enabled", False, bool))
+        self.harvest_threshold_input.setValue(_read_setting("harvest_threshold_rupees", 10000.0, float))
         self.open_drive_enabled_check.blockSignals(True)
         self.open_drive_time_hour_input.blockSignals(True)
         self.open_drive_time_minute_input.blockSignals(True)
@@ -1731,6 +1764,8 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
             "stacker_enabled": self.stacker_enabled_check.isChecked(),
             "stacker_step_points": int(self.stacker_step_input.value()),
             "stacker_max_stacks": int(self.stacker_max_input.value()),
+            "harvest_enabled": self.harvest_enabled_check.isChecked(),
+            "harvest_threshold_rupees": float(self.harvest_threshold_input.value()),
             "open_drive_enabled": self.open_drive_enabled_check.isChecked(),
             "open_drive_entry_hour": int(self.open_drive_time_hour_input.value()),
             "open_drive_entry_minute": int(self.open_drive_time_minute_input.value()),
@@ -3625,7 +3660,48 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
 
             state.remove_stacks(to_unwind)
 
-        # ── 2. STACK ADD: add new positions if price moved further in favour ─
+        # ── 2. FIFO PROFIT HARVEST: lock profit by exiting oldest stack ─────
+        if state.profit_harvest_enabled and state.stack_entries:
+            total_pnl = self._get_total_live_pnl()
+
+            while state.should_harvest_profit(total_pnl) and state.stack_entries:
+                oldest = state.harvest_oldest_stack()
+                if oldest is None:
+                    break
+
+                active_priority_list, strategy_priorities = self._active_strategy_priorities()
+                harvest_ts = f"{closed_bar_ts}_harvest{oldest.stack_number}"
+                harvest_payload = {
+                    "instrument_token": self.instrument_token,
+                    "symbol": self.symbol,
+                    "signal_side": side,
+                    "signal_type": strategy_type,
+                    "priority_list": active_priority_list,
+                    "strategy_priorities": strategy_priorities,
+                    "signal_x": x_arr_val,
+                    "price_close": current_price,
+                    "stoploss_points": float(self.automation_stoploss_input.value()),
+                    "route": self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL,
+                    "order_type": self.automation_order_type_combo.currentData() or self.ORDER_TYPE_MARKET,
+                    "timestamp": harvest_ts,
+                    "is_stack_unwind": True,
+                    "is_profit_harvest": True,
+                    "stack_number": oldest.stack_number,
+                    "anchor_price": state.anchor_entry_price,
+                    "stack_entry_price": oldest.entry_price,
+                }
+
+                logger.info(
+                    "[HARVEST] Locking profit — exiting STACK_%d entry=%.2f pnl=₹%.0f floor=₹%.0f",
+                    oldest.stack_number,
+                    oldest.entry_price,
+                    total_pnl,
+                    state._harvest_floor,
+                )
+                QTimer.singleShot(0, lambda p=harvest_payload: self.automation_signal.emit(p))
+                total_pnl = self._get_total_live_pnl()
+
+        # ── 3. STACK ADD: add new positions if price moved further in favour ─
         while state.should_add_stack(current_price):
             state.add_stack(entry_price=current_price, bar_idx=current_bar_idx)
             stack_num = len(state.stack_entries)
@@ -3665,3 +3741,14 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
 
             if not state.can_stack_more:
                 break
+
+    def _get_total_live_pnl(self) -> float:
+        """
+        Read live total PnL directly from position_manager.
+        Same number shown in the positions table footer — no manual calculation.
+        """
+        try:
+            positions = self.position_manager.get_all_positions()
+            return sum(pos.pnl for pos in positions)
+        except Exception:
+            return 0.0

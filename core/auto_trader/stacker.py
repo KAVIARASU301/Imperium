@@ -59,6 +59,9 @@ class StackerState:
     next_trigger_points: float = 0.0        # next threshold from anchor
     anchor_tradingsymbols: list[str] = field(default_factory=list)
     anchor_qty_per_symbol: int = 0
+    profit_harvest_threshold: float = 0.0
+    profit_harvest_enabled: bool = False
+    _harvest_floor: float = field(default=0.0, repr=False)
 
     def __post_init__(self):
         self.next_trigger_points = self.step_points  # first trigger = 1x step
@@ -173,3 +176,45 @@ class StackerState:
         if self.signal_side == "long":
             return sum(exit_price - e.entry_price for e in entries)
         return sum(e.entry_price - exit_price for e in entries)
+
+    # ── FIFO Profit Harvest ────────────────────────────────────────────────
+
+    def setup_harvest(self, threshold_rupees: float) -> None:
+        """
+        Enable profit harvesting. Called once when anchor trade is opened.
+        threshold_rupees: user-set value e.g. 10000
+        """
+        self.profit_harvest_threshold = threshold_rupees
+        self.profit_harvest_enabled = threshold_rupees > 0
+        self._harvest_floor = 0.0
+
+    def should_harvest_profit(self, total_pnl_rupees: float) -> bool:
+        """
+        FIFO harvest trigger: fires when live PnL crosses the next floor.
+        Uses rupees directly from position_manager — no manual calculation.
+        """
+        if not self.profit_harvest_enabled:
+            return False
+        if not self.stack_entries:
+            return False
+        return total_pnl_rupees >= (self._harvest_floor + self.profit_harvest_threshold)
+
+    def harvest_oldest_stack(self) -> StackEntry | None:
+        """
+        FIFO: pop STACK_1 (oldest/lowest entry = most locked profit).
+        Advances the floor so next harvest needs another full threshold gain.
+        Recalibrates stacking trigger from the new top of pyramid.
+        """
+        if not self.stack_entries:
+            return None
+
+        oldest = self.stack_entries.pop(0)
+        self._harvest_floor += self.profit_harvest_threshold
+
+        if self.stack_entries:
+            last_move = self.favorable_move(self.stack_entries[-1].entry_price)
+            self.next_trigger_points = last_move + self.step_points
+        else:
+            self.next_trigger_points = self.step_points
+
+        return oldest
