@@ -35,6 +35,18 @@ from core.auto_trader.regime_engine import RegimeEngine, RegimeConfig
 from core.auto_trader.regime_tab_mixin import RegimeTabMixin
 from core.auto_trader.regime_indicator import RegimeIndicator
 from core.auto_trader.trend_change_markers import TrendChangeMarkersMixin
+from core.auto_trader.auto_trader_theme import (
+    apply_dialog_theme,
+    COMPACT_COMBO_STYLE,
+    COMPACT_SPINBOX_STYLE,
+    COMPACT_TOGGLE_STYLE,
+    SignalFeedSidebar,
+    StatusBar,
+    MetricTile,
+    PanelHeader,
+    style_plot_widget,
+    C,
+)
 logger = logging.getLogger(__name__)
 
 
@@ -254,6 +266,9 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
     # =========================================================================
 
     def _setup_ui(self):
+        # ── Apply institutional theme (must be first) ──────────────────────
+        apply_dialog_theme(self)
+
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 4, 8, 4)
         root.setSpacing(4)
@@ -265,75 +280,10 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
                 widest = max(widest, metrics.horizontalAdvance(combo.itemText(idx)))
             combo.setFixedWidth(max(84, widest + extra_px))
 
-        compact_spinbox_style = """
-            QSpinBox, QDoubleSpinBox {
-                background: #1B1F2B;
-                color: #E0E0E0;
-                font-weight: 600;
-                font-size: 11px;
-                border: 1px solid #3A4458;
-                border-radius: 0px;
-                padding: 2px 4px;
-                min-height: 20px;
-            }
-            QSpinBox:hover, QDoubleSpinBox:hover {
-                border: 1px solid #5B9BD5;
-            }
-        """
-
-        compact_toggle_style = """
-            QCheckBox {
-                color: #9CCAF4;
-                font-weight: 600;
-                font-size: 11px;
-                spacing: 4px;
-            }
-            QCheckBox::indicator {
-                width: 14px;
-                height: 14px;
-                border: 1px solid #5B9BD5;
-                border-radius: 3px;
-                background: #1B1F2B;
-            }
-            QCheckBox::indicator:checked {
-                background: #5B9BD5;
-            }
-        """
-
-        compact_combo_style = """
-            QComboBox {
-                background: #1B1F2B;
-                color: #E0E0E0;
-                font-weight: 600;
-                font-size: 11px;
-                padding: 1px 6px;
-                border: 1px solid #3A4458;
-                border-radius: 0px;
-                min-height: 20px;
-            }
-            QComboBox:hover {
-                border: 1px solid #5B9BD5;
-            }
-            QComboBox::drop-down {
-                border: none;
-                width: 20px;
-            }
-            QComboBox::down-arrow {
-                image: none;
-                border-left: 4px solid transparent;
-                border-right: 4px solid transparent;
-                border-top: 5px solid #8A9BA8;
-                margin-right: 5px;
-            }
-            QComboBox QAbstractItemView {
-                background: #1B1F2B;
-                color: #E0E0E0;
-                selection-background-color: #5B9BD5;
-                selection-color: #000;
-                border: 1px solid #3A4458;
-                border-radius: 0px;
-            }
-        """
+        # Use themed style constants from dialog_theme
+        compact_spinbox_style = COMPACT_SPINBOX_STYLE
+        compact_toggle_style  = COMPACT_TOGGLE_STYLE
+        compact_combo_style   = COMPACT_COMBO_STYLE
 
         # ================= ROW 1: DATE NAVIGATOR =================
         navigator_row = QHBoxLayout()
@@ -342,7 +292,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
 
         # -------- Timeframe dropdown --------
         tf_label = QLabel("TF")
-        tf_label.setStyleSheet("color: #8A9BA8; font-size: 11px; font-weight: 600;")
+        tf_label.setStyleSheet(f"color: {C['text_2']}; font-size: 11px; font-weight: 600;")
 
         self.timeframe_combo = QComboBox()
         self.timeframe_combo.setFixedHeight(24)
@@ -372,18 +322,26 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.btn_focus.setChecked(False)
         self.btn_focus.setFixedHeight(24)
         self.btn_focus.setMinimumWidth(56)
-        self.btn_focus.setStyleSheet("""
-            QPushButton {
-                background:#212635;
-                border:1px solid #3A4458;
-                border-radius:0px;
-                padding:2px 8px;
-            }
-            QPushButton:checked {
-                background:#26A69A;
-                color:#000;
-                font-weight:600;
-            }
+        self.btn_focus.setStyleSheet(f"""
+            QPushButton {{
+                background: {C["bg_card"]};
+                color: {C["text_2"]};
+                border: 1px solid {C["border"]};
+                border-radius: 4px;
+                padding: 0px 8px;
+                font-weight: 700;
+                font-size: 10px;
+            }}
+            QPushButton:checked {{
+                background: {C["teal_dim"]};
+                color: {C["teal"]};
+                border: 1px solid {C["teal"]};
+                font-weight: 700;
+            }}
+            QPushButton:hover {{
+                border: 1px solid {C["border_hi"]};
+                color: {C["text_1"]};
+            }}
         """)
         self.btn_focus.setToolTip("Toggle 2-day view")
         self.btn_focus.toggled.connect(self._on_focus_mode_changed)
@@ -406,43 +364,21 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.simulator_run_btn.setFixedHeight(24)
         self.simulator_run_btn.setMinimumWidth(120)
         self.simulator_run_btn.setToolTip("Run simulator (Space)")
-        self.simulator_run_btn.setStyleSheet("""
-            QPushButton {
-                background:#212635;
-                border:1px solid #3A4458;
-                border-radius:0px;
-                padding:2px 8px;
-                color:#9CCAF4;
-                font-weight:600;
-            }
-            QPushButton:hover { border: 1px solid #5B9BD5; }
-            QPushButton:pressed { background:#1B1F2B; }
-        """)
+        self.simulator_run_btn.setObjectName("simRunBtn")
         self.simulator_run_btn.clicked.connect(self._on_simulator_run_clicked)
 
         self.tick_upload_btn = QPushButton("Update CSV")
         self.tick_upload_btn.setFixedHeight(24)
         self.tick_upload_btn.setMinimumWidth(130)
         self.tick_upload_btn.setToolTip("Upload timestamp,ltp,volume tick file for back analysis")
-        self.tick_upload_btn.setStyleSheet("""
-            QPushButton {
-                background:#212635;
-                border:1px solid #3A4458;
-                border-radius:0px;
-                padding:2px 8px;
-                color:#9CCAF4;
-                font-weight:600;
-            }
-            QPushButton:hover { border: 1px solid #5B9BD5; }
-            QPushButton:pressed { background:#1B1F2B; }
-        """)
+        self.tick_upload_btn.setObjectName("setupBtn")
         self.tick_upload_btn.clicked.connect(self._on_upload_tick_csv)
 
         self.tick_clear_btn = QPushButton("Live Tick")
         self.tick_clear_btn.setFixedHeight(24)
         self.tick_clear_btn.setMinimumWidth(84)
         self.tick_clear_btn.setToolTip("Clear uploaded tick data and switch back to live/historical feed")
-        self.tick_clear_btn.setStyleSheet(self.tick_upload_btn.styleSheet())
+        self.tick_clear_btn.setObjectName("setupBtn")
         self.tick_clear_btn.clicked.connect(self._clear_uploaded_tick_data)
         self.tick_clear_btn.setEnabled(False)
 
@@ -602,22 +538,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.setup_btn.setFixedHeight(24)
         self.setup_btn.setMinimumWidth(88)
         self.setup_btn.setToolTip("Open automation and signal settings")
-        self.setup_btn.setStyleSheet("""
-            QPushButton {
-                background:#212635;
-                border:1px solid #3A4458;
-                border-radius:0px;
-                padding:2px 8px;
-                color: #9CCAF4;
-                font-weight: 600;
-            }
-            QPushButton:hover {
-                border: 1px solid #5B9BD5;
-            }
-            QPushButton:pressed {
-                background: #1B1F2B;
-            }
-        """)
+        self.setup_btn.setObjectName("setupBtn")
         self.setup_btn.clicked.connect(self._open_setup_dialog)
 
         # Regime indicator (live pills)
@@ -625,43 +546,15 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
 
         # Export button (compact)
         self.btn_export = QPushButton("📸")
-        self.btn_export.setFixedSize(24, 24)
+        self.btn_export.setFixedSize(28, 28)
+        self.btn_export.setObjectName("navBtn")
         self.btn_export.setToolTip("Export current view as image")
-        self.btn_export.setStyleSheet("""
-            QPushButton {
-                background: #212635;
-                border: 1px solid #3A4458;
-                border-radius: 0px;
-                font-size: 14px;
-            }
-            QPushButton:hover {
-                background: #2A3142;
-                border: 1px solid #5B9BD5;
-            }
-            QPushButton:pressed {
-                background: #1B1F2B;
-            }
-        """)
         self.btn_export.clicked.connect(self._export_chart_image)
 
         self.btn_refresh_plot = QPushButton("⟳")
-        self.btn_refresh_plot.setFixedSize(24, 24)
+        self.btn_refresh_plot.setFixedSize(28, 28)
+        self.btn_refresh_plot.setObjectName("navBtn")
         self.btn_refresh_plot.setToolTip("Refresh chart plot")
-        self.btn_refresh_plot.setStyleSheet("""
-            QPushButton {
-                background: #212635;
-                border: 1px solid #3A4458;
-                border-radius: 0px;
-                font-size: 14px;
-            }
-            QPushButton:hover {
-                background: #2A3142;
-                border: 1px solid #5B9BD5;
-            }
-            QPushButton:pressed {
-                background: #1B1F2B;
-            }
-        """)
         self.btn_refresh_plot.clicked.connect(self._refresh_plot_only)
 
         root.addLayout(navigator_row)
@@ -749,7 +642,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
 
         # EMA Label
         ema_label = QLabel("EMAs:")
-        ema_label.setStyleSheet("color: #B0B0B0; font-weight: 600; font-size: 12px;")
+        ema_label.setStyleSheet(f"color: {C['text_2']}; font-weight: 600; font-size: 11px;")
         controls_row.addWidget(tf_label)
         controls_row.addWidget(self.timeframe_combo)
         controls_row.addWidget(self.btn_focus)
@@ -817,7 +710,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         controls_row.addSpacing(4)
 
         signal_filter_label = QLabel("Filter")
-        signal_filter_label.setStyleSheet("color: #8A9BA8; font-size: 11px;")
+        signal_filter_label.setStyleSheet(f"color: {C['text_2']}; font-size: 11px;")
         controls_row.addWidget(signal_filter_label)
 
         self.signal_filter_combo = QComboBox()
@@ -828,7 +721,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         controls_row.addWidget(self.signal_filter_combo)
 
         atr_marker_label = QLabel("ATR Markers")
-        atr_marker_label.setStyleSheet("color: #8A9BA8; font-size: 11px;")
+        atr_marker_label.setStyleSheet(f"color: {C['text_2']}; font-size: 11px;")
         controls_row.addWidget(atr_marker_label)
 
         self.atr_marker_filter_combo = QComboBox()
@@ -848,7 +741,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         controls_row.addWidget(self.setup_btn)
 
         self.simulator_summary_label = QLabel("Simulator: click Run Simulator")
-        self.simulator_summary_label.setStyleSheet("color: #8A9BA8; font-size: 11px; font-weight: 600;")
+        self.simulator_summary_label.setStyleSheet(f"color: {C['text_2']}; font-size: 11px; font-weight: 600;")
         controls_row.addWidget(self.btn_refresh_plot)
         controls_row.addWidget(self.btn_export)
         controls_row.addStretch()
@@ -953,16 +846,16 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.price_axis.setStyle(showValues=False)
 
         self.price_plot = pg.PlotWidget(axisItems={"bottom": self.price_axis})
-        self.price_plot.setBackground("#161A25")
-        self.price_plot.showGrid(x=True, y=True, alpha=0.12)
+        self.price_plot.setBackground(C["chart_bg"])
+        self.price_plot.showGrid(x=True, y=True, alpha=0.06)
         self.price_plot.setMenuEnabled(False)
         self.price_plot.setMinimumHeight(200)
 
-        # Price Y-axis styling with fixed width
+        # Price Y-axis styling
         price_y_axis = self.price_plot.getAxis("left")
         price_y_axis.setWidth(70)
-        price_y_axis.setTextPen(pg.mkPen("#FFE57F"))
-        price_y_axis.setPen(pg.mkPen("#8A9BA8"))
+        price_y_axis.setTextPen(pg.mkPen(C["text_3"]))
+        price_y_axis.setPen(pg.mkPen(C["border_dim"]))
         price_y_axis.enableAutoSIPrefix(False)
 
         # Price curves
@@ -1093,8 +986,8 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         bottom_axis = self.plot.getAxis("bottom")
         bottom_axis.setHeight(32)
         bottom_axis.setStyle(showValues=True)
-        bottom_axis.setTextPen(pg.mkPen("#8A9BA8"))
-        bottom_axis.setPen(pg.mkPen("#8A9BA8"))
+        bottom_axis.setTextPen(pg.mkPen(C["text_3"]))
+        bottom_axis.setPen(pg.mkPen(C["border_dim"]))
 
         # CVD Y-axis with fixed width
         cvd_y_axis = self.plot.getAxis("left")
@@ -1114,8 +1007,8 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
 
         cvd_y_axis.tickStrings = cvd_axis_formatter
 
-        self.plot.setBackground("#161A25")
-        self.plot.showGrid(x=True, y=True, alpha=0.12)
+        self.plot.setBackground(C["chart_bg"])
+        self.plot.showGrid(x=True, y=True, alpha=0.06)
         self.plot.setMenuEnabled(False)
         self.plot.setMinimumHeight(200)
 
@@ -1126,11 +1019,11 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         bottom_status_row.setSpacing(14)
 
         self.cpr_status_label = QLabel("CPR: --")
-        self.cpr_status_label.setStyleSheet("color: #8A9BA8; font-size: 11px; font-weight: 700;")
+        self.cpr_status_label.setStyleSheet(f"color: {C['text_2']}; font-size: 11px; font-weight: 700;")
         self.cpr_status_label.setAlignment(Qt.AlignCenter)
 
         self.priority_order_label = QLabel("Priority order: --")
-        self.priority_order_label.setStyleSheet("color: #8A9BA8; font-size: 11px; font-weight: 600;")
+        self.priority_order_label.setStyleSheet(f"color: {C['text_2']}; font-size: 11px; font-weight: 600;")
         self.priority_order_label.setAlignment(Qt.AlignCenter)
 
         bottom_status_row.addStretch()
@@ -1139,7 +1032,11 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         bottom_status_row.addStretch()
         root.addLayout(bottom_status_row)
 
-        zero_pen = pg.mkPen("#6C7386", style=Qt.DashLine, width=1)
+        # ── Institutional status bar (bottom telemetry strip) ──────────────
+        self._status_bar = StatusBar(self)
+        root.addWidget(self._status_bar)
+
+        zero_pen = pg.mkPen(C["border"], style=Qt.DashLine, width=1)
         self.plot.addItem(pg.InfiniteLine(0, angle=0, pen=zero_pen))
 
         self.prev_curve = pg.PlotCurveItem(
@@ -1210,9 +1107,9 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.x_time_label = pg.TextItem(
             "",
             anchor=(0.5, 1),
-            color="#E0E0E0",
-            fill=pg.mkBrush("#212635"),
-            border=pg.mkPen("#3A4458")
+            color=C["text_1"],
+            fill=pg.mkBrush(C["bg_card"]),
+            border=pg.mkPen(C["border_hi"])
         )
         self.x_time_label.hide()
         self.plot.addItem(self.x_time_label, ignoreBounds=True)
@@ -1244,7 +1141,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self._apply_visual_settings()
 
         self.ws_status_label = QLabel("Live feed: connecting…")
-        self.ws_status_label.setStyleSheet("color: #FFB74D; font-size: 11px; font-weight: 600;")
+        self.ws_status_label.setStyleSheet(f"color: {C['warn']}; font-size: 11px; font-weight: 600;")
         self.ws_status_label.hide()
 
     def _connect_signals(self):
@@ -1891,6 +1788,12 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
             "strategy_priorities": strategy_priorities,
         })
         self._live_stacker_state = None
+        # ── Sync status bar ──────────────────────────────────────────────
+        if hasattr(self, "_status_bar"):
+            if self.automate_toggle.isChecked():
+                self._status_bar.set("mode", "AUTO", "teal")
+            else:
+                self._status_bar.set("mode", "MANUAL", "dim")
 
     def reset_stacker(self):
         """Called by coordinator when anchor trade fully exits."""
@@ -3425,16 +3328,22 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
 
         if normalized.startswith("connected"):
             self.ws_status_label.setText(f"Live feed: {status_text}")
-            self.ws_status_label.setStyleSheet("color: #66BB6A; font-size: 11px; font-weight: 600;")
+            self.ws_status_label.setStyleSheet(f"color: {C['profit']}; font-size: 11px; font-weight: 600;")
+            if hasattr(self, "_status_bar"):
+                self._status_bar.set_connected(True)
             return
 
         if normalized.startswith("connecting") or normalized.startswith("reconnecting"):
             self.ws_status_label.setText(f"Live feed: {status_text}")
-            self.ws_status_label.setStyleSheet("color: #FFB74D; font-size: 11px; font-weight: 600;")
+            self.ws_status_label.setStyleSheet(f"color: {C['warn']}; font-size: 11px; font-weight: 600;")
+            if hasattr(self, "_status_bar"):
+                self._status_bar.set("conn", "CONNECTING", "warn")
             return
 
         self.ws_status_label.setText(f"Live feed issue: {status_text or 'disconnected'}")
-        self.ws_status_label.setStyleSheet("color: #EF5350; font-size: 11px; font-weight: 700;")
+        self.ws_status_label.setStyleSheet(f"color: {C['loss']}; font-size: 11px; font-weight: 700;")
+        if hasattr(self, "_status_bar"):
+            self._status_bar.set_connected(False)
         self._attempt_manual_ws_reconnect("status_change")
 
     def _attempt_manual_ws_reconnect(self, reason: str):
@@ -3486,7 +3395,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
 
         if self._ws_status_text.startswith("connected"):
             self.ws_status_label.setText("Live feed stalled (>25s without ticks). Attempting reconnect…")
-            self.ws_status_label.setStyleSheet("color: #EF5350; font-size: 11px; font-weight: 700;")
+            self.ws_status_label.setStyleSheet(f"color: {C['loss']}; font-size: 11px; font-weight: 700;")
             self._attempt_manual_ws_reconnect("tick_stale")
 
     def _refresh_if_live(self):
