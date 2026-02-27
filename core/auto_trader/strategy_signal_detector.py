@@ -1036,7 +1036,7 @@ class StrategySignalDetector:
         """Lightweight Wilder ADX — same formula used in auto_trader._compute_adx."""
         length = len(close)
         adx = np.zeros(length, dtype=float)
-        if length < period + 1:
+        if period <= 0 or length < period + 1:
             return adx
 
         tr = np.zeros(length)
@@ -1077,7 +1077,11 @@ class StrategySignalDetector:
             di_sum = di_plus + di_minus
             dx[i] = 100.0 * abs(di_plus - di_minus) / di_sum if di_sum > 0 else 0.0
 
-        adx_raw[2 * period - 1] = np.mean(dx[period:2 * period])
+        first_adx_idx = (2 * period) - 1
+        if first_adx_idx >= length:
+            return adx_raw
+
+        adx_raw[first_adx_idx] = np.mean(dx[period:2 * period])
         for i in range(2 * period, length):
             adx_raw[i] = (adx_raw[i - 1] * (period - 1) + dx[i]) / period
 
