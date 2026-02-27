@@ -856,8 +856,9 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         # Price Y-axis styling
         price_y_axis = self.price_plot.getAxis("left")
         price_y_axis.setWidth(70)
-        price_y_axis.setTextPen(pg.mkPen(C["text_3"]))
-        price_y_axis.setPen(pg.mkPen(C["border_dim"]))
+        # Keep price scale markings high-contrast so values remain readable at a glance.
+        price_y_axis.setTextPen(pg.mkPen(C["text_1"]))
+        price_y_axis.setPen(pg.mkPen(C["text_2"]))
         price_y_axis.enableAutoSIPrefix(False)
 
         # Price curves
