@@ -949,12 +949,14 @@ class ImperiumMainWindow(QMainWindow):
             self, order_id, contract_to_trade, quantity, price,
             transaction_type, product, stop_loss_price, target_price,
             trailing_stop_loss, stop_loss_amount, target_amount,
-            trailing_stop_loss_amount, group_name, auto_token=None
+            trailing_stop_loss_amount, group_name, auto_token=None,
+            trade_status=None, strategy_name=None,
     ):
         self.execution_service.confirm_and_finalize_order(
             order_id, contract_to_trade, quantity, price, transaction_type, product,
             stop_loss_price, target_price, trailing_stop_loss, stop_loss_amount,
             target_amount, trailing_stop_loss_amount, group_name, auto_token,
+            trade_status=trade_status, strategy_name=strategy_name,
         )
 
     def _has_pending_order_for_symbol(self, tradingsymbol: str | None) -> bool:

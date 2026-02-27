@@ -1,6 +1,5 @@
 import logging
 from collections import deque
-from contextlib import suppress
 
 import numpy as np
 import pandas as pd
@@ -59,6 +58,16 @@ class StrategySignalDetector:
 
         # Incremental cache for heavy breakout computations
         self._range_breakout_cache: dict[str, object] = {}
+
+        # Avoid re-logging identical Open Drive decisions on every detector refresh.
+        self._open_drive_logged_sessions: set[tuple] = set()
+
+    def _log_open_drive_once(self, key: tuple, message: str, *args) -> None:
+        """Log Open Drive decisions only once per unique session outcome."""
+        if key in self._open_drive_logged_sessions:
+            return
+        self._open_drive_logged_sessions.add(key)
+        logger.info(message, *args)
 
     def detect_atr_reversal_strategy(
             self,
@@ -510,7 +519,8 @@ class StrategySignalDetector:
             if not np.isfinite([price, ema10, ema51, vwap, cvd, cvd_fast]).all():
                 # ── FIX 3: mark fired even on NaN so we don't drift to later bars ──
                 fired_dates.add(session_date)
-                logger.info(
+                self._log_open_drive_once(
+                    (session_date, int(trigger_hour), int(trigger_minute), "invalid_values"),
                     "Open Drive @ %s %02d:%02d -> NO TRADE (invalid values). "
                     "price=%s ema10=%s ema51=%s vwap=%s cvd=%s cvd_ema10=%s",
                     session_date,
@@ -541,7 +551,8 @@ class StrategySignalDetector:
 
             if long_cond:
                 long_open_drive[idx] = True
-                logger.info(
+                self._log_open_drive_once(
+                    (session_date, int(trigger_hour), int(trigger_minute), "long"),
                     "Open Drive @ %s %02d:%02d -> LONG | price=%.2f ema10=%.2f ema51=%.2f vwap=%.2f cvd=%.2f cvd_ema10=%.2f",
                     session_date,
                     int(trigger_hour),
@@ -555,7 +566,8 @@ class StrategySignalDetector:
                 )
             elif short_cond:
                 short_open_drive[idx] = True
-                logger.info(
+                self._log_open_drive_once(
+                    (session_date, int(trigger_hour), int(trigger_minute), "short"),
                     "Open Drive @ %s %02d:%02d -> SHORT | price=%.2f ema10=%.2f ema51=%.2f vwap=%.2f cvd=%.2f cvd_ema10=%.2f",
                     session_date,
                     int(trigger_hour),
@@ -570,7 +582,8 @@ class StrategySignalDetector:
             # else: conditions didn't align at trigger time — session still marked,
             # no signal fires. Never chase later bars.
             else:
-                logger.info(
+                self._log_open_drive_once(
+                    (session_date, int(trigger_hour), int(trigger_minute), "no_trade"),
                     "Open Drive @ %s %02d:%02d -> NO TRADE | "
                     "price=%.2f ema10=%.2f ema51=%.2f vwap=%.2f cvd=%.2f cvd_ema10=%.2f "
                     "flags(price>both=%s price<both=%s cvd>ema10=%s cvd<ema10=%s)",
@@ -591,7 +604,8 @@ class StrategySignalDetector:
 
         missing_trigger_dates = sorted(session_dates_seen - session_dates_evaluated)
         for missing_date in missing_trigger_dates:
-            logger.info(
+            self._log_open_drive_once(
+                (missing_date, int(trigger_hour), int(trigger_minute), "missing_trigger_window"),
                 "Open Drive @ %s %02d:%02d -> NO TRADE (no candle in trigger window; timeframe=%sm)",
                 missing_date,
                 int(trigger_hour),

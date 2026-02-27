@@ -119,6 +119,7 @@ class OrderExecutionMethods:
                         if order_status == 'COMPLETE':
                             avg_price_from_order = confirmed_order_api_data.get('average_price', contract_to_trade.ltp)
                             tsl = confirmed_order_details.get("trailing_stop_loss") or 0
+
                             new_position = Position(
                                 symbol=f"{contract_to_trade.symbol}{contract_to_trade.strike}{contract_to_trade.option_type}",
                                 tradingsymbol=contract_to_trade.tradingsymbol,
@@ -333,9 +334,10 @@ class OrderExecutionMethods:
                            tsl=trailing_stop_loss,
                            sl_amt=stop_loss_amount, tp_amt=target_amount,
                            tsl_amt=trailing_stop_loss_amount, gn=group_name,
-                           at=auto_token:
+                           at=auto_token, ts=trade_status, sn=strategy_name:
                     self.confirm_and_finalize_order(oid, c, qty, p, tt, prod, sl, tp, tsl,
-                                                    sl_amt, tp_amt, tsl_amt, gn, at)
+                                                    sl_amt, tp_amt, tsl_amt, gn, at,
+                                                    trade_status=ts, strategy_name=sn)
                 )
 
         except Exception as e:
@@ -349,7 +351,8 @@ class OrderExecutionMethods:
         self, order_id, contract_to_trade, quantity, price,
         transaction_type, product, stop_loss_price, target_price,
         trailing_stop_loss, stop_loss_amount, target_amount,
-        trailing_stop_loss_amount, group_name, auto_token=None
+        trailing_stop_loss_amount, group_name, auto_token=None,
+        trade_status=None, strategy_name=None,
     ):
         self.window._refresh_positions()
         confirmed_order_api_data = self.window._confirm_order_success(order_id)
@@ -380,6 +383,11 @@ class OrderExecutionMethods:
                     if trailing_stop_loss_amount and trailing_stop_loss_amount > 0 and risk_qty > 0:
                         trailing_stop_loss = trailing_stop_loss_amount / risk_qty
 
+                    resolved_trade_status = str(
+                        trade_status or ("ALGO" if auto_token is not None else "MANUAL")
+                    ).upper()
+                    resolved_strategy_name = str(strategy_name or "N/A")
+
                     new_position = Position(
                         symbol=f"{contract_to_trade.symbol}{contract_to_trade.strike}{contract_to_trade.option_type}",
                         tradingsymbol=contract_to_trade.tradingsymbol,
@@ -396,8 +404,8 @@ class OrderExecutionMethods:
                         trailing_stop_loss=trailing_stop_loss if trailing_stop_loss and trailing_stop_loss > 0 else None,
                         group_name=group_name,
                         entry_time=datetime.now(),
-                        trade_status=trade_status,
-                        strategy_name=strategy_name,
+                        trade_status=resolved_trade_status,
+                        strategy_name=resolved_strategy_name,
                     )
                     self.window.position_manager.add_position(new_position)
                     self.window.trade_logger.log_trade(confirmed_order_api_data)

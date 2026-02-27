@@ -291,6 +291,8 @@ class CvdAutomationCoordinator:
 
         # ── Stack signals: place order only, do NOT overwrite anchor state ──
         if is_stack:
+            stack_num = int(payload.get("stack_number") or 0) or len((active_trade or {}).get("stack_layers", [])) + 1
+            stack_label = f"STACK_{stack_num}"
             logger.info(
                 "[STACKER] Placing stack order #%s: token=%s side=%s",
                 payload.get("stack_number", "?"), token, signal_side,
@@ -305,18 +307,18 @@ class CvdAutomationCoordinator:
                         order_details['product'] = w.settings.get('default_product', 'MIS')
                         order_details['order_type'] = order_type
                         order_details['trade_status'] = 'ALGO'
-                        order_details['strategy_name'] = strategy_type
+                        order_details['strategy_name'] = stack_label
                         w._execute_orders(order_details)
                         placed_syms = [s['contract'].tradingsymbol for s in order_details['strikes'] if s.get('contract') and getattr(s['contract'], 'tradingsymbol', None)]
                 else:
                     logger.warning("[STACKER] Failed to build order details from buy_exit_panel for stack")
             else:
+                order_params["strategy_name"] = stack_label
                 w._execute_single_strike_order(order_params)
                 placed_syms = [contract.tradingsymbol]
 
             # ── Track each stack as a tagged layer (not flat index list) ──
             if active_trade is not None and placed_syms:
-                stack_num = int(payload.get("stack_number") or 0) or len(active_trade.get("stack_layers", [])) + 1
                 layer_record = {
                     "stack_number": stack_num,
                     "layer_tag": f"STACK_{stack_num}",
