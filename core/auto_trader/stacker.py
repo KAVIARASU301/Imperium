@@ -27,6 +27,16 @@ Defensive LIFO Unwind (anti-loss logic):
 Key design decision: stacking threshold is measured from the ANCHOR entry
 price, not from each stack entry. This keeps the pyramid consistent and
 avoids phantom triggers when later entries move the reference point.
+
+Unwind Cooldown (BUG FIX — 2026-02-27):
+  After a LIFO unwind, the stacker must NOT immediately re-stack at the same
+  price level. The live tick loop was causing a buy→unwind→buy oscillation loop
+  when price hovered at a stack boundary.
+
+  Fix: mark_unwind() raises the minimum favorable-move required before the
+  next stack is allowed. Price must travel a full additional step beyond the
+  unwind point before re-stacking is permitted.
+  This mirrors the simulator's _did_unwind guard but works at tick granularity.
 """
 
 from __future__ import annotations
@@ -63,6 +73,12 @@ class StackerState:
     profit_harvest_enabled: bool = False
     _harvest_floor: float = field(default=0.0, repr=False)
 
+    # ── Unwind cooldown (live tick loop guard) ─────────────────────────────
+    # After a LIFO unwind, price must travel a full extra step beyond the
+    # unwind level before a new stack is allowed. Prevents buy→unwind→buy
+    # oscillation when price hovers at a stack boundary between ticks.
+    _unwind_cooldown_min_points: float = field(default=0.0, repr=False)
+
     def __post_init__(self):
         self.next_trigger_points = self.step_points  # first trigger = 1x step
 
@@ -85,7 +101,13 @@ class StackerState:
         """True if price has crossed the next stacking threshold."""
         if not self.can_stack_more:
             return False
-        return self.favorable_move(current_price) >= self.next_trigger_points
+        move = self.favorable_move(current_price)
+        # ── Unwind cooldown guard ──────────────────────────────────────────
+        # After an unwind, require price to move a full extra step beyond the
+        # cooldown floor before re-stacking is allowed.
+        if move < self._unwind_cooldown_min_points:
+            return False
+        return move >= self.next_trigger_points
 
     def add_stack(
         self,
@@ -112,6 +134,10 @@ class StackerState:
             qty_per_symbol=int(qty_per_symbol or 0),
         ))
         self.next_trigger_points += self.step_points   # advance to next level
+
+        # Stacking successfully — clear any lingering cooldown floor now that
+        # price has proven it moved far enough.
+        self._unwind_cooldown_min_points = 0.0
 
     def compute_total_pnl(self, exit_price: float) -> float:
         """
@@ -175,6 +201,34 @@ class StackerState:
         if self.profit_harvest_enabled and self._harvest_floor > 0:
             if not self.stack_entries:
                 self._harvest_floor = 0.0
+
+    def mark_unwind(self) -> None:
+        """
+        Call this immediately after remove_stacks() in the live tick path.
+
+        Raises the minimum favorable-move threshold required before the next
+        stack is allowed. Price must travel one full extra step beyond the
+        current next_trigger_points before should_add_stack() returns True.
+
+        This stops the buy→unwind→buy oscillation loop that occurs when price
+        hovers at a stack boundary and tick callbacks fire faster than QTimer
+        signals are processed by the coordinator.
+
+        The simulator uses a _did_unwind boolean per bar — this is the
+        equivalent protection for the continuous live tick path.
+        """
+        # next_trigger_points is already recalibrated by remove_stacks().
+        # We require price to go one full step BEYOND that before re-stacking.
+        self._unwind_cooldown_min_points = self.next_trigger_points + self.step_points
+
+    def is_in_unwind_cooldown(self, current_price: float) -> bool:
+        """
+        True if price has NOT yet traveled far enough from the unwind level
+        to justify a new stack. Returns False if no cooldown is active.
+        """
+        if self._unwind_cooldown_min_points <= 0.0:
+            return False
+        return self.favorable_move(current_price) < self._unwind_cooldown_min_points
 
     def compute_partial_pnl(
         self,
