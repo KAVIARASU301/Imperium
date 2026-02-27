@@ -1,6 +1,8 @@
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtWidgets import QWidget, QBoxLayout, QPushButton, QHBoxLayout, QLabel
 
+from widgets.ui_kit.menu_styles import APP_MENU_STYLESHEET
+
 
 class TitleBar(QWidget):
     """Custom title bar with window controls and menu bar"""
@@ -63,29 +65,7 @@ class TitleBar(QWidget):
         if isinstance(layout, QBoxLayout):
             layout.insertWidget(0, menu_bar)
 
-        menu_bar.setStyleSheet("""
-            QMenuBar {
-                background-color: transparent;
-                color: #E0E0E0;
-                border: none;
-                font-size: 12px;
-                padding: 2px 0px;
-            }
-            QMenuBar::item {
-                background-color: transparent;
-                padding: 4px 10px;
-                border-radius: 4px;
-                margin: 0px 2px;
-            }
-            QMenuBar::item:selected {
-                background-color: #29C7C9;
-                color: #161A25;
-            }
-            QMenuBar::item:pressed {
-                background-color: #1f8a8c;
-                color: #161A25;
-            }
-        """)
+        menu_bar.setStyleSheet(APP_MENU_STYLESHEET)
 
     # -----------------------------------------------------
 

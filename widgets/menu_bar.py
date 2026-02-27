@@ -4,6 +4,8 @@ from PySide6.QtWidgets import QMenuBar
 from PySide6.QtGui import QAction
 from typing import Dict, Tuple
 
+from widgets.ui_kit.menu_styles import APP_MENU_STYLESHEET
+
 
 def create_menu_bar(parent) -> Tuple[QMenuBar, Dict[str, QAction]]:
     """
@@ -12,67 +14,7 @@ def create_menu_bar(parent) -> Tuple[QMenuBar, Dict[str, QAction]]:
     """
     menubar = QMenuBar(parent)
 
-    menubar.setStyleSheet("""
-        /* ===== MENU BAR CORE ===== */
-        QMenuBar {
-            background-color: qlineargradient(
-                x1:0, y1:0, x2:0, y2:1,
-                stop:0 #22293A,
-                stop:1 #151A26
-            );
-            
-            color: #C3CAD8;
-            border-bottom: 1px solid #0D0F15;
-            padding: 4px 8px;
-            font-family: "Segoe UI";
-            font-size: 12px;
-        }
-
-        /* Secondary depth line (gives weight) */
-        QMenuBar::separator {
-            background: #2A3140;
-        }
-
-        /* ===== TOP-LEVEL MENU ITEMS ===== */
-        QMenuBar::item {
-            padding: 6px 14px;
-            margin: 0px 3px;
-            border-radius: 6px;
-            background: transparent;
-            font-weight: 600;
-        }
-
-        QMenuBar::item:selected {
-            background-color: rgba(41, 199, 201, 0.14);
-            color: #FFFFFF;
-        }
-
-        /* ===== DROPDOWN MENUS ===== */
-        QMenu {
-            background-color: #1B2130;
-            color: #E0E0E0;
-            border: 1px solid #2A3140;
-            border-radius: 6px;
-            padding: 6px;
-        }
-
-        QMenu::item {
-            padding: 8px 30px 8px 22px;
-            margin: 2px 4px;
-            border-radius: 5px;
-        }
-
-        QMenu::item:selected {
-            background-color: #29C7C9;
-            color: #161A25;
-        }
-
-        QMenu::separator {
-            height: 1px;
-            background-color: #3A4458;
-            margin: 6px 12px;
-        }
-    """)
+    menubar.setStyleSheet(APP_MENU_STYLESHEET)
 
     menu_actions: Dict[str, QAction] = {}
 
