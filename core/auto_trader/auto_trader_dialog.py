@@ -3633,7 +3633,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
                     entry.entry_price,
                     current_price,
                 )
-                from PyQt5.QtCore import QTimer
+                from PySide6.QtCore import QTimer
                 QTimer.singleShot(0, lambda p=unwind_payload: self.automation_signal.emit(p))
 
             state.remove_stacks(to_unwind)
@@ -3692,7 +3692,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
                     total_pnl,
                     state._harvest_floor,
                 )
-                from PyQt5.QtCore import QTimer
+                from PySide6.QtCore import QTimer
                 QTimer.singleShot(0, lambda p=harvest_payload: self.automation_signal.emit(p))
                 total_pnl = self._get_total_live_pnl()
 
@@ -3741,7 +3741,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
                 state.step_points,
             )
 
-            from PyQt5.QtCore import QTimer
+            from PySide6.QtCore import QTimer
             QTimer.singleShot(0, lambda p=payload: self.automation_signal.emit(p))
 
             if not state.can_stack_more:
