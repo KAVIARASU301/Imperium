@@ -415,6 +415,7 @@ class SignalRendererMixin:
             price_ema10=price_fast_filter,
             cvd_data=cvd_data,
             cvd_ema10=cvd_fast_filter,
+            volume=volume_data,  # 🔥 FIX: pass volume
             cvd_range_lookback_bars=int(self.cvd_range_lookback_input.value()),
             cvd_breakout_buffer=float(self.cvd_breakout_buffer_input.value()),
             cvd_min_consol_bars=int(self.cvd_min_consol_bars_input.value()),

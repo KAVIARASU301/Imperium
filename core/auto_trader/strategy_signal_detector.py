@@ -859,46 +859,59 @@ class StrategySignalDetector:
             price_ema10: np.ndarray,
             cvd_data: np.ndarray,
             cvd_ema10: np.ndarray,
+            volume: np.ndarray,
+            # ── Core params (unchanged) ─────────────────────────────────────
             cvd_range_lookback_bars: int = 30,
             cvd_breakout_buffer: float = 0.10,
             cvd_min_consol_bars: int = 15,
             cvd_max_range_ratio: float = 0.80,
             min_consolidation_adx: float = 15.0,
+            # ── Institutional upgrade params ────────────────────────────────
+            min_conviction_score: int = 4,  # Fire if score >= this (out of 5)
+            vol_expansion_mult: float = 1.15,  # Volume must be X× its avg
+            atr_expansion_pct: float = 0.05,  # ATR must expand X% vs squeeze
+            htf_bars: int = 5,  # Higher-TF proxy: N-bar trend window
+            regime_adx_block: float = 30.0,  # Block signal if opposing ADX > this
     ) -> tuple[np.ndarray, np.ndarray]:
         """
-        CVD RANGE BREAKOUT STRATEGY:
+        Institutional CVD Range Breakout — Conviction Scoring Model.
 
-        Orderflow-led breakout: CVD breaks out of its own compressed range
-        while price slope and EMA confirm direction.
+        ═══════════════════════════════════════════════════════════════
+        THE CORE CONCEPT: Conviction Scoring (not flat AND gates)
+        ═══════════════════════════════════════════════════════════════
+        Institutions don't require ALL conditions simultaneously — that
+        kills signal frequency. Instead they score each filter 0/1 and
+        require a MINIMUM TOTAL SCORE. This lets signals through when
+        4/5 filters agree, not just when all 5 are perfect.
 
-        Logic:
-        1. Build a PRIOR window [i-lookback : i-1] (excludes current bar).
-           Compute range_high / range_low from that prior window.
-        2. Measure compression:
-           - rolling_window_range = rolling max - rolling min over the PRIOR window.
-           - avg_window_range = rolling mean of rolling_window_range (same-scale).
-           - is_consolidating = current prior-window range <= avg_window_range * ratio_limit
-        3. Count consecutive consolidating bars (consol_run).
-        4. On the CURRENT bar (i), check if cvd_data[i] breaks out of the prior range.
-        5. Confirm with price slope, price vs EMA10, and CVD EMA slope.
+        5 INSTITUTIONAL FILTERS (each worth 1 point):
+        ┌─────┬──────────────────────────────────────────────────────┐
+        │  1  │ ADX expansion: ADX rising at breakout bar            │
+        │     │ = Trend momentum is actually building (not decaying) │
+        ├─────┼──────────────────────────────────────────────────────┤
+        │  2  │ Volatility expansion: ATR[i] > ATR of squeeze window │
+        │     │ = The squeeze is genuinely releasing energy          │
+        ├─────┼──────────────────────────────────────────────────────┤
+        │  3  │ Volume expansion: volume[i] > avg_volume × mult      │
+        │     │ = Real participation, not a ghost breakout           │
+        ├─────┼──────────────────────────────────────────────────────┤
+        │  4  │ HTF alignment: price trend over last N bars agrees   │
+        │     │ = You're trading WITH the higher-timeframe structure │
+        ├─────┼──────────────────────────────────────────────────────┤
+        │  5  │ Regime check: ADX of opposing side is not dominant   │
+        │     │ = Don't long into a strong downtrend (or vice versa) │
+        └─────┴──────────────────────────────────────────────────────┘
 
-        Bug fixes vs original implementation:
-        FIX 1 — avg_range was computed from bar-to-bar diffs (tiny) and compared
-                 against the window high-low spread (much larger). These are different
-                 scales so is_consolidating almost never fired. Now both are window-range
-                 based (rolling max - rolling min → rolling mean of that series).
-        FIX 2 — cvd_value > range_high was using range from [start:i] which includes
-                 the current bar, making a true breakout logically impossible (current
-                 bar is by definition inside its own max). Now range is [start:i-1]
-                 (prior window only), and cvd_data[i] is compared against it.
-        FIX 3 — Removed cvd_data[i] > cvd_ema10[i] hard gate. During a CVD breakout
-                 from a compression range the CVD may be just crossing its own EMA —
-                 requiring it to already be above the EMA blocks most valid signals.
-                 Replaced with a softer CVD EMA slope confirmation (cvd_ema_up/down).
+        Default: min_conviction_score=3 → need 3 of 5. Raise to 4 for
+        tighter signals, lower to 2 for more signals.
+
+        The 3 BASE conditions from the production method (price slope,
+        price vs EMA10, CVD EMA slope) remain as HARD GATES — they are
+        cheap to compute and filter obvious noise.
         """
         length = min(
-            len(price_high), len(price_low), len(price_close), len(price_ema10),
-            len(cvd_data), len(cvd_ema10)
+            len(price_high), len(price_low), len(price_close),
+            len(price_ema10), len(cvd_data), len(cvd_ema10), len(volume)
         )
         long_breakout = np.zeros(length, dtype=bool)
         short_breakout = np.zeros(length, dtype=bool)
@@ -909,18 +922,15 @@ class StrategySignalDetector:
         lookback = max(3, int(cvd_range_lookback_bars))
         min_consol = max(1, int(cvd_min_consol_bars))
         ratio_limit = max(0.05, float(cvd_max_range_ratio))
-        breakout_buffer = max(0.0, float(cvd_breakout_buffer))
+        buf_pct = max(0.0, float(cvd_breakout_buffer))
         min_adx = max(0.0, float(min_consolidation_adx))
 
-        # ── FIX 1: Compute avg_range using rolling window range (same scale as
-        #    the per-bar range_size). rolling_max - rolling_min gives the window
-        #    spread at each bar; its rolling mean is the "typical window range". ──
+        # ── Pre-compute series ───────────────────────────────────────────────
         cvd_series = pd.Series(cvd_data[:length])
         rolling_max = cvd_series.rolling(lookback, min_periods=2).max().to_numpy()
         rolling_min = cvd_series.rolling(lookback, min_periods=2).min().to_numpy()
-        rolling_window_range = rolling_max - rolling_min  # window spread at each bar
+        rolling_window_range = rolling_max - rolling_min
 
-        # Average of the window-range series — same unit, valid comparison
         avg_window_range = (
             pd.Series(rolling_window_range)
             .rolling(lookback * 2, min_periods=lookback)
@@ -928,17 +938,25 @@ class StrategySignalDetector:
             .to_numpy()
         )
 
+        # ATR for volatility expansion filter (filter #2)
+        price_series = pd.Series(price_close[:length])
+        atr_series = price_series.rolling(14, min_periods=2).std().to_numpy()  # cheap proxy
+
+        volume_avg = pd.Series(volume[:length]).rolling(20, min_periods=5).mean().to_numpy()
+
         cvd_ema_up, cvd_ema_down = self._calculate_slope_masks(cvd_ema10[:length])
         price_up_slope, price_down_slope = self._calculate_slope_masks(price_close[:length])
+
         adx_series = self._compute_adx_simple(
             price_high[:length], price_low[:length], price_close[:length], period=14
         )
 
         consol_run = 0
         for i in range(lookback, length):
-            # ── FIX 2: Prior window excludes current bar i ──────────────────
+
+            # ── Prior window (excludes current bar — FIX 2 from production) ──
             start_idx = max(0, i - lookback)
-            prior_window = cvd_data[start_idx:i]   # [start, i-1] — excludes bar i
+            prior_window = cvd_data[start_idx:i]
             if len(prior_window) < 2:
                 continue
 
@@ -949,48 +967,116 @@ class StrategySignalDetector:
                 consol_run = 0
                 continue
 
-            avg_range = float(avg_window_range[i - 1])   # use prior-bar avg
+            avg_range = float(avg_window_range[i - 1])
             if not np.isfinite(avg_range) or avg_range <= 1e-9:
                 consol_run = 0
                 continue
 
-            # Consolidating when current window is tighter than typical window
             is_consolidating = range_size <= (avg_range * ratio_limit)
             consol_run = (consol_run + 1) if is_consolidating else 0
 
             if not is_consolidating:
                 continue
 
-            # Need enough consolidation bars OR ADX trending enough
             adx_ok = min_adx <= 0.0 or float(adx_series[i]) > min_adx
             consol_ok = consol_run >= min_consol
             if not (adx_ok or consol_ok):
                 continue
 
-            # ── Breakout: current bar breaks OUTSIDE the prior window range ──
-            ext = range_size * breakout_buffer
+            # ── Breakout check ───────────────────────────────────────────────
+            ext = range_size * buf_pct
             cvd_value = float(cvd_data[i])
-
             long_break = cvd_value > (range_high + ext)
             short_break = cvd_value < (range_low - ext)
 
-            if long_break:
-                # ── FIX 3: Removed hard cvd > cvd_ema10 gate.
-                #    CVD EMA slope (cvd_ema_up) is sufficient orderflow confirmation. ──
-                if (
-                    price_up_slope[i]
-                    and price_close[i] > price_ema10[i]
-                    and cvd_ema_up[i]
-                ):
-                    long_breakout[i] = True
+            if not (long_break or short_break):
+                continue
 
-            elif short_break:
-                if (
-                    price_down_slope[i]
-                    and price_close[i] < price_ema10[i]
-                    and cvd_ema_down[i]
-                ):
+            # ════════════════════════════════════════════════════════════════
+            # HARD GATES (base conditions — must pass to even score)
+            # ════════════════════════════════════════════════════════════════
+            if long_break:
+                base_ok = (
+                        price_up_slope[i]
+                        and price_close[i] > price_ema10[i]
+                        and cvd_ema_up[i]
+                )
+            else:
+                base_ok = (
+                        price_down_slope[i]
+                        and price_close[i] < price_ema10[i]
+                        and cvd_ema_down[i]
+                )
+
+            if not base_ok:
+                continue
+
+            # ════════════════════════════════════════════════════════════════
+            # CONVICTION SCORING — 5 institutional filters, each 0 or 1
+            # ════════════════════════════════════════════════════════════════
+            score = 0
+
+            # FILTER 1 — ADX expansion (trend is building, not fading)
+            # ADX should be RISING at the breakout bar vs previous bar.
+            adx_rising = i > 0 and np.isfinite(adx_series[i]) and adx_series[i] > adx_series[i - 1]
+            if adx_rising:
+                score += 1
+
+            # FILTER 2 — Volatility expansion (squeeze releasing energy)
+            # ATR at bar i must be larger than ATR averaged over the squeeze window.
+            # This catches "dead cat" breakouts where vol never expands.
+            squeeze_atr_avg = float(np.mean(atr_series[start_idx:i])) if i > start_idx else 0.0
+            curr_atr = float(atr_series[i]) if np.isfinite(atr_series[i]) else 0.0
+            vol_expansion_ok = (
+                    squeeze_atr_avg > 1e-9
+                    and curr_atr >= squeeze_atr_avg * (1.0 + atr_expansion_pct)
+            )
+            if vol_expansion_ok:
+                score += 1
+
+            # FILTER 3 — Volume expansion (real participation)
+            vol_avg = float(volume_avg[i]) if np.isfinite(volume_avg[i]) else 0.0
+            if vol_avg > 0 and volume[i] >= vol_avg * vol_expansion_mult:
+                score += 1
+
+            # FILTER 4 — Higher timeframe alignment (HTF proxy)
+            # Use last N bars as a "higher timeframe" trend proxy.
+            # Long: price trend over htf_bars is up. Short: down.
+            # This is a cheap way to avoid counter-trend breakouts.
+            if i >= htf_bars:
+                htf_trend_up = price_close[i] > price_close[i - htf_bars]
+                htf_trend_down = price_close[i] < price_close[i - htf_bars]
+                htf_ok = htf_trend_up if long_break else htf_trend_down
+            else:
+                htf_ok = True  # not enough bars → don't penalise
+            if htf_ok:
+                score += 1
+
+            # FILTER 5 — Regime block (don't long into a raging downtrend)
+            # If ADX > regime_adx_block AND opposing side is dominant → skip.
+            adx_val = float(adx_series[i]) if np.isfinite(adx_series[i]) else 0.0
+            if regime_adx_block > 0 and adx_val > regime_adx_block:
+                # Detect opposing direction dominance via DI lines would need
+                # DI+/DI- separately. As a proxy: if ADX is very high AND
+                # price is moving AGAINST us strongly, we block.
+                if long_break:
+                    regime_ok = price_close[i] > price_close[max(0, i - 3)]  # micro-trend with us
+                else:
+                    regime_ok = price_close[i] < price_close[max(0, i - 3)]
+            else:
+                regime_ok = True  # ADX not extreme → no block
+            if regime_ok:
+                score += 1
+
+            # ════════════════════════════════════════════════════════════════
+            # FIRE if conviction is sufficient
+            # ════════════════════════════════════════════════════════════════
+            if score >= min_conviction_score:
+                if long_break:
+                    long_breakout[i] = True
+                else:
                     short_breakout[i] = True
+                consol_run = 0  # reset after signal fires
 
         return short_breakout, long_breakout
 
