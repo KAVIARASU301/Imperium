@@ -15,6 +15,15 @@ from utils.pricing_utils import calculate_smart_limit_price
 logger = logging.getLogger(__name__)
 
 
+def _to_finite_float(value, default=0.0):
+    """Convert value to a finite float, returning default if invalid/infinite."""
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None if default is None else float(default)
+    return parsed if math.isfinite(parsed) else (None if default is None else float(default))
+
+
 class CvdAutomationCoordinator:
     """Owns the single-chart CVD automation lifecycle for the auto trader."""
 
@@ -514,13 +523,6 @@ class CvdAutomationCoordinator:
 
         w._stop_cvd_pending_retry(token)
         position = positions[0]
-
-        def _to_finite_float(value, default=0.0):
-            try:
-                parsed = float(value)
-            except (TypeError, ValueError):
-                return None if default is None else float(default)
-            return parsed if math.isfinite(parsed) else (None if default is None else float(default))
 
         price_close = _to_finite_float(payload.get("price_close"), 0.0)
         if price_close <= 0:
