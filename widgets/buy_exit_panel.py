@@ -129,29 +129,36 @@ class BuyExitPanel(QWidget):
         layout.setSpacing(8)
         layout.setContentsMargins(10, 10, 10, 10)
 
-        layout.addWidget(QLabel("Below ATM:"), 0, 0)
-        self.below_spin = self._create_spinbox()
-        layout.addWidget(self.below_spin, 0, 1)
-
-        layout.addWidget(QLabel("Above ATM:"), 1, 0)
-        self.above_spin = self._create_spinbox()
-        layout.addWidget(self.above_spin, 1, 1)
-
-        divider = QFrame()
-        divider.setFrameShape(QFrame.Shape.HLine)
-        divider.setObjectName("divider")
-        layout.addWidget(divider, 2, 0, 1, 2)
-
-        layout.addWidget(QLabel("Strike Selection Logic:"), 3, 0, 1, 2, Qt.AlignmentFlag.AlignCenter)
-        radio_widget = self._create_radio_buttons()
-        layout.addWidget(radio_widget, 4, 0, 1, 2, Qt.AlignmentFlag.AlignCenter)
-
-        layout.addWidget(QLabel("Order Type:"), 5, 0)
+        layout.addWidget(QLabel("Order Type:"), 0, 0)
         self.order_type_combo = QComboBox()
         self.order_type_combo.addItem("Market", "MARKET")
         self.order_type_combo.addItem("Limit", "LIMIT")
         self.order_type_combo.currentIndexChanged.connect(lambda *_: self._persist_settings())
-        layout.addWidget(self.order_type_combo, 5, 1)
+        layout.addWidget(self.order_type_combo, 0, 1)
+
+        layout.addWidget(QLabel("Order Type:"), 1, 0)
+        self.order_type_combo = QComboBox()
+        self.order_type_combo.addItem("Market", "MARKET")
+        self.order_type_combo.addItem("Limit", "LIMIT")
+        self.order_type_combo.currentIndexChanged.connect(lambda *_: self._persist_settings())
+        layout.addWidget(self.order_type_combo, 1, 1)
+
+        layout.addWidget(QLabel("Above ATM:"), 2, 0)
+        self.above_spin = self._create_spinbox()
+        layout.addWidget(self.above_spin, 2, 1)
+
+        layout.addWidget(QLabel("Below ATM:"), 2, 0)
+        self.below_spin = self._create_spinbox()
+        layout.addWidget(self.below_spin, 2, 1)
+
+        divider = QFrame()
+        divider.setFrameShape(QFrame.Shape.HLine)
+        divider.setObjectName("divider")
+        layout.addWidget(divider, 3, 0, 1, 2)
+
+        layout.addWidget(QLabel("Strike Selection Logic:"), 4, 0, 1, 2, Qt.AlignmentFlag.AlignCenter)
+        radio_widget = self._create_radio_buttons()
+        layout.addWidget(radio_widget, 5, 0, 1, 2, Qt.AlignmentFlag.AlignCenter)
         return group
 
     def _create_spinbox(self):
@@ -331,6 +338,53 @@ class BuyExitPanel(QWidget):
                 color: #6C7386;
                 background-color: #161A25;
                 border-color: #2A3140;
+            }
+
+            /* ---------------- ORDER TYPE COMBO ---------------- */
+
+            QComboBox {
+                background-color: qlineargradient(
+                    x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #242A3A,
+                    stop:1 #1A1F2B
+                );
+                color: #E8EAF0;
+                border: 1.2px solid #3A4458;
+                border-radius: 8px;
+                padding: 4px 8px;
+                font-weight: 600;
+            }
+
+            QComboBox:hover {
+                border-color: #6C7386;
+            }
+
+            QComboBox:focus {
+                border-color: #29C7C9;
+                background-color: #1E2535;
+            }
+
+            QComboBox::drop-down {
+                border: none;
+                width: 20px;
+                background: transparent;
+            }
+
+            QComboBox::down-arrow {
+                image: none;
+                border-left: 4px solid transparent;
+                border-right: 4px solid transparent;
+                border-top: 6px solid #A9B1C3;
+                margin-right: 6px;
+            }
+
+            QComboBox QAbstractItemView {
+                background-color: #1A1F2B;
+                color: #E8EAF0;
+                border: 1px solid #3A4458;
+                selection-background-color: #29C7C9;
+                selection-color: #0B0F14;
+                outline: none;
             }
 
             
