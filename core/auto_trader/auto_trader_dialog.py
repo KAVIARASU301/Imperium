@@ -714,10 +714,11 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         controls_row.addWidget(signal_filter_label)
 
         self.signal_filter_combo = QComboBox()
-        self.signal_filter_combo.setFixedWidth(200)
+        self.signal_filter_combo.setFixedWidth(220)
         self.signal_filter_combo.setStyleSheet(compact_combo_style)
         self._init_signal_filter_combo(self.signal_filter_combo)
-        fit_combo_to_widest_item(self.signal_filter_combo)
+        fit_combo_to_widest_item(self.signal_filter_combo, extra_px=48)
+        self.signal_filter_combo.view().setMinimumWidth(self.signal_filter_combo.width() + 16)
         controls_row.addWidget(self.signal_filter_combo)
 
         atr_marker_label = QLabel("ATR Markers")
@@ -725,7 +726,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         controls_row.addWidget(atr_marker_label)
 
         self.atr_marker_filter_combo = QComboBox()
-        self.atr_marker_filter_combo.setFixedWidth(140)
+        self.atr_marker_filter_combo.setFixedWidth(156)
         self.atr_marker_filter_combo.setStyleSheet(compact_combo_style)
         self.atr_marker_filter_combo.addItem("Show All", self.ATR_MARKER_SHOW_ALL)
         self.atr_marker_filter_combo.addItem("Confluence Only", self.ATR_MARKER_CONFLUENCE_ONLY)
@@ -734,10 +735,10 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.atr_marker_filter_combo.addItem("Hide All", self.ATR_MARKER_HIDE_ALL)
         self.atr_marker_filter_combo.setCurrentIndex(1)
         self.atr_marker_filter_combo.currentIndexChanged.connect(self._on_atr_marker_filter_changed)
-        fit_combo_to_widest_item(self.atr_marker_filter_combo)
+        fit_combo_to_widest_item(self.atr_marker_filter_combo, extra_px=42)
+        self.atr_marker_filter_combo.view().setMinimumWidth(self.atr_marker_filter_combo.width() + 12)
         controls_row.addWidget(self.atr_marker_filter_combo)
 
-        controls_row.addWidget(self.simulator_run_btn)
         controls_row.addWidget(self.setup_btn)
 
         self.simulator_summary_label = QLabel("Simulator: click Run Simulator")
@@ -820,6 +821,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         status_row.addWidget(self.harvest_threshold_input)
         status_row.addWidget(self.regime_indicator)
         status_row.addStretch()
+        status_row.addWidget(self.simulator_run_btn)
         toolbar_block_layout.addLayout(status_row)
 
         # ================= ROW 4: SIMULATOR SUMMARY =================
