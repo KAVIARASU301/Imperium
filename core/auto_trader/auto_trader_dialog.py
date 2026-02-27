@@ -3569,13 +3569,17 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
             x_arr_val: float,
     ):
         """
-        On each closed bar:
+        On each closed bar or live tick:
           1. Check if any stacked positions should be UNWOUND (price crossed back
              through their entry) — emit unwind exit signals LIFO.
           2. Check if new stacks should be ADDED (price moved further in favour).
+             Skipped entirely if any unwinds happened this evaluation cycle.
 
         The anchor position is untouched by unwind logic — it exits only on its
         own strategy exit signal.
+
+        BUG FIX (2026-02-27): Added _did_unwind guard and StackerState.mark_unwind()
+        to prevent the buy→unwind→buy oscillation loop at tick granularity.
         """
 
         if not getattr(self, "stacker_enabled_check", None):
@@ -3590,10 +3594,13 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         if state.signal_side != side:
             return
 
-        # ── 1. LIFO UNWIND: exit stacks whose entry price was breached ──────
+        # ── 1. LIFO UNWIND: exit stacks whose entry price was breached ──────────
         to_unwind = state.stacks_to_unwind(current_price)
         unwound_ids: set[int] = set()
+        _did_unwind = False  # ← mirrors simulator's per-bar guard
+
         if to_unwind:
+            _did_unwind = True
             for entry in to_unwind:
                 unwound_ids.add(id(entry))
                 active_priority_list, strategy_priorities = self._active_strategy_priorities()
@@ -3616,6 +3623,8 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
                     "anchor_price": state.anchor_entry_price,
                     "stack_entry_price": entry.entry_price,
                 }
+                import logging
+                logger = logging.getLogger(__name__)
                 logger.info(
                     "[STACKER] Unwind stack #%d: token=%s side=%s entry=%.2f current=%.2f",
                     entry.stack_number,
@@ -3624,18 +3633,26 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
                     entry.entry_price,
                     current_price,
                 )
+                from PyQt5.QtCore import QTimer
                 QTimer.singleShot(0, lambda p=unwind_payload: self.automation_signal.emit(p))
 
             state.remove_stacks(to_unwind)
 
-        # ── 2. FIFO PROFIT HARVEST: lock profit by exiting oldest stack ─────
+            # ── KEY FIX: raise the re-stack floor after every unwind ────────────
+            # Price must travel one full extra step beyond the current trigger
+            # before should_add_stack() returns True again. This prevents the
+            # tick loop from immediately re-firing a stack at the same boundary.
+            state.mark_unwind()
+
+        # ── 2. FIFO PROFIT HARVEST: lock profit by exiting oldest stack ─────────
         if state.profit_harvest_enabled and state.stack_entries:
             total_pnl = self._get_total_live_pnl()
 
             while state.should_harvest_profit(total_pnl) and state.stack_entries:
                 candidate = state.stack_entries[0]
                 if id(candidate) in unwound_ids:
-                    logger.warning(
+                    import logging
+                    logging.getLogger(__name__).warning(
                         "[HARVEST] Skipping STACK_%d — already queued for LIFO unwind this bar",
                         candidate.stack_number,
                     )
@@ -3667,17 +3684,27 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
                     "stack_entry_price": oldest.entry_price,
                 }
 
-                logger.info(
+                import logging
+                logging.getLogger(__name__).info(
                     "[HARVEST] Locking profit — exiting STACK_%d entry=%.2f pnl=₹%.0f floor=₹%.0f",
                     oldest.stack_number,
                     oldest.entry_price,
                     total_pnl,
                     state._harvest_floor,
                 )
+                from PyQt5.QtCore import QTimer
                 QTimer.singleShot(0, lambda p=harvest_payload: self.automation_signal.emit(p))
                 total_pnl = self._get_total_live_pnl()
 
-        # ── 3. STACK ADD: add new positions if price moved further in favour ─
+        # ── 3. STACK ADD: add new positions if price moved further in favour ─────
+        # KEY FIX: skip entirely if any unwinds happened this evaluation cycle.
+        # This mirrors the simulator's `if not _did_unwind:` guard exactly.
+        # Additionally, StackerState.should_add_stack() now checks is_in_unwind_cooldown()
+        # so even across different tick calls, re-stacking is blocked until price proves
+        # it has moved a full step beyond the unwind level.
+        if _did_unwind:
+            return  # ← do NOT re-stack on the same tick/bar that had an unwind
+
         while state.should_add_stack(current_price):
             state.add_stack(entry_price=current_price, bar_idx=current_bar_idx)
             stack_num = len(state.stack_entries)
@@ -3703,7 +3730,8 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
                 "anchor_price": state.anchor_entry_price,
             }
 
-            logger.info(
+            import logging
+            logging.getLogger(__name__).info(
                 "[STACKER] Stack #%d fired: token=%s side=%s price=%.2f (anchor=%.2f, step=%.0f)",
                 stack_num,
                 self.instrument_token,
@@ -3713,6 +3741,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
                 state.step_points,
             )
 
+            from PyQt5.QtCore import QTimer
             QTimer.singleShot(0, lambda p=payload: self.automation_signal.emit(p))
 
             if not state.can_stack_more:
