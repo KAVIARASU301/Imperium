@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 
+ADX_WARMUP_DEFAULT = 28.0  # Neutral ADX value during warm-up (pre-Wilder validity)
 
 def calculate_ema(data: np.ndarray, period: int) -> np.ndarray:
     """Calculate Exponential Moving Average"""
@@ -183,64 +184,91 @@ def calculate_cvd_zscore(
 
 
 
-def compute_adx(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) -> np.ndarray:
+def compute_adx(
+    high: np.ndarray,
+    low: np.ndarray,
+    close: np.ndarray,
+    period: int = 14,
+) -> np.ndarray:
+    """
+    Compute Wilder's ADX with proper warm-up handling.
+
+    Institutional correction:
+        - True ADX becomes valid only after (2 * period - 1) bars.
+        - During warm-up, return neutral ADX values instead of zeros
+          to prevent false chop classification.
+    """
+
     length = len(close)
-    if length < period + 5:
-        return np.zeros(length)
+    if length == 0:
+        return np.array([], dtype=float)
 
-    plus_dm = np.zeros(length)
-    minus_dm = np.zeros(length)
-    tr = np.zeros(length)
+    min_bars_needed = 2 * period  # Wilder requirement
 
-    for i in range(1, length):
-        up_move = high[i] - high[i - 1]
-        down_move = low[i - 1] - low[i]
+    # ─────────────────────────────────────────────
+    # WARM-UP GUARD (Institutional Fix)
+    # ─────────────────────────────────────────────
+    if period <= 0 or length < min_bars_needed:
+        warmup = np.full(length, ADX_WARMUP_DEFAULT, dtype=float)
+        warmup[0] = 0.0  # preserve semantic: first bar has no prior movement
+        return warmup
 
-        plus_dm[i] = up_move if (up_move > down_move and up_move > 0) else 0.0
-        minus_dm[i] = down_move if (down_move > up_move and down_move > 0) else 0.0
+    high = np.asarray(high, dtype=float)
+    low = np.asarray(low, dtype=float)
+    close = np.asarray(close, dtype=float)
 
-        tr[i] = max(
-            high[i] - low[i],
-            abs(high[i] - close[i - 1]),
-            abs(low[i] - close[i - 1])
+    # True Range
+    tr = np.maximum(
+        high - low,
+        np.maximum(
+            np.abs(high - np.roll(close, 1)),
+            np.abs(low - np.roll(close, 1))
         )
+    )
+    tr[0] = high[0] - low[0]
 
-    # Wilder smoothing — ATR, +DM, -DM all use the same method
-    atr = np.zeros(length)
-    smooth_plus_dm = np.zeros(length)
-    smooth_minus_dm = np.zeros(length)
+    # Directional Movement
+    up_move = high - np.roll(high, 1)
+    down_move = np.roll(low, 1) - low
 
-    # Seed with sum of first `period` bars (Wilder initialisation)
-    atr[period] = np.sum(tr[1:period + 1])
-    smooth_plus_dm[period] = np.sum(plus_dm[1:period + 1])
-    smooth_minus_dm[period] = np.sum(minus_dm[1:period + 1])
+    plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
+    minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
 
-    for i in range(period + 1, length):
-        atr[i] = atr[i - 1] - (atr[i - 1] / period) + tr[i]
-        smooth_plus_dm[i] = smooth_plus_dm[i - 1] - (smooth_plus_dm[i - 1] / period) + plus_dm[i]
-        smooth_minus_dm[i] = smooth_minus_dm[i - 1] - (smooth_minus_dm[i - 1] / period) + minus_dm[i]
+    plus_dm[0] = 0.0
+    minus_dm[0] = 0.0
 
-    safe_atr = np.where(atr > 1e-12, atr, np.nan)
-    plus_di = 100.0 * smooth_plus_dm / safe_atr
-    minus_di = 100.0 * smooth_minus_dm / safe_atr
+    # Wilder smoothing
+    def wilder_smooth(arr: np.ndarray, period: int) -> np.ndarray:
+        result = np.zeros_like(arr)
+        result[period - 1] = np.sum(arr[:period])
+        for i in range(period, len(arr)):
+            result[i] = result[i - 1] - (result[i - 1] / period) + arr[i]
+        return result
 
-    di_sum = np.abs(plus_di) + np.abs(minus_di)
-    safe_di_sum = np.where(di_sum > 1e-12, di_sum, np.nan)
-    dx = 100.0 * np.abs(plus_di - minus_di) / safe_di_sum
+    tr_smooth = wilder_smooth(tr, period)
+    plus_dm_smooth = wilder_smooth(plus_dm, period)
+    minus_dm_smooth = wilder_smooth(minus_dm, period)
 
-    # Wilder smoothing of DX to get ADX
-    adx = np.zeros(length)
-    first_valid = period * 2
-    if first_valid < length:
-        adx[first_valid] = np.nanmean(dx[period:first_valid + 1])
-        for i in range(first_valid + 1, length):
-            if np.isnan(dx[i]):
-                adx[i] = adx[i - 1]
-            else:
-                adx[i] = (adx[i - 1] * (period - 1) + dx[i]) / period
+    plus_di = 100 * (plus_dm_smooth / np.where(tr_smooth == 0, 1.0, tr_smooth))
+    minus_di = 100 * (minus_dm_smooth / np.where(tr_smooth == 0, 1.0, tr_smooth))
 
-    return np.nan_to_num(adx)
+    dx = 100 * (
+        np.abs(plus_di - minus_di) /
+        np.where((plus_di + minus_di) == 0, 1.0, (plus_di + minus_di))
+    )
 
+    # Final ADX smoothing
+    adx = np.zeros_like(dx)
+    adx[2 * period - 1] = np.mean(dx[period - 1: 2 * period - 1])
+
+    for i in range(2 * period, length):
+        adx[i] = ((adx[i - 1] * (period - 1)) + dx[i]) / period
+
+    # Fill earlier values with neutral instead of zeros
+    adx[: 2 * period - 1] = ADX_WARMUP_DEFAULT
+    adx[0] = 0.0
+
+    return adx
 
 
 def build_slope_direction_masks(series: np.ndarray, timeframe_minutes: int) -> tuple[np.ndarray, np.ndarray]:
