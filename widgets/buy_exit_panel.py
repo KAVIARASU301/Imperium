@@ -136,16 +136,9 @@ class BuyExitPanel(QWidget):
         self.order_type_combo.currentIndexChanged.connect(lambda *_: self._persist_settings())
         layout.addWidget(self.order_type_combo, 0, 1)
 
-        layout.addWidget(QLabel("Order Type:"), 1, 0)
-        self.order_type_combo = QComboBox()
-        self.order_type_combo.addItem("Market", "MARKET")
-        self.order_type_combo.addItem("Limit", "LIMIT")
-        self.order_type_combo.currentIndexChanged.connect(lambda *_: self._persist_settings())
-        layout.addWidget(self.order_type_combo, 1, 1)
-
-        layout.addWidget(QLabel("Above ATM:"), 2, 0)
+        layout.addWidget(QLabel("Above ATM:"), 1, 0)
         self.above_spin = self._create_spinbox()
-        layout.addWidget(self.above_spin, 2, 1)
+        layout.addWidget(self.above_spin, 1, 1)
 
         layout.addWidget(QLabel("Below ATM:"), 2, 0)
         self.below_spin = self._create_spinbox()
