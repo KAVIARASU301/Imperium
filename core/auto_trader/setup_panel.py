@@ -224,15 +224,18 @@ class SetupPanelMixin:
         auto_frm.addRow("Time Window", auto_time_row)
         c1.addWidget(auto_grp)
 
-        # ── Stacker ───────────────────────────────────────────────────────
+        # ── Stacker (built here, placed at top of column 2) ───────────────
         stk_grp, stk_frm = _group("Stacker")
         _w(self.stacker_step_input)
         _w(self.stacker_max_input)
+        _w(self.harvest_threshold_input)
         stk_frm.addRow(_note("Pyramid: add a position every N favorable points."))
-        stk_frm.addRow("Enable",     self.stacker_enabled_check)
-        stk_frm.addRow("Step (pts)", self.stacker_step_input)
-        stk_frm.addRow("Max Stacks", self.stacker_max_input)
-        c1.addWidget(stk_grp)
+        stk_frm.addRow("Enable",        self.stacker_enabled_check)
+        stk_frm.addRow("Step (pts)",    self.stacker_step_input)
+        stk_frm.addRow("Max Stacks",    self.stacker_max_input)
+        stk_frm.addRow(_note("FIFO harvest: exit oldest stack each time total PnL crosses the threshold."))
+        stk_frm.addRow("Harvest",       self.harvest_enabled_check)
+        stk_frm.addRow("Harvest (₹)",   self.harvest_threshold_input)
 
         # ── ATR / Signal ──────────────────────────────────────────────────
         sig_grp, sig_frm = _group("ATR / Signal")
@@ -294,11 +297,12 @@ class SetupPanelMixin:
         c1.addStretch()
 
         # ══════════════════════════════════════════════════════════════════
-        # COLUMN 2 — Range Breakout · Signal Governance · Open Drive
+        # COLUMN 2 — Stacker · Signal Governance · Chop Filter
         # ══════════════════════════════════════════════════════════════════
         c2 = _col()
+        c2.addWidget(stk_grp)
 
-        # ── Range Breakout ────────────────────────────────────────────────
+        # ── Range Breakout (built here, displayed in its own strategy tab) ─
         brk_grp, brk_frm = _group("Range Breakout")
 
         self.range_lookback_input = QSpinBox()
