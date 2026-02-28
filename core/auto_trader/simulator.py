@@ -35,6 +35,10 @@ class SimulatorMixin:
     def _time_is_on_or_after(lhs: time, rhs: time) -> bool:
         return (lhs.hour, lhs.minute, lhs.second) >= (rhs.hour, rhs.minute, rhs.second)
 
+    @staticmethod
+    def _time_is_after(lhs: time, rhs: time) -> bool:
+        return (lhs.hour, lhs.minute, lhs.second) > (rhs.hour, rhs.minute, rhs.second)
+
     def _sim_time_window(self) -> tuple[time, time]:
         start_hour = int(getattr(self, "automation_start_time_hour_input", None).value()) if getattr(self, "automation_start_time_hour_input", None) is not None else 9
         start_minute = int(getattr(self, "automation_start_time_minute_input", None).value()) if getattr(self, "automation_start_time_minute_input", None) is not None else 15
@@ -520,7 +524,7 @@ class SimulatorMixin:
 
         for idx in range(length):
             ts = self.all_timestamps[idx]
-            if self._time_is_on_or_after(ts.time(), sim_cutoff_time):
+            if self._time_is_after(ts.time(), sim_cutoff_time):
                 if active_trade:
                     _close_trade(idx, reason="session_close")
                 continue
@@ -798,7 +802,7 @@ class SimulatorMixin:
                 sim_start_time,
                 open_drive_entry_time if signal_strategy == "open_drive" else sim_start_time,
             )
-            if self._time_is_before(ts.time(), intraday_start_time) or self._time_is_on_or_after(ts.time(), sim_cutoff_time):
+            if self._time_is_before(ts.time(), intraday_start_time) or self._time_is_after(ts.time(), sim_cutoff_time):
                 _log_signal_event(idx, "SKIP", signal_side, signal_strategy, "outside_trading_window")
                 continue
 

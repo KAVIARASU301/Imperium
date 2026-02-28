@@ -179,3 +179,55 @@ def test_giveback_qualification_keeps_giveback_before_threshold():
     results = sim._run_trade_simulation(x_arr=x_arr, short_mask=short_mask, long_mask=long_mask, strategy_masks=None)
 
     assert round(results["total_points"], 2) == 70.0
+
+
+def test_simulator_allows_entry_exactly_at_cutoff_time():
+    sim = DummySimulator()
+    sim.all_price_data = np.array([100, 101, 102], dtype=float)
+    sim.all_price_high_data = sim.all_price_data
+    sim.all_price_low_data = sim.all_price_data
+    sim.all_cvd_data = sim.all_price_data
+
+    base_time = datetime(2024, 1, 1, 15, 14)
+    sim.all_timestamps = [base_time + timedelta(minutes=i) for i in range(len(sim.all_price_data))]
+
+    def _resolve_signal(**kwargs):
+        idx = kwargs["idx"]
+        return ("long", "atr_reversal") if idx == 1 else (None, None)
+
+    sim._resolve_signal_side_and_strategy = _resolve_signal
+
+    x_arr = np.arange(len(sim.all_price_data))
+    long_mask = np.array([False, True, False])
+    short_mask = np.array([False, False, False])
+
+    results = sim._run_trade_simulation(x_arr=x_arr, short_mask=short_mask, long_mask=long_mask, strategy_masks=None)
+
+    assert results["trades"] == 1
+    assert results["taken_long_x"] == [1.0]
+
+
+def test_simulator_rejects_entry_after_cutoff_time():
+    sim = DummySimulator()
+    sim.all_price_data = np.array([100, 101, 102], dtype=float)
+    sim.all_price_high_data = sim.all_price_data
+    sim.all_price_low_data = sim.all_price_data
+    sim.all_cvd_data = sim.all_price_data
+
+    base_time = datetime(2024, 1, 1, 15, 14)
+    sim.all_timestamps = [base_time + timedelta(minutes=i) for i in range(len(sim.all_price_data))]
+
+    def _resolve_signal(**kwargs):
+        idx = kwargs["idx"]
+        return ("long", "atr_reversal") if idx == 2 else (None, None)
+
+    sim._resolve_signal_side_and_strategy = _resolve_signal
+
+    x_arr = np.arange(len(sim.all_price_data))
+    long_mask = np.array([False, False, True])
+    short_mask = np.array([False, False, False])
+
+    results = sim._run_trade_simulation(x_arr=x_arr, short_mask=short_mask, long_mask=long_mask, strategy_masks=None)
+
+    assert results["trades"] == 0
+    assert results["taken_long_x"] == []
