@@ -1566,7 +1566,8 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.open_drive_tick_drawdown_limit_input.blockSignals(True)
         self.breakout_min_consol_input.blockSignals(True)
         self.breakout_min_consol_adx_input.blockSignals(True)
-        self.cvd_range_lookback_input.blockSignals(True)
+        self.cvd_range_lookback_min_input.blockSignals(True)
+        self.cvd_range_lookback_max_input.blockSignals(True)
         self.cvd_breakout_buffer_input.blockSignals(True)
         self.cvd_min_consol_bars_input.blockSignals(True)
         self.cvd_max_range_ratio_input.blockSignals(True)
@@ -1783,7 +1784,8 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.breakout_min_consol_adx_input.setValue(_read_setting("breakout_min_consolidation_adx", 0.0, float))
         self._breakout_min_consolidation_minutes = self.breakout_min_consol_input.value()
         self._breakout_min_consolidation_adx = float(self.breakout_min_consol_adx_input.value())
-        self.cvd_range_lookback_input.setValue(_read_setting("cvd_range_lookback_bars", 30, int))
+        self.cvd_range_lookback_min_input.setValue(_read_setting("cvd_range_lookback_min_bars", 15, int))
+        self.cvd_range_lookback_max_input.setValue(_read_setting("cvd_range_lookback_max_bars", _read_setting("cvd_range_lookback_bars", 45, int), int))
         self.cvd_breakout_buffer_input.setValue(_read_setting("cvd_breakout_buffer", 0.10, float))
         self.cvd_min_consol_bars_input.setValue(_read_setting("cvd_min_consol_bars", 15, int))
         self.cvd_max_range_ratio_input.setValue(_read_setting("cvd_max_range_ratio", 0.80, float))
@@ -1948,7 +1950,8 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.open_drive_tick_drawdown_limit_input.blockSignals(False)
         self.breakout_min_consol_input.blockSignals(False)
         self.breakout_min_consol_adx_input.blockSignals(False)
-        self.cvd_range_lookback_input.blockSignals(False)
+        self.cvd_range_lookback_min_input.blockSignals(False)
+        self.cvd_range_lookback_max_input.blockSignals(False)
         self.cvd_breakout_buffer_input.blockSignals(False)
         self.cvd_min_consol_bars_input.blockSignals(False)
         self.cvd_max_range_ratio_input.blockSignals(False)
@@ -2106,7 +2109,9 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
             # 🆕 Breakout consolidation
             "breakout_min_consolidation_minutes": int(self.breakout_min_consol_input.value()),
             "breakout_min_consolidation_adx": float(self.breakout_min_consol_adx_input.value()),
-            "cvd_range_lookback_bars": int(self.cvd_range_lookback_input.value()),
+            "cvd_range_lookback_min_bars": int(self.cvd_range_lookback_min_input.value()),
+            "cvd_range_lookback_max_bars": int(self.cvd_range_lookback_max_input.value()),
+            "cvd_range_lookback_bars": int(self.cvd_range_lookback_max_input.value()),
             "cvd_breakout_buffer": float(self.cvd_breakout_buffer_input.value()),
             "cvd_min_consol_bars": int(self.cvd_min_consol_bars_input.value()),
             "cvd_max_range_ratio": float(self.cvd_max_range_ratio_input.value()),

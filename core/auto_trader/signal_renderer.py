@@ -410,6 +410,11 @@ class SignalRendererMixin:
                 min_consolidation_adx=float(self.breakout_min_consol_adx_input.value()),
             )
 
+        cvd_lookback_min = int(self.cvd_range_lookback_min_input.value())
+        cvd_lookback_max = int(self.cvd_range_lookback_max_input.value())
+        if cvd_lookback_min > cvd_lookback_max:
+            cvd_lookback_min, cvd_lookback_max = cvd_lookback_max, cvd_lookback_min
+
         short_cvd_range_breakout, long_cvd_range_breakout = self.strategy_detector.detect_cvd_range_breakout_strategy(
             price_high=price_high,
             price_low=price_low,
@@ -418,7 +423,9 @@ class SignalRendererMixin:
             cvd_data=cvd_data,
             cvd_ema10=cvd_fast_filter,
             volume=volume_data,
-            cvd_range_lookback_bars=int(self.cvd_range_lookback_input.value()),
+            cvd_range_lookback_bars=cvd_lookback_max,
+            cvd_range_lookback_min_bars=cvd_lookback_min,
+            cvd_range_lookback_max_bars=cvd_lookback_max,
             cvd_breakout_buffer=float(self.cvd_breakout_buffer_input.value()),
             cvd_min_consol_bars=int(self.cvd_min_consol_bars_input.value()),
             cvd_max_range_ratio=float(self.cvd_max_range_ratio_input.value()),

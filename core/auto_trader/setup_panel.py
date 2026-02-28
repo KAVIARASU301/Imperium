@@ -628,15 +628,29 @@ class SetupPanelMixin:
         cvdbk_grp, cvdbk_frm = _group("CVD Range Breakout")
         cvdbk_frm.addRow(_note("CVD breaks its own range first; price slope confirms."))
 
-        self.cvd_range_lookback_input = QSpinBox()
-        self.cvd_range_lookback_input.setRange(5, 120)
-        self.cvd_range_lookback_input.setSingleStep(1)
-        self.cvd_range_lookback_input.setValue(30)
-        self.cvd_range_lookback_input.setStyleSheet(compact_spinbox_style)
-        _w(self.cvd_range_lookback_input)
-        self.cvd_range_lookback_input.setToolTip("Lookback bars used to build the CVD consolidation range.")
-        self.cvd_range_lookback_input.valueChanged.connect(self._on_chop_filter_settings_changed)
-        cvdbk_frm.addRow("Lookback", self.cvd_range_lookback_input)
+        self.cvd_range_lookback_min_input = QSpinBox()
+        self.cvd_range_lookback_min_input.setRange(5, 120)
+        self.cvd_range_lookback_min_input.setSingleStep(1)
+        self.cvd_range_lookback_min_input.setValue(15)
+        self.cvd_range_lookback_min_input.setStyleSheet(compact_spinbox_style)
+        _w(self.cvd_range_lookback_min_input)
+        self.cvd_range_lookback_min_input.setToolTip(
+            "Minimum lookback bars used to build the CVD consolidation range."
+        )
+        self.cvd_range_lookback_min_input.valueChanged.connect(self._on_chop_filter_settings_changed)
+        cvdbk_frm.addRow("Lookback Min", self.cvd_range_lookback_min_input)
+
+        self.cvd_range_lookback_max_input = QSpinBox()
+        self.cvd_range_lookback_max_input.setRange(5, 180)
+        self.cvd_range_lookback_max_input.setSingleStep(1)
+        self.cvd_range_lookback_max_input.setValue(45)
+        self.cvd_range_lookback_max_input.setStyleSheet(compact_spinbox_style)
+        _w(self.cvd_range_lookback_max_input)
+        self.cvd_range_lookback_max_input.setToolTip(
+            "Maximum lookback bars used to build the CVD consolidation range."
+        )
+        self.cvd_range_lookback_max_input.valueChanged.connect(self._on_chop_filter_settings_changed)
+        cvdbk_frm.addRow("Lookback Max", self.cvd_range_lookback_max_input)
 
         self.cvd_breakout_buffer_input = QDoubleSpinBox()
         self.cvd_breakout_buffer_input.setRange(0.0, 1.0)
@@ -1569,7 +1583,8 @@ class SetupPanelMixin:
     def _on_cvd_reset_defaults(self):
         """Reset all CVD Range Breakout parameters to their default values."""
         _CVD_DEFAULTS = {
-            "cvd_range_lookback_input":      30,
+            "cvd_range_lookback_min_input":  15,
+            "cvd_range_lookback_max_input":  45,
             "cvd_breakout_buffer_input":     0.10,
             "cvd_min_consol_bars_input":     15,
             "cvd_max_range_ratio_input":     0.80,

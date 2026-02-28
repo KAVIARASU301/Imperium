@@ -862,6 +862,8 @@ class StrategySignalDetector:
             volume: np.ndarray,
             # ── Core params (unchanged) ─────────────────────────────────────
             cvd_range_lookback_bars: int = 30,
+            cvd_range_lookback_min_bars: int | None = None,
+            cvd_range_lookback_max_bars: int | None = None,
             cvd_breakout_buffer: float = 0.10,
             cvd_min_consol_bars: int = 15,
             cvd_max_range_ratio: float = 0.80,
@@ -933,7 +935,9 @@ class StrategySignalDetector:
         if length < 3:
             return short_breakout, long_breakout
 
-        lookback = max(3, int(cvd_range_lookback_bars))
+        legacy_lookback = max(3, int(cvd_range_lookback_bars))
+        lookback_min = max(3, int(cvd_range_lookback_min_bars if cvd_range_lookback_min_bars is not None else legacy_lookback))
+        lookback_max = max(lookback_min, int(cvd_range_lookback_max_bars if cvd_range_lookback_max_bars is not None else legacy_lookback))
         min_consol = max(1, int(cvd_min_consol_bars))
         ratio_limit = max(0.05, float(cvd_max_range_ratio))
         buf_pct = max(0.0, float(cvd_breakout_buffer))
@@ -941,16 +945,17 @@ class StrategySignalDetector:
 
         # ── Pre-compute series ───────────────────────────────────────────────
         cvd_series = pd.Series(cvd_data[:length])
-        rolling_max = cvd_series.rolling(lookback, min_periods=2).max().to_numpy()
-        rolling_min = cvd_series.rolling(lookback, min_periods=2).min().to_numpy()
-        rolling_window_range = rolling_max - rolling_min
-
-        avg_window_range = (
-            pd.Series(rolling_window_range)
-            .rolling(lookback * 2, min_periods=lookback)
-            .mean()
-            .to_numpy()
-        )
+        lookback_profiles: dict[int, np.ndarray] = {}
+        for lb in range(lookback_min, lookback_max + 1):
+            rolling_max = cvd_series.rolling(lb, min_periods=2).max().to_numpy()
+            rolling_min = cvd_series.rolling(lb, min_periods=2).min().to_numpy()
+            rolling_window_range = rolling_max - rolling_min
+            lookback_profiles[lb] = (
+                pd.Series(rolling_window_range)
+                .rolling(lb * 2, min_periods=lb)
+                .mean()
+                .to_numpy()
+            )
 
         # ATR for volatility expansion filter (filter #2)
         price_series = pd.Series(price_close[:length])
@@ -965,46 +970,50 @@ class StrategySignalDetector:
             price_high[:length], price_low[:length], price_close[:length], period=14
         )
 
-        consol_run = 0
-        for i in range(lookback, length):
+        for i in range(lookback_min, length):
+            breakout_candidates: list[tuple[int, int, float, float, float, bool, bool]] = []
+            for lookback in range(lookback_min, lookback_max + 1):
+                if i < lookback:
+                    continue
 
-            # ── Prior window (excludes current bar — FIX 2 from production) ──
-            start_idx = max(0, i - lookback)
-            prior_window = cvd_data[start_idx:i]
-            if len(prior_window) < 2:
+                start_idx = max(0, i - lookback)
+                prior_window = cvd_data[start_idx:i]
+                if len(prior_window) < 2:
+                    continue
+
+                range_high = float(np.max(prior_window))
+                range_low = float(np.min(prior_window))
+                range_size = range_high - range_low
+                if range_size <= 1e-9:
+                    continue
+
+                avg_range = float(lookback_profiles[lookback][i - 1])
+                if not np.isfinite(avg_range) or avg_range <= 1e-9:
+                    continue
+
+                is_consolidating = range_size <= (avg_range * ratio_limit)
+                if not is_consolidating:
+                    continue
+
+                adx_ok = min_adx <= 0.0 or float(adx_series[i]) > min_adx
+                if not adx_ok and lookback < min_consol:
+                    continue
+
+                ext = range_size * buf_pct
+                cvd_value = float(cvd_data[i])
+                long_break = cvd_value > (range_high + ext)
+                short_break = cvd_value < (range_low - ext)
+                if not (long_break or short_break):
+                    continue
+
+                breakout_candidates.append((lookback, start_idx, range_high, range_low, range_size, long_break, short_break))
+
+            if not breakout_candidates:
                 continue
 
-            range_high = float(np.max(prior_window))
-            range_low = float(np.min(prior_window))
-            range_size = range_high - range_low
-            if range_size <= 1e-9:
-                consol_run = 0
-                continue
-
-            avg_range = float(avg_window_range[i - 1])
-            if not np.isfinite(avg_range) or avg_range <= 1e-9:
-                consol_run = 0
-                continue
-
-            is_consolidating = range_size <= (avg_range * ratio_limit)
-            consol_run = (consol_run + 1) if is_consolidating else 0
-
-            if not is_consolidating:
-                continue
-
-            adx_ok = min_adx <= 0.0 or float(adx_series[i]) > min_adx
-            consol_ok = consol_run >= min_consol
-            if not (adx_ok or consol_ok):
-                continue
-
-            # ── Breakout check ───────────────────────────────────────────────
-            ext = range_size * buf_pct
-            cvd_value = float(cvd_data[i])
-            long_break = cvd_value > (range_high + ext)
-            short_break = cvd_value < (range_low - ext)
-
-            if not (long_break or short_break):
-                continue
+            # Prefer tighter structures first; they usually represent cleaner squeezes.
+            breakout_candidates.sort(key=lambda item: item[0])
+            lookback, start_idx, range_high, range_low, range_size, long_break, short_break = breakout_candidates[0]
 
             # ════════════════════════════════════════════════════════════════
             # HARD GATES (base conditions — must pass to even score)
@@ -1107,7 +1116,6 @@ class StrategySignalDetector:
                     long_breakout[i] = True
                 else:
                     short_breakout[i] = True
-                consol_run = 0  # reset after signal fires
 
         return short_breakout, long_breakout
 
