@@ -413,6 +413,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         # ── Exit mode selector ─────────────────────────────────────────────
         self.exit_mode_combo = QComboBox()
         self.exit_mode_combo.setFixedWidth(160)
+        self.exit_mode_combo.setStyleSheet(compact_combo_style)
         self.exit_mode_combo.addItem("Giveback Exit", "giveback")
         self.exit_mode_combo.addItem("Trend Exit", "trend")
         self.exit_mode_combo.addItem("Hybrid Exit", "hybrid")
@@ -1074,6 +1075,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         status_row.addWidget(self.stacker_max_input)
         status_row.addWidget(self.harvest_enabled_check)
         status_row.addWidget(self.harvest_threshold_input)
+        status_row.addWidget(self.exit_mode_combo)
         status_row.addWidget(self.regime_indicator)
         status_row.addStretch()
         status_row.addWidget(self.simulator_run_btn)
