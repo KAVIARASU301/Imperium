@@ -429,7 +429,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.hybrid_adx_unlock_input.setRange(15.0, 50.0)
         self.hybrid_adx_unlock_input.setDecimals(1)
         self.hybrid_adx_unlock_input.setSingleStep(1.0)
-        self.hybrid_adx_unlock_input.setValue(28.0)
+        self.hybrid_adx_unlock_input.setValue(25.0)
         self.hybrid_adx_unlock_input.setStyleSheet(compact_spinbox_style)
         self.hybrid_adx_unlock_input.setToolTip(
             "ADX must exceed this to unlock EXPANSION phase.\n"
@@ -442,7 +442,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.hybrid_atr_ratio_input.setRange(0.80, 2.50)
         self.hybrid_atr_ratio_input.setDecimals(2)
         self.hybrid_atr_ratio_input.setSingleStep(0.05)
-        self.hybrid_atr_ratio_input.setValue(1.15)
+        self.hybrid_atr_ratio_input.setValue(1.05)
         self.hybrid_atr_ratio_input.setStyleSheet(compact_spinbox_style)
         self.hybrid_atr_ratio_input.setToolTip(
             "ATR / rolling_ATR ratio needed to unlock EXPANSION.\n"
@@ -453,7 +453,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
 
         self.hybrid_adx_rising_input = QSpinBox()
         self.hybrid_adx_rising_input.setRange(1, 5)
-        self.hybrid_adx_rising_input.setValue(2)
+        self.hybrid_adx_rising_input.setValue(1)
         self.hybrid_adx_rising_input.setStyleSheet(compact_spinbox_style)
         self.hybrid_adx_rising_input.setToolTip(
             "ADX must be consecutively rising for N bars before unlock.\n"
@@ -466,7 +466,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.hybrid_vel_thresh_input.setRange(0.5, 5.0)
         self.hybrid_vel_thresh_input.setDecimals(2)
         self.hybrid_vel_thresh_input.setSingleStep(0.1)
-        self.hybrid_vel_thresh_input.setValue(1.5)
+        self.hybrid_vel_thresh_input.setValue(1.0)
         self.hybrid_vel_thresh_input.setStyleSheet(compact_spinbox_style)
         self.hybrid_vel_thresh_input.setToolTip(
             "Velocity = (price_delta over N bars) / ATR.  This is the min\n"
@@ -479,7 +479,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.hybrid_vel_collapse_input.setRange(0.1, 0.9)
         self.hybrid_vel_collapse_input.setDecimals(2)
         self.hybrid_vel_collapse_input.setSingleStep(0.05)
-        self.hybrid_vel_collapse_input.setValue(0.5)
+        self.hybrid_vel_collapse_input.setValue(0.4)
         self.hybrid_vel_collapse_input.setStyleSheet(compact_spinbox_style)
         self.hybrid_vel_collapse_input.setToolTip(
             "Velocity collapse ratio: if current velocity < prev * ratio,\n"
@@ -492,7 +492,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.hybrid_ext_mult_input.setRange(1.5, 6.0)
         self.hybrid_ext_mult_input.setDecimals(1)
         self.hybrid_ext_mult_input.setSingleStep(0.5)
-        self.hybrid_ext_mult_input.setValue(3.0)
+        self.hybrid_ext_mult_input.setValue(2.5)
         self.hybrid_ext_mult_input.setStyleSheet(compact_spinbox_style)
         self.hybrid_ext_mult_input.setToolTip(
             "Extreme extension threshold: |close - EMA51| / ATR.\n"
@@ -506,7 +506,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.hybrid_profit_ratio_input.setRange(0.10, 0.80)
         self.hybrid_profit_ratio_input.setDecimals(2)
         self.hybrid_profit_ratio_input.setSingleStep(0.05)
-        self.hybrid_profit_ratio_input.setValue(0.30)
+        self.hybrid_profit_ratio_input.setValue(0.20)
         self.hybrid_profit_ratio_input.setStyleSheet(compact_spinbox_style)
         self.hybrid_profit_ratio_input.setToolTip(
             "Convex giveback: protect this fraction of peak profit.\n"
@@ -520,7 +520,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.hybrid_atr_giveback_input.setRange(0.5, 4.0)
         self.hybrid_atr_giveback_input.setDecimals(1)
         self.hybrid_atr_giveback_input.setSingleStep(0.1)
-        self.hybrid_atr_giveback_input.setValue(1.2)
+        self.hybrid_atr_giveback_input.setValue(0.5)
         self.hybrid_atr_giveback_input.setStyleSheet(compact_spinbox_style)
         self.hybrid_atr_giveback_input.setToolTip(
             "ATR-based giveback floor: exit if pullback > N × ATR.\n"
@@ -533,7 +533,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.hybrid_base_pct_input.setRange(0.001, 0.020)
         self.hybrid_base_pct_input.setDecimals(3)
         self.hybrid_base_pct_input.setSingleStep(0.001)
-        self.hybrid_base_pct_input.setValue(0.003)
+        self.hybrid_base_pct_input.setValue(0.002)
         self.hybrid_base_pct_input.setStyleSheet(compact_spinbox_style)
         self.hybrid_base_pct_input.setToolTip(
             "Base giveback floor as a % of entry price.\n"
@@ -544,7 +544,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
 
         self.hybrid_breakdown_lb_input = QSpinBox()
         self.hybrid_breakdown_lb_input.setRange(5, 30)
-        self.hybrid_breakdown_lb_input.setValue(10)
+        self.hybrid_breakdown_lb_input.setValue(5)
         self.hybrid_breakdown_lb_input.setStyleSheet(compact_spinbox_style)
         self.hybrid_breakdown_lb_input.setToolTip(
             "Structural breakdown: ADX lookback bars.\n"
@@ -557,7 +557,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.hybrid_atr_bdown_input.setRange(0.50, 0.99)
         self.hybrid_atr_bdown_input.setDecimals(2)
         self.hybrid_atr_bdown_input.setSingleStep(0.02)
-        self.hybrid_atr_bdown_input.setValue(0.90)
+        self.hybrid_atr_bdown_input.setValue(0.92)
         self.hybrid_atr_bdown_input.setStyleSheet(compact_spinbox_style)
         self.hybrid_atr_bdown_input.setToolTip(
             "Structural breakdown: ATR must fall below peak_ATR × ratio.\n"
@@ -2224,18 +2224,21 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
             return default
 
         return HybridExitEngine(HybridExitConfig(
-            adx_unlock_threshold=float(_v("hybrid_adx_unlock_input", 28.0)),
-            atr_ratio_unlock_threshold=float(_v("hybrid_atr_ratio_input", 1.15)),
-            adx_rising_bars=int(_v("hybrid_adx_rising_input", 2)),
-            velocity_threshold=float(_v("hybrid_vel_thresh_input", 1.5)),
-            velocity_collapse_ratio=float(_v("hybrid_vel_collapse_input", 0.5)),
-            extreme_extension_atr_multiple=float(_v("hybrid_ext_mult_input", 3.0)),
-            profit_giveback_ratio=float(_v("hybrid_profit_ratio_input", 0.30)),
-            atr_giveback_multiple=float(_v("hybrid_atr_giveback_input", 1.2)),
-            base_giveback_pct=float(_v("hybrid_base_pct_input", 0.003)),
-            adx_breakdown_lookback=int(_v("hybrid_breakdown_lb_input", 10)),
-            atr_breakdown_ratio=float(_v("hybrid_atr_bdown_input", 0.90)),
+            adx_unlock_threshold=float(_v("hybrid_adx_unlock_input", 25.0)),
+            atr_ratio_unlock_threshold=float(_v("hybrid_atr_ratio_input", 1.05)),
+            adx_rising_bars=int(_v("hybrid_adx_rising_input", 1)),
+            velocity_threshold=float(_v("hybrid_vel_thresh_input", 1.0)),
+            velocity_collapse_ratio=float(_v("hybrid_vel_collapse_input", 0.4)),
+            extreme_extension_atr_multiple=float(_v("hybrid_ext_mult_input", 2.5)),
+            profit_giveback_ratio=float(_v("hybrid_profit_ratio_input", 0.20)),
+            atr_giveback_multiple=float(_v("hybrid_atr_giveback_input", 0.5)),
+            base_giveback_pct=float(_v("hybrid_base_pct_input", 0.002)),
+            adx_breakdown_lookback=int(_v("hybrid_breakdown_lb_input", 5)),
+            atr_breakdown_ratio=float(_v("hybrid_atr_bdown_input", 0.92)),
             ema_breakdown_crosses=_b("hybrid_ema_bdown_check", True),
+            momentum_peak_exit=True,
+            momentum_peak_vel_drop=0.35,
+            momentum_peak_atr_drop=0.85,
         ))
 
     def reset_stacker(self):

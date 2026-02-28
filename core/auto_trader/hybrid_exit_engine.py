@@ -49,35 +49,43 @@ PhaseType = Literal[0, 1, 2]
 @dataclass
 class HybridExitConfig:
     # ── Expansion unlock thresholds ──────────────────────────────
-    adx_unlock_threshold: float = 28.0        # ADX must exceed this
-    atr_ratio_unlock_threshold: float = 1.15  # ATR / rolling_ATR must exceed this
-    adx_rising_bars: int = 2                  # ADX must have been rising for N bars
+    adx_unlock_threshold: float = 25.0        # ADX must exceed this (lowered from 28 — easier unlock)
+    atr_ratio_unlock_threshold: float = 1.05  # ATR / rolling_ATR must exceed this (lowered from 1.15)
+    adx_rising_bars: int = 1                  # ADX must have been rising for N bars (1 = faster unlock)
     min_profit_unlock: float = 0.0            # Optional: min profit before unlocking (0 = disabled)
 
     # ── Rolling ATR window for normalization ─────────────────────
-    rolling_atr_window: int = 20              # used to normalize ATR into a ratio
+    rolling_atr_window: int = 14              # tighter window for more responsive baseline
 
     # ── Momentum velocity detection ──────────────────────────────
-    velocity_window: int = 3                  # bars for price delta calculation
-    velocity_threshold: float = 1.5           # min velocity to classify as "strong impulse"
-    velocity_collapse_ratio: float = 0.5      # if velocity drops below prev * this → collapse
+    velocity_window: int = 2                  # bars for price delta (2 = quicker impulse read)
+    velocity_threshold: float = 1.0           # lowered so more moves qualify as "strong impulse"
+    velocity_collapse_ratio: float = 0.4      # 40% drop in velocity = collapse (was 50%)
 
     # ── Vol acceleration collapse ─────────────────────────────────
-    vol_lookback_positive: int = 3            # N prior positive slopes before collapse check
+    vol_lookback_positive: int = 2            # only need 2 prior rising bars (was 3) → fires sooner
 
     # ── Distribution / full breakdown ───────────────────────────
-    adx_breakdown_lookback: int = 10          # ADX must fall below rolling min of this period
-    atr_breakdown_ratio: float = 0.90         # ATR < peak_ATR * this → structural breakdown
+    adx_breakdown_lookback: int = 5           # reduced from 10 → needs only 5 bar ADX window
+    atr_breakdown_ratio: float = 0.92         # slightly tighter than before
     ema_breakdown_crosses: bool = True        # price crosses EMA51 opposite side → hard exit
 
     # ── Extreme extension exit (mean reversion risk) ─────────────
-    extreme_extension_atr_multiple: float = 3.0   # abs(close - ema51) / ATR > this → dist
+    extreme_extension_atr_multiple: float = 2.5   # tighter (was 3.0) → catches overextension earlier
 
     # ── Dynamic giveback formula ─────────────────────────────────
     # giveback = max(base_giveback_pct * entry_price, profit_ratio * peak_profit, atr_multiple * ATR)
-    base_giveback_pct: float = 0.003          # 0.3% of entry price as floor giveback
-    profit_giveback_ratio: float = 0.30       # 30% of peak profit
-    atr_giveback_multiple: float = 1.2        # 1.2x ATR as alternative floor
+    # KEY FIX: atr_giveback_multiple was 1.2x which = ~24pts on Nifty 1m → far too loose for scalping
+    base_giveback_pct: float = 0.002          # 0.2% floor (tighter)
+    profit_giveback_ratio: float = 0.20       # 20% of peak profit (was 30%) → tighter trail
+    atr_giveback_multiple: float = 0.5        # 0.5x ATR floor (was 1.2x) → much tighter, ~8-10pts
+
+    # ── Momentum-peak exit (NEW) ──────────────────────────────────
+    # Exit immediately when velocity AND vol both peak together — catches the exact
+    # inflection point before the giveback even starts. Pure momentum capture.
+    momentum_peak_exit: bool = True           # enable momentum-peak early exit
+    momentum_peak_vel_drop: float = 0.35      # velocity drops to ≤35% of its own peak → peak confirmed
+    momentum_peak_atr_drop: float = 0.85      # ATR ratio drops to ≤85% of its peak ratio → vol topping
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -94,6 +102,10 @@ class HybridExitState:
     atr_ratio_history: list = field(default_factory=list)  # last ~5 ATR ratio values
     velocity_history: list = field(default_factory=list)   # last ~3 velocity values
 
+    # momentum-peak tracking (for early exit at impulse inflection)
+    peak_velocity: float = 0.0      # highest abs velocity seen so far this trade
+    peak_atr_ratio: float = 0.0     # highest ATR ratio seen so far this trade
+
     def to_dict(self) -> dict:
         return {
             "hybrid_phase": self.phase,
@@ -102,6 +114,8 @@ class HybridExitState:
             "hybrid_adx_history": self.adx_history,
             "hybrid_atr_ratio_history": self.atr_ratio_history,
             "hybrid_velocity_history": self.velocity_history,
+            "hybrid_peak_velocity": self.peak_velocity,
+            "hybrid_peak_atr_ratio": self.peak_atr_ratio,
         }
 
     @classmethod
@@ -113,6 +127,8 @@ class HybridExitState:
         s.adx_history = d.get("hybrid_adx_history", [])
         s.atr_ratio_history = d.get("hybrid_atr_ratio_history", [])
         s.velocity_history = d.get("hybrid_velocity_history", [])
+        s.peak_velocity = d.get("hybrid_peak_velocity", 0.0)
+        s.peak_atr_ratio = d.get("hybrid_peak_atr_ratio", 0.0)
         return s
 
 
@@ -187,6 +203,36 @@ def _structural_breakdown(
     atr_collapsed = atr < peak_atr * atr_breakdown_ratio
     adx_below_range = adx_now < adx_min_lookback * 1.02  # slight tolerance
     return adx_below_range and atr_collapsed
+
+
+def _momentum_peak_exit(
+    state: "HybridExitState",
+    velocity: float,
+    atr_ratio: float,
+    cfg: "HybridExitConfig",
+) -> bool:
+    """
+    Institutional concept: exit at the INFLECTION POINT of the impulse, not after reversal.
+
+    Options premium is convex — it spikes hardest right at the momentum peak and then
+    decays fast once velocity starts dropping. This catches that exact moment:
+    both velocity AND vol ratio are retreating from their peaks simultaneously.
+
+    Two-condition gate (both must be true):
+      1. Current velocity has dropped to ≤ momentum_peak_vel_drop × peak_velocity
+         (velocity is retreating — impulse is losing force)
+      2. Current ATR ratio has dropped to ≤ momentum_peak_atr_drop × peak_atr_ratio
+         (vol expansion is topping — premium spike is over)
+
+    This is ONLY active in PHASE_EXPANSION so we never exit prematurely in noise.
+    """
+    if not cfg.momentum_peak_exit:
+        return False
+    if state.peak_velocity <= 0 or state.peak_atr_ratio <= 0:
+        return False
+    vel_peaked = abs(velocity) <= state.peak_velocity * cfg.momentum_peak_vel_drop
+    atr_peaked = atr_ratio <= state.peak_atr_ratio * cfg.momentum_peak_atr_drop
+    return vel_peaked and atr_peaked
 
 
 def _compute_dynamic_giveback(
@@ -306,6 +352,14 @@ class HybridExitEngine:
         if atr > s.peak_atr:
             s.peak_atr = atr
 
+        # ── Update momentum peak trackers ─────────────────────────────────
+        # Track the highest velocity and ATR ratio seen — used by momentum_peak_exit
+        # to detect when impulse has clearly peaked.
+        if abs(velocity) > s.peak_velocity:
+            s.peak_velocity = abs(velocity)
+        if atr_ratio > s.peak_atr_ratio:
+            s.peak_atr_ratio = atr_ratio
+
         # ── Phase transitions ──────────────────────────────────────────────
         exit_now = False
         exit_reason = "none"
@@ -342,7 +396,14 @@ class HybridExitEngine:
             # Trigger 4: Extreme extension — mean reversion risk
             extreme_ext = _extreme_extension(close, ema51, atr, cfg.extreme_extension_atr_multiple)
 
-            if adx_slope_negative or vol_collapse or vel_collapse or extreme_ext:
+            # Trigger 5: Momentum peak — both velocity AND vol ratio retreating from peaks
+            # This is the earliest and most important signal — fires at the exact inflection
+            # point of the impulse, before price even reverses. Options premium peaks here.
+            momentum_peak = _momentum_peak_exit(s, velocity, atr_ratio, cfg)
+            if momentum_peak:
+                exit_now = True
+                exit_reason = "hybrid_momentum_peak"
+            elif adx_slope_negative or vol_collapse or vel_collapse or extreme_ext:
                 s.phase = PHASE_DISTRIBUTION
 
         elif s.phase == PHASE_DISTRIBUTION:
@@ -397,20 +458,30 @@ class HybridExitDecision:
 # CONVENIENCE: get default engine instance
 # ─────────────────────────────────────────────────────────────────
 def create_default_engine() -> HybridExitEngine:
-    """Returns engine tuned for Nifty/BankNifty 1m options scalping."""
+    """Returns engine tuned for Nifty/BankNifty 1m options scalping.
+
+    Key institutional philosophy:
+      - Exit WITH the momentum, not after reversal
+      - Momentum peak exit fires at impulse inflection (2-4 bars typical)
+      - Tight giveback (0.5x ATR ≈ 8-10pts) protects premium captured
+      - ADX unlock requires only 1 rising bar for faster activation
+    """
     return HybridExitEngine(HybridExitConfig(
-        adx_unlock_threshold=28.0,
-        atr_ratio_unlock_threshold=1.15,
-        adx_rising_bars=2,
-        rolling_atr_window=20,
-        velocity_window=3,
-        velocity_threshold=1.5,
-        velocity_collapse_ratio=0.5,
-        vol_lookback_positive=3,
-        extreme_extension_atr_multiple=3.0,
-        adx_breakdown_lookback=10,
-        atr_breakdown_ratio=0.90,
-        base_giveback_pct=0.003,
-        profit_giveback_ratio=0.30,
-        atr_giveback_multiple=1.2,
+        adx_unlock_threshold=25.0,
+        atr_ratio_unlock_threshold=1.05,
+        adx_rising_bars=1,
+        rolling_atr_window=14,
+        velocity_window=2,
+        velocity_threshold=1.0,
+        velocity_collapse_ratio=0.4,
+        vol_lookback_positive=2,
+        extreme_extension_atr_multiple=2.5,
+        adx_breakdown_lookback=5,
+        atr_breakdown_ratio=0.92,
+        base_giveback_pct=0.002,
+        profit_giveback_ratio=0.20,
+        atr_giveback_multiple=0.5,
+        momentum_peak_exit=True,
+        momentum_peak_vel_drop=0.35,
+        momentum_peak_atr_drop=0.85,
     ))

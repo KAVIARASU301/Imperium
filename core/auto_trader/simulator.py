@@ -376,7 +376,16 @@ class SimulatorMixin:
         _exit_mode = "hybrid"
         if hasattr(self, "exit_mode_combo"):
             _exit_mode = self.exit_mode_combo.currentData() or "hybrid"
-        _hybrid_engine = create_default_engine() if _exit_mode == "hybrid" else None
+
+        # Build hybrid engine from UI settings if available, else fall back to defaults.
+        # BUG FIX: previously always used create_default_engine() ignoring the UI params.
+        _hybrid_engine = None
+        if _exit_mode == "hybrid":
+            if hasattr(self, "_build_hybrid_engine_from_ui"):
+                _hybrid_engine = self._build_hybrid_engine_from_ui()
+            if _hybrid_engine is None:
+                _hybrid_engine = create_default_engine()
+
         # Strategies that opt-in to hybrid exit (tune as needed)
         HYBRID_EXIT_STRATEGIES = {"ema_cross", "range_breakout", "cvd_range_breakout", "open_drive"}
 
@@ -675,9 +684,16 @@ class SimulatorMixin:
                             exit_now = giveback_points >= effective_giveback_points
                             if exit_now:
                                 exit_reason = "max_profit_giveback"
+                # ── STRUCTURAL EMA EXITS (skip only if hybrid is actively managing the trade) ──
+                # BUG FIX: previously _skip_structural = True for all hybrid trades, which
+                # killed EMA exits even when hybrid was stuck in PHASE_EARLY doing nothing.
+                # Now we only skip EMA exits if hybrid has unlocked (moved past PHASE_EARLY).
+                # If the impulse never qualifies (low ADX, quiet market), EMA exits still fire.
+                _hybrid_phase = active_trade.get("hybrid_phase", PHASE_EARLY)
                 _skip_structural = (
                     _exit_mode == "hybrid"
                     and active_strategy_type in HYBRID_EXIT_STRATEGIES
+                    and _hybrid_phase != PHASE_EARLY   # ← KEY FIX: only skip when hybrid is active
                 )
                 if not _skip_structural:
                     if (not exit_now) and active_strategy_type == "ema_cross":
