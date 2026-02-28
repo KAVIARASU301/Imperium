@@ -410,10 +410,165 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         )
         self.max_profit_giveback_input.valueChanged.connect(self._on_automation_settings_changed)
 
-        self.hybrid_exit_enabled_check = QCheckBox("Hybrid Exit (Options Phase Engine)")
+        # ── Hybrid Exit widgets ───────────────────────────────────────────
+        self.hybrid_exit_enabled_check = QCheckBox("Enable Hybrid Phase Exit")
         self.hybrid_exit_enabled_check.setChecked(True)
-        self.hybrid_exit_enabled_check.setToolTip("Enable phase-aware hybrid exit engine for selected trend-following strategies.")
+        self.hybrid_exit_enabled_check.setToolTip(
+            "Replace flat giveback with the 3-phase momentum exit engine.\n"
+            "EARLY → EXPANSION (ride premium) → DISTRIBUTION (convex trail).\n"
+            "Designed for options scalping where premium spikes non-linearly."
+        )
         self.hybrid_exit_enabled_check.toggled.connect(self._on_automation_settings_changed)
+
+        self.hybrid_adx_unlock_input = QDoubleSpinBox()
+        self.hybrid_adx_unlock_input.setRange(15.0, 50.0)
+        self.hybrid_adx_unlock_input.setDecimals(1)
+        self.hybrid_adx_unlock_input.setSingleStep(1.0)
+        self.hybrid_adx_unlock_input.setValue(28.0)
+        self.hybrid_adx_unlock_input.setStyleSheet(compact_spinbox_style)
+        self.hybrid_adx_unlock_input.setToolTip(
+            "ADX must exceed this to unlock EXPANSION phase.\n"
+            "Below this = EARLY (noise zone, hard stop only).\n"
+            "Nifty 1m default: 28. Conservative: 30-32. Aggressive: 24-26."
+        )
+        self.hybrid_adx_unlock_input.valueChanged.connect(self._on_automation_settings_changed)
+
+        self.hybrid_atr_ratio_input = QDoubleSpinBox()
+        self.hybrid_atr_ratio_input.setRange(0.80, 2.50)
+        self.hybrid_atr_ratio_input.setDecimals(2)
+        self.hybrid_atr_ratio_input.setSingleStep(0.05)
+        self.hybrid_atr_ratio_input.setValue(1.15)
+        self.hybrid_atr_ratio_input.setStyleSheet(compact_spinbox_style)
+        self.hybrid_atr_ratio_input.setToolTip(
+            "ATR / rolling_ATR ratio needed to unlock EXPANSION.\n"
+            "Must be >1 (vol expanding). 1.15 = ATR 15% above its rolling mean.\n"
+            "Low vol days: try 1.05. High vol: try 1.25."
+        )
+        self.hybrid_atr_ratio_input.valueChanged.connect(self._on_automation_settings_changed)
+
+        self.hybrid_adx_rising_input = QSpinBox()
+        self.hybrid_adx_rising_input.setRange(1, 5)
+        self.hybrid_adx_rising_input.setValue(2)
+        self.hybrid_adx_rising_input.setStyleSheet(compact_spinbox_style)
+        self.hybrid_adx_rising_input.setToolTip(
+            "ADX must be consecutively rising for N bars before unlock.\n"
+            "Prevents false unlock on single-bar ADX spike.\n"
+            "Default: 2. Faster: 1. Slower/safer: 3."
+        )
+        self.hybrid_adx_rising_input.valueChanged.connect(self._on_automation_settings_changed)
+
+        self.hybrid_vel_thresh_input = QDoubleSpinBox()
+        self.hybrid_vel_thresh_input.setRange(0.5, 5.0)
+        self.hybrid_vel_thresh_input.setDecimals(2)
+        self.hybrid_vel_thresh_input.setSingleStep(0.1)
+        self.hybrid_vel_thresh_input.setValue(1.5)
+        self.hybrid_vel_thresh_input.setStyleSheet(compact_spinbox_style)
+        self.hybrid_vel_thresh_input.setToolTip(
+            "Velocity = (price_delta over N bars) / ATR.  This is the min\n"
+            "velocity to classify as 'strong impulse' before collapse detection.\n"
+            "Strong trends: try 1.0-1.5. Weak trends: try 0.8."
+        )
+        self.hybrid_vel_thresh_input.valueChanged.connect(self._on_automation_settings_changed)
+
+        self.hybrid_vel_collapse_input = QDoubleSpinBox()
+        self.hybrid_vel_collapse_input.setRange(0.1, 0.9)
+        self.hybrid_vel_collapse_input.setDecimals(2)
+        self.hybrid_vel_collapse_input.setSingleStep(0.05)
+        self.hybrid_vel_collapse_input.setValue(0.5)
+        self.hybrid_vel_collapse_input.setStyleSheet(compact_spinbox_style)
+        self.hybrid_vel_collapse_input.setToolTip(
+            "Velocity collapse ratio: if current velocity < prev * ratio,\n"
+            "the impulse is considered dead → enter DISTRIBUTION.\n"
+            "0.5 = velocity must halve. 0.3 = more lenient (needs 70% drop)."
+        )
+        self.hybrid_vel_collapse_input.valueChanged.connect(self._on_automation_settings_changed)
+
+        self.hybrid_ext_mult_input = QDoubleSpinBox()
+        self.hybrid_ext_mult_input.setRange(1.5, 6.0)
+        self.hybrid_ext_mult_input.setDecimals(1)
+        self.hybrid_ext_mult_input.setSingleStep(0.5)
+        self.hybrid_ext_mult_input.setValue(3.0)
+        self.hybrid_ext_mult_input.setStyleSheet(compact_spinbox_style)
+        self.hybrid_ext_mult_input.setToolTip(
+            "Extreme extension threshold: |close - EMA51| / ATR.\n"
+            "When price is this many ATRs from EMA51, mean reversion risk\n"
+            "is high → force DISTRIBUTION phase.\n"
+            "3.0 = 3 ATRs from EMA51. Conservative: 2.5. Aggressive: 3.5."
+        )
+        self.hybrid_ext_mult_input.valueChanged.connect(self._on_automation_settings_changed)
+
+        self.hybrid_profit_ratio_input = QDoubleSpinBox()
+        self.hybrid_profit_ratio_input.setRange(0.10, 0.80)
+        self.hybrid_profit_ratio_input.setDecimals(2)
+        self.hybrid_profit_ratio_input.setSingleStep(0.05)
+        self.hybrid_profit_ratio_input.setValue(0.30)
+        self.hybrid_profit_ratio_input.setStyleSheet(compact_spinbox_style)
+        self.hybrid_profit_ratio_input.setToolTip(
+            "Convex giveback: protect this fraction of peak profit.\n"
+            "30% = exit if profit pulls back 30% from its peak.\n"
+            "Scales with profit — wider on big runners, tighter on small ones.\n"
+            "Conservative: 0.25. Aggressive: 0.40."
+        )
+        self.hybrid_profit_ratio_input.valueChanged.connect(self._on_automation_settings_changed)
+
+        self.hybrid_atr_giveback_input = QDoubleSpinBox()
+        self.hybrid_atr_giveback_input.setRange(0.5, 4.0)
+        self.hybrid_atr_giveback_input.setDecimals(1)
+        self.hybrid_atr_giveback_input.setSingleStep(0.1)
+        self.hybrid_atr_giveback_input.setValue(1.2)
+        self.hybrid_atr_giveback_input.setStyleSheet(compact_spinbox_style)
+        self.hybrid_atr_giveback_input.setToolTip(
+            "ATR-based giveback floor: exit if pullback > N × ATR.\n"
+            "This is the market-adaptive minimum — prevents exit on microvolatility.\n"
+            "Default: 1.2. Low vol: 0.8. High vol: 1.5."
+        )
+        self.hybrid_atr_giveback_input.valueChanged.connect(self._on_automation_settings_changed)
+
+        self.hybrid_base_pct_input = QDoubleSpinBox()
+        self.hybrid_base_pct_input.setRange(0.001, 0.020)
+        self.hybrid_base_pct_input.setDecimals(3)
+        self.hybrid_base_pct_input.setSingleStep(0.001)
+        self.hybrid_base_pct_input.setValue(0.003)
+        self.hybrid_base_pct_input.setStyleSheet(compact_spinbox_style)
+        self.hybrid_base_pct_input.setToolTip(
+            "Base giveback floor as a % of entry price.\n"
+            "Prevents exiting on pure noise in small profit trades.\n"
+            "0.003 = 0.3% of entry. For Nifty ~22000: ~66pts floor."
+        )
+        self.hybrid_base_pct_input.valueChanged.connect(self._on_automation_settings_changed)
+
+        self.hybrid_breakdown_lb_input = QSpinBox()
+        self.hybrid_breakdown_lb_input.setRange(5, 30)
+        self.hybrid_breakdown_lb_input.setValue(10)
+        self.hybrid_breakdown_lb_input.setStyleSheet(compact_spinbox_style)
+        self.hybrid_breakdown_lb_input.setToolTip(
+            "Structural breakdown: ADX lookback bars.\n"
+            "ADX must fall below its own N-bar minimum to trigger breakdown exit.\n"
+            "10 bars = 10 minutes of ADX history."
+        )
+        self.hybrid_breakdown_lb_input.valueChanged.connect(self._on_automation_settings_changed)
+
+        self.hybrid_atr_bdown_input = QDoubleSpinBox()
+        self.hybrid_atr_bdown_input.setRange(0.50, 0.99)
+        self.hybrid_atr_bdown_input.setDecimals(2)
+        self.hybrid_atr_bdown_input.setSingleStep(0.02)
+        self.hybrid_atr_bdown_input.setValue(0.90)
+        self.hybrid_atr_bdown_input.setStyleSheet(compact_spinbox_style)
+        self.hybrid_atr_bdown_input.setToolTip(
+            "Structural breakdown: ATR must fall below peak_ATR × ratio.\n"
+            "0.90 = ATR contracted 10% from peak → structural exit triggered.\n"
+            "Aggressive: 0.95. Conservative: 0.80."
+        )
+        self.hybrid_atr_bdown_input.valueChanged.connect(self._on_automation_settings_changed)
+
+        self.hybrid_ema_bdown_check = QCheckBox("EMA51 Cross = Immediate Exit")
+        self.hybrid_ema_bdown_check.setChecked(True)
+        self.hybrid_ema_bdown_check.setToolTip(
+            "In DISTRIBUTION phase: if price crosses EMA51 in the opposite\n"
+            "direction, exit immediately (structural collapse).\n"
+            "Disable only if you want to rely purely on giveback/breakdown."
+        )
+        self.hybrid_ema_bdown_check.toggled.connect(self._on_automation_settings_changed)
 
         self.max_giveback_atr_reversal_check = QCheckBox("ATR Rev")
         self.max_giveback_atr_reversal_check.setChecked(False)
@@ -1311,6 +1466,18 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.automation_stoploss_input.blockSignals(True)
         self.max_profit_giveback_input.blockSignals(True)
         self.hybrid_exit_enabled_check.blockSignals(True)
+        self.hybrid_adx_unlock_input.blockSignals(True)
+        self.hybrid_atr_ratio_input.blockSignals(True)
+        self.hybrid_adx_rising_input.blockSignals(True)
+        self.hybrid_vel_thresh_input.blockSignals(True)
+        self.hybrid_vel_collapse_input.blockSignals(True)
+        self.hybrid_ext_mult_input.blockSignals(True)
+        self.hybrid_profit_ratio_input.blockSignals(True)
+        self.hybrid_atr_giveback_input.blockSignals(True)
+        self.hybrid_base_pct_input.blockSignals(True)
+        self.hybrid_breakdown_lb_input.blockSignals(True)
+        self.hybrid_atr_bdown_input.blockSignals(True)
+        self.hybrid_ema_bdown_check.blockSignals(True)
         self.max_giveback_atr_reversal_check.blockSignals(True)
         self.max_giveback_ema_cross_check.blockSignals(True)
         self.max_giveback_atr_divergence_check.blockSignals(True)
@@ -1419,6 +1586,18 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
             _read_setting("max_profit_giveback_points", self.max_profit_giveback_input.value(), int)
         )
         self.hybrid_exit_enabled_check.setChecked(_read_setting("hybrid_exit_enabled", True, bool))
+        self.hybrid_adx_unlock_input.setValue(_read_setting("hybrid_adx_unlock", 28.0, float))
+        self.hybrid_atr_ratio_input.setValue(_read_setting("hybrid_atr_ratio_unlock", 1.15, float))
+        self.hybrid_adx_rising_input.setValue(_read_setting("hybrid_adx_rising_bars", 2, int))
+        self.hybrid_vel_thresh_input.setValue(_read_setting("hybrid_velocity_threshold", 1.5, float))
+        self.hybrid_vel_collapse_input.setValue(_read_setting("hybrid_velocity_collapse", 0.5, float))
+        self.hybrid_ext_mult_input.setValue(_read_setting("hybrid_ext_mult", 3.0, float))
+        self.hybrid_profit_ratio_input.setValue(_read_setting("hybrid_profit_ratio", 0.30, float))
+        self.hybrid_atr_giveback_input.setValue(_read_setting("hybrid_atr_giveback_mult", 1.2, float))
+        self.hybrid_base_pct_input.setValue(_read_setting("hybrid_base_giveback_pct", 0.003, float))
+        self.hybrid_breakdown_lb_input.setValue(_read_setting("hybrid_breakdown_lookback", 10, int))
+        self.hybrid_atr_bdown_input.setValue(_read_setting("hybrid_atr_breakdown_ratio", 0.90, float))
+        self.hybrid_ema_bdown_check.setChecked(_read_setting("hybrid_ema_breakdown", True, bool))
         max_giveback_strategies = _read_setting(
             "max_profit_giveback_strategies",
             list(self._max_giveback_strategy_defaults()),
@@ -1665,6 +1844,18 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.automation_stoploss_input.blockSignals(False)
         self.max_profit_giveback_input.blockSignals(False)
         self.hybrid_exit_enabled_check.blockSignals(False)
+        self.hybrid_adx_unlock_input.blockSignals(False)
+        self.hybrid_atr_ratio_input.blockSignals(False)
+        self.hybrid_adx_rising_input.blockSignals(False)
+        self.hybrid_vel_thresh_input.blockSignals(False)
+        self.hybrid_vel_collapse_input.blockSignals(False)
+        self.hybrid_ext_mult_input.blockSignals(False)
+        self.hybrid_profit_ratio_input.blockSignals(False)
+        self.hybrid_atr_giveback_input.blockSignals(False)
+        self.hybrid_base_pct_input.blockSignals(False)
+        self.hybrid_breakdown_lb_input.blockSignals(False)
+        self.hybrid_atr_bdown_input.blockSignals(False)
+        self.hybrid_ema_bdown_check.blockSignals(False)
         self.max_giveback_atr_reversal_check.blockSignals(False)
         self.max_giveback_ema_cross_check.blockSignals(False)
         self.max_giveback_atr_divergence_check.blockSignals(False)
@@ -1811,6 +2002,18 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
             "stoploss_points": int(self.automation_stoploss_input.value()),
             "max_profit_giveback_points": int(self.max_profit_giveback_input.value()),
             "hybrid_exit_enabled": self.hybrid_exit_enabled_check.isChecked(),
+            "hybrid_adx_unlock": float(self.hybrid_adx_unlock_input.value()),
+            "hybrid_atr_ratio_unlock": float(self.hybrid_atr_ratio_input.value()),
+            "hybrid_adx_rising_bars": int(self.hybrid_adx_rising_input.value()),
+            "hybrid_velocity_threshold": float(self.hybrid_vel_thresh_input.value()),
+            "hybrid_velocity_collapse": float(self.hybrid_vel_collapse_input.value()),
+            "hybrid_ext_mult": float(self.hybrid_ext_mult_input.value()),
+            "hybrid_profit_ratio": float(self.hybrid_profit_ratio_input.value()),
+            "hybrid_atr_giveback_mult": float(self.hybrid_atr_giveback_input.value()),
+            "hybrid_base_giveback_pct": float(self.hybrid_base_pct_input.value()),
+            "hybrid_breakdown_lookback": int(self.hybrid_breakdown_lb_input.value()),
+            "hybrid_atr_breakdown_ratio": float(self.hybrid_atr_bdown_input.value()),
+            "hybrid_ema_breakdown": self.hybrid_ema_bdown_check.isChecked(),
             "max_profit_giveback_strategies": self._selected_max_giveback_strategies(),
             "dynamic_exit_trend_following_strategies": self._selected_dynamic_exit_strategies(),
             "trend_exit_adx_min": float(self.trend_exit_adx_min_input.value()),

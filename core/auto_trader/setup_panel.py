@@ -1476,6 +1476,81 @@ class SetupPanelMixin:
             self.STRATEGY_PRIORITY_LABELS["open_drive"],
         )
         self._build_regime_tab(tabs, compact_spinbox_style, compact_combo_style)
+
+        # ── Hybrid Exit Tab ───────────────────────────────────────────────
+        hybrid_tab = QWidget()
+        hybrid_root = QVBoxLayout(hybrid_tab)
+        hybrid_root.setContentsMargins(6, 12, 6, 6)
+        hybrid_root.setSpacing(_GRP_SPACING)
+
+        # ── Enable toggle ─────────────────────────────────────────────────
+        enable_grp, enable_frm = _group("Phase Exit Engine")
+        enable_frm.addRow(_note(
+            "Replaces flat giveback with a 3-phase momentum state machine.\n"
+            "EARLY → EXPANSION (ride full premium spike) → DISTRIBUTION (convex trail).\n"
+            "Built for options scalping — premium is non-linear with momentum."
+        ))
+        enable_frm.addRow("", self.hybrid_exit_enabled_check)
+        hybrid_root.addWidget(enable_grp)
+
+        # ── Unlock thresholds ─────────────────────────────────────────────
+        unlock_grp, unlock_frm = _group("EXPANSION Unlock  (EARLY → EXPANSION)")
+        _w(self.hybrid_adx_unlock_input)
+        _w(self.hybrid_atr_ratio_input)
+        _w(self.hybrid_adx_rising_input)
+        unlock_frm.addRow(_note(
+            "All three must be met to transition from EARLY (hard stop only)\n"
+            "into EXPANSION (ride the premium, no trailing)."
+        ))
+        unlock_frm.addRow("ADX Unlock Floor",    self.hybrid_adx_unlock_input)
+        unlock_frm.addRow("ATR Ratio Min",        self.hybrid_atr_ratio_input)
+        unlock_frm.addRow("ADX Rising Bars",      self.hybrid_adx_rising_input)
+        hybrid_root.addWidget(unlock_grp)
+
+        # ── Distribution triggers ─────────────────────────────────────────
+        dist_grp, dist_frm = _group("DISTRIBUTION Triggers  (EXPANSION → DISTRIBUTION)")
+        _w(self.hybrid_vel_thresh_input)
+        _w(self.hybrid_vel_collapse_input)
+        _w(self.hybrid_ext_mult_input)
+        dist_frm.addRow(_note(
+            "Any ONE trigger fires → enter DISTRIBUTION (convex giveback activates).\n"
+            "Triggers: ADX slope turns negative · Vol acceleration collapses\n"
+            "· Velocity impulse halves · Extreme extension from EMA51."
+        ))
+        dist_frm.addRow("Velocity Threshold",   self.hybrid_vel_thresh_input)
+        dist_frm.addRow("Velocity Collapse ×",  self.hybrid_vel_collapse_input)
+        dist_frm.addRow("Extension (× ATR)",    self.hybrid_ext_mult_input)
+        hybrid_root.addWidget(dist_grp)
+
+        # ── Giveback formula ──────────────────────────────────────────────
+        gb_grp, gb_frm = _group("Convex Giveback  (DISTRIBUTION phase)")
+        _w(self.hybrid_profit_ratio_input)
+        _w(self.hybrid_atr_giveback_input)
+        _w(self.hybrid_base_pct_input)
+        gb_frm.addRow(_note(
+            "giveback = max(base_floor, profit_ratio × peak_profit, atr_mult × ATR)\n"
+            "Exit when pullback from peak ≥ giveback threshold."
+        ))
+        gb_frm.addRow("Profit Giveback %",  self.hybrid_profit_ratio_input)
+        gb_frm.addRow("ATR Giveback ×",     self.hybrid_atr_giveback_input)
+        gb_frm.addRow("Base Floor %",       self.hybrid_base_pct_input)
+        hybrid_root.addWidget(gb_grp)
+
+        # ── Structural breakdown ──────────────────────────────────────────
+        bd_grp, bd_frm = _group("Structural Breakdown  (Immediate Exit Override)")
+        _w(self.hybrid_breakdown_lb_input)
+        _w(self.hybrid_atr_bdown_input)
+        bd_frm.addRow(_note(
+            "Overrides giveback wait with immediate exit on late-stage trend death.\n"
+            "Fires when ADX falls below its own N-bar low AND ATR contracts."
+        ))
+        bd_frm.addRow("ADX Lookback Bars",  self.hybrid_breakdown_lb_input)
+        bd_frm.addRow("ATR Contract Ratio", self.hybrid_atr_bdown_input)
+        bd_frm.addRow("",                  self.hybrid_ema_bdown_check)
+        hybrid_root.addWidget(bd_grp)
+
+        hybrid_root.addStretch()
+        tabs.addTab(hybrid_tab, "Hybrid Exit")
         tabs.addTab(priority_tab, "Priority Order")
         root.addWidget(tabs, 1)
 
