@@ -1275,6 +1275,11 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.cvd_breakout_buffer_input.blockSignals(True)
         self.cvd_min_consol_bars_input.blockSignals(True)
         self.cvd_max_range_ratio_input.blockSignals(True)
+        self.cvd_conviction_score_input.blockSignals(True)
+        self.cvd_vol_expansion_mult_input.blockSignals(True)
+        self.cvd_atr_expansion_pct_input.blockSignals(True)
+        self.cvd_htf_bars_input.blockSignals(True)
+        self.cvd_regime_adx_block_input.blockSignals(True)
         self.cvd_breakout_min_adx_input.blockSignals(True)
         self.chart_line_width_input.blockSignals(True)
         self.chart_line_opacity_input.blockSignals(True)
@@ -1447,6 +1452,11 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.cvd_breakout_buffer_input.setValue(_read_setting("cvd_breakout_buffer", 0.10, float))
         self.cvd_min_consol_bars_input.setValue(_read_setting("cvd_min_consol_bars", 15, int))
         self.cvd_max_range_ratio_input.setValue(_read_setting("cvd_max_range_ratio", 0.80, float))
+        self.cvd_conviction_score_input.setValue(_read_setting("cvd_conviction_score", 3, int))
+        self.cvd_vol_expansion_mult_input.setValue(_read_setting("cvd_vol_expansion_mult", 1.15, float))
+        self.cvd_atr_expansion_pct_input.setValue(_read_setting("cvd_atr_expansion_pct", 0.05, float))
+        self.cvd_htf_bars_input.setValue(_read_setting("cvd_htf_bars", 5, int))
+        self.cvd_regime_adx_block_input.setValue(_read_setting("cvd_regime_adx_block", 30.0, float))
         self.cvd_breakout_min_adx_input.setValue(_read_setting("cvd_breakout_min_adx", 15.0, float))
         self.chart_line_width_input.setValue(
             _read_setting("chart_line_width", self.chart_line_width_input.value(), float)
@@ -1582,6 +1592,11 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.cvd_breakout_buffer_input.blockSignals(False)
         self.cvd_min_consol_bars_input.blockSignals(False)
         self.cvd_max_range_ratio_input.blockSignals(False)
+        self.cvd_conviction_score_input.blockSignals(False)
+        self.cvd_vol_expansion_mult_input.blockSignals(False)
+        self.cvd_atr_expansion_pct_input.blockSignals(False)
+        self.cvd_htf_bars_input.blockSignals(False)
+        self.cvd_regime_adx_block_input.blockSignals(False)
         self.cvd_breakout_min_adx_input.blockSignals(False)
         self.chart_line_width_input.blockSignals(False)
         self.chart_line_opacity_input.blockSignals(False)
@@ -1710,6 +1725,11 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
             "cvd_breakout_buffer": float(self.cvd_breakout_buffer_input.value()),
             "cvd_min_consol_bars": int(self.cvd_min_consol_bars_input.value()),
             "cvd_max_range_ratio": float(self.cvd_max_range_ratio_input.value()),
+            "cvd_conviction_score": int(self.cvd_conviction_score_input.value()),
+            "cvd_vol_expansion_mult": float(self.cvd_vol_expansion_mult_input.value()),
+            "cvd_atr_expansion_pct": float(self.cvd_atr_expansion_pct_input.value()),
+            "cvd_htf_bars": int(self.cvd_htf_bars_input.value()),
+            "cvd_regime_adx_block": float(self.cvd_regime_adx_block_input.value()),
             "cvd_breakout_min_adx": float(self.cvd_breakout_min_adx_input.value()),
             "chart_line_width": float(self.chart_line_width_input.value()),
             "chart_line_opacity": float(self.chart_line_opacity_input.value()),

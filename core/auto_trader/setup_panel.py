@@ -523,7 +523,7 @@ class SetupPanelMixin:
         )
         self.breakout_min_consol_adx_input.valueChanged.connect(self._on_chop_filter_settings_changed)
         consol_frm.addRow("Max ADX", self.breakout_min_consol_adx_input)
-        # ── CVD Range Breakout ────────────────────────────────────────────
+        # ── CVD Range Breakout — LEFT COLUMN (all knobs) ──────────────────
         cvdbk_grp, cvdbk_frm = _group("CVD Range Breakout")
         cvdbk_frm.addRow(_note("CVD breaks its own range first; price slope confirms."))
 
@@ -585,6 +585,223 @@ class SetupPanelMixin:
         )
         self.cvd_breakout_min_adx_input.valueChanged.connect(self._on_chop_filter_settings_changed)
         cvdbk_frm.addRow("Min ADX", self.cvd_breakout_min_adx_input)
+
+        # ── Conviction Scoring (Institutional Upgrade) ────────────────────
+        cvdbk_frm.addRow(_note("Conviction Scoring: score 1 pt per filter, fire when score ≥ Min Score."))
+
+        self.cvd_conviction_score_input = QSpinBox()
+        self.cvd_conviction_score_input.setRange(1, 5)
+        self.cvd_conviction_score_input.setValue(3)
+        self.cvd_conviction_score_input.setStyleSheet(compact_spinbox_style)
+        _w(self.cvd_conviction_score_input)
+        self.cvd_conviction_score_input.setToolTip(
+            "Minimum institutional conviction score to fire (1–5).\n"
+            "Each filter adds 1 pt: ADX rising, ATR expanding, Volume spike,\n"
+            "HTF trend aligned, Regime not opposing.\n"
+            "3 = need 3-of-5.  Raise to 4 for higher quality, lower to 2 for more signals."
+        )
+        self.cvd_conviction_score_input.valueChanged.connect(self._on_chop_filter_settings_changed)
+        cvdbk_frm.addRow("Min Score", self.cvd_conviction_score_input)
+
+        self.cvd_vol_expansion_mult_input = QDoubleSpinBox()
+        self.cvd_vol_expansion_mult_input.setRange(1.0, 3.0)
+        self.cvd_vol_expansion_mult_input.setDecimals(2)
+        self.cvd_vol_expansion_mult_input.setSingleStep(0.05)
+        self.cvd_vol_expansion_mult_input.setValue(1.15)
+        self.cvd_vol_expansion_mult_input.setStyleSheet(compact_spinbox_style)
+        _w(self.cvd_vol_expansion_mult_input)
+        self.cvd_vol_expansion_mult_input.setToolTip(
+            "Volume expansion filter: bar volume must exceed avg × this multiplier.\n"
+            "1.15 = 15% above average. Raise to 1.3+ to require a strong volume spike.\n"
+            "Catches real institutional participation vs ghost breakouts."
+        )
+        self.cvd_vol_expansion_mult_input.valueChanged.connect(self._on_chop_filter_settings_changed)
+        cvdbk_frm.addRow("Vol Mult", self.cvd_vol_expansion_mult_input)
+
+        self.cvd_atr_expansion_pct_input = QDoubleSpinBox()
+        self.cvd_atr_expansion_pct_input.setRange(0.0, 0.5)
+        self.cvd_atr_expansion_pct_input.setDecimals(2)
+        self.cvd_atr_expansion_pct_input.setSingleStep(0.01)
+        self.cvd_atr_expansion_pct_input.setValue(0.05)
+        self.cvd_atr_expansion_pct_input.setStyleSheet(compact_spinbox_style)
+        _w(self.cvd_atr_expansion_pct_input)
+        self.cvd_atr_expansion_pct_input.setToolTip(
+            "Volatility expansion filter: ATR at breakout bar must exceed squeeze avg ATR\n"
+            "by at least this fraction (0.05 = 5% larger).\n"
+            "Prevents signals when the squeeze never releases energy."
+        )
+        self.cvd_atr_expansion_pct_input.valueChanged.connect(self._on_chop_filter_settings_changed)
+        cvdbk_frm.addRow("ATR Exp %", self.cvd_atr_expansion_pct_input)
+
+        self.cvd_htf_bars_input = QSpinBox()
+        self.cvd_htf_bars_input.setRange(2, 30)
+        self.cvd_htf_bars_input.setValue(5)
+        self.cvd_htf_bars_input.setStyleSheet(compact_spinbox_style)
+        _w(self.cvd_htf_bars_input)
+        self.cvd_htf_bars_input.setToolTip(
+            "Higher-timeframe alignment: compare price now vs N bars ago.\n"
+            "Long breakout scores 1 pt if price is higher than N bars ago (HTF trend up).\n"
+            "5 bars = recent 5-bar slope. Raise to 10–15 for a stronger HTF filter."
+        )
+        self.cvd_htf_bars_input.valueChanged.connect(self._on_chop_filter_settings_changed)
+        cvdbk_frm.addRow("HTF Bars", self.cvd_htf_bars_input)
+
+        self.cvd_regime_adx_block_input = QDoubleSpinBox()
+        self.cvd_regime_adx_block_input.setRange(0.0, 60.0)
+        self.cvd_regime_adx_block_input.setDecimals(1)
+        self.cvd_regime_adx_block_input.setSingleStep(1.0)
+        self.cvd_regime_adx_block_input.setValue(30.0)
+        self.cvd_regime_adx_block_input.setStyleSheet(compact_spinbox_style)
+        _w(self.cvd_regime_adx_block_input)
+        self.cvd_regime_adx_block_input.setToolTip(
+            "Regime block: when ADX exceeds this AND price micro-trend opposes signal,\n"
+            "score is reduced by 1 pt (opposing strong trend detected).\n"
+            "0 = disabled. 30 = only block in very strong opposing regimes."
+        )
+        self.cvd_regime_adx_block_input.valueChanged.connect(self._on_chop_filter_settings_changed)
+        cvdbk_frm.addRow("Regime Block", self.cvd_regime_adx_block_input)
+
+        # ── CVD Range Breakout — RIGHT COLUMN (info panel) ────────────────
+        _PANEL_BG      = "#1A1F2E"
+        _PANEL_BORDER  = "#2A3348"
+        _HEAD_COLOR    = "#9CCAF4"
+        _BODY_COLOR    = "#B8C8D8"
+        _ACCENT_LONG   = "#4CAF82"
+        _ACCENT_SHORT  = "#E05C5C"
+        _ACCENT_EXIT   = "#F0A040"
+        _GUIDE_COLOR   = "#A8BCC8"
+
+        def _info_panel_style():
+            return f"""
+                QWidget#cvdInfoPanel {{
+                    background: {_PANEL_BG};
+                    border: 1px solid {_PANEL_BORDER};
+                    border-radius: 6px;
+                }}
+            """
+
+        def _section_label(text, color=_HEAD_COLOR):
+            lbl = QLabel(text)
+            lbl.setStyleSheet(
+                f"color:{color}; font-size:10px; font-weight:700; "
+                f"border:none; padding: 2px 0px 1px 0px;"
+            )
+            return lbl
+
+        def _body_label(text, color=_BODY_COLOR):
+            lbl = QLabel(text)
+            lbl.setStyleSheet(
+                f"color:{color}; font-size:9px; font-weight:400; border:none;"
+            )
+            lbl.setWordWrap(True)
+            return lbl
+
+        def _divider():
+            line = QWidget()
+            line.setFixedHeight(1)
+            line.setStyleSheet(f"background:{_PANEL_BORDER}; border:none;")
+            return line
+
+        cvd_info_panel = QWidget()
+        cvd_info_panel.setObjectName("cvdInfoPanel")
+        cvd_info_panel.setStyleSheet(_info_panel_style())
+        cvd_info_layout = QVBoxLayout(cvd_info_panel)
+        cvd_info_layout.setContentsMargins(12, 10, 12, 10)
+        cvd_info_layout.setSpacing(5)
+
+        # ── Entry Trigger ──────────────────────────────────────────────────
+        cvd_info_layout.addWidget(_section_label("⚡  Entry Triggers"))
+        cvd_info_layout.addWidget(_body_label(
+            "CVD compresses for ≥ Min Consol bars (range ≤ avg × Max Ratio).",
+            _BODY_COLOR
+        ))
+        entry_rows = [
+            (_ACCENT_LONG,  "LONG  — CVD breaks above range high + buffer,"),
+            ("",            "         price slope ↑, close > EMA10, CVD EMA ↑"),
+            (_ACCENT_SHORT, "SHORT — CVD breaks below range low − buffer,"),
+            ("",            "         price slope ↓, close < EMA10, CVD EMA ↓"),
+        ]
+        for color, text in entry_rows:
+            lbl = _body_label(text, color if color else _BODY_COLOR)
+            cvd_info_layout.addWidget(lbl)
+
+        cvd_info_layout.addWidget(_body_label(
+            "Then each conviction filter scores +1 pt. Signal fires when score ≥ Min Score.",
+            _BODY_COLOR
+        ))
+
+        cvd_info_layout.addSpacing(4)
+        cvd_info_layout.addWidget(_divider())
+        cvd_info_layout.addSpacing(4)
+
+        # ── Exit Trigger ───────────────────────────────────────────────────
+        cvd_info_layout.addWidget(_section_label("🚪  Exit Triggers", _ACCENT_EXIT))
+        exit_rows = [
+            "LONG  exit  — price closes below EMA10",
+            "SHORT exit  — price closes above EMA10",
+            "Regime Trend Exit (if enabled) — ADX + ATR regime flip detected",
+            "Stop Loss hit — from Automation stop loss setting",
+            "Max Giveback — if Range Breakout giveback is enabled",
+        ]
+        for text in exit_rows:
+            cvd_info_layout.addWidget(_body_label(f"• {text}"))
+
+        cvd_info_layout.addSpacing(4)
+        cvd_info_layout.addWidget(_divider())
+        cvd_info_layout.addSpacing(4)
+
+        # ── Quick Tuning Guide ─────────────────────────────────────────────
+        cvd_info_layout.addWidget(_section_label("🎯  Quick Tuning Guide"))
+        guide_entries = [
+            ("Getting zero signals?",          "Drop Min Score → 2"),
+            ("Too many weak signals?",          "Raise Min Score → 4,  Vol Mult → 1.30"),
+            ("Choppy day, want fewer trades?",  "Raise Regime Block → 25"),
+            ("Want pure momentum entries?",     "Raise HTF Bars → 10"),
+            ("Ghost breakouts (no follow-thru)?","Raise Vol Mult → 1.30,  ATR Exp % → 0.10"),
+            ("Signals firing too early?",       "Raise Min Consol bars,  lower Max Ratio"),
+            ("Missing big moves?",              "Lower Buffer → 0.05,  Min Score → 2"),
+        ]
+        for problem, fix in guide_entries:
+            row_w = QWidget()
+            row_w.setStyleSheet("border:none;")
+            row_l = QHBoxLayout(row_w)
+            row_l.setContentsMargins(0, 1, 0, 1)
+            row_l.setSpacing(6)
+            prob_lbl = QLabel(f"• {problem}")
+            prob_lbl.setStyleSheet(f"color:{_GUIDE_COLOR}; font-size:9px; font-weight:400; border:none;")
+            prob_lbl.setMinimumWidth(175)
+            fix_lbl = QLabel(fix)
+            fix_lbl.setStyleSheet(f"color:{_ACCENT_LONG}; font-size:9px; font-weight:600; border:none;")
+            row_l.addWidget(prob_lbl)
+            row_l.addWidget(fix_lbl)
+            row_l.addStretch()
+            cvd_info_layout.addWidget(row_w)
+
+        cvd_info_layout.addStretch()
+
+        # ── Reset to Defaults button ───────────────────────────────────────
+        cvd_info_layout.addWidget(_divider())
+        cvd_info_layout.addSpacing(4)
+
+        self.cvd_reset_defaults_btn = QPushButton("↺  Reset to Defaults")
+        self.cvd_reset_defaults_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {_C_BTN_BG}; color: {_C_BTN_TEXT};
+                border: 1px solid {_C_BORDER}; border-radius: 4px;
+                padding: 4px 10px; font-size: 10px; font-weight: 600;
+                min-height: 22px;
+            }}
+            QPushButton:hover {{ border: 1px solid {_C_HOVER}; color: #FFFFFF; }}
+            QPushButton:pressed {{ background: #1A2030; }}
+        """)
+        self.cvd_reset_defaults_btn.setToolTip(
+            "Reset all CVD Range Breakout parameters to their default values."
+        )
+        self.cvd_reset_defaults_btn.clicked.connect(self._on_cvd_reset_defaults)
+        reset_row = QHBoxLayout()
+        reset_row.addStretch()
+        reset_row.addWidget(self.cvd_reset_defaults_btn)
+        cvd_info_layout.addLayout(reset_row)
 
         # ══════════════════════════════════════════════════════════════════
         # COLUMN 3 — Simulator · Chart Appearance
@@ -844,10 +1061,29 @@ class SetupPanelMixin:
             _strategy_tab(ema_cross_grp),
             self.STRATEGY_PRIORITY_LABELS["ema_cross"],
         )
-        tabs.addTab(
-            _strategy_tab(cvdbk_grp, consol_grp),
-            self.STRATEGY_PRIORITY_LABELS["cvd_range_breakout"],
-        )
+
+        # ── CVD Range Breakout tab — 2-column layout ──────────────────────
+        cvd_tab = QWidget()
+        cvd_tab_lay = QHBoxLayout(cvd_tab)
+        cvd_tab_lay.setContentsMargins(6, 12, 6, 6)
+        cvd_tab_lay.setSpacing(10)
+
+        # Left column: all knobs + consol group
+        cvd_left = QVBoxLayout()
+        cvd_left.setSpacing(_GRP_SPACING)
+        cvd_left.addWidget(cvdbk_grp)
+        cvd_left.addWidget(consol_grp)
+        cvd_left.addStretch()
+
+        # Right column: info panel (takes remaining space)
+        cvd_right = QVBoxLayout()
+        cvd_right.setSpacing(0)
+        cvd_right.addWidget(cvd_info_panel)
+
+        cvd_tab_lay.addLayout(cvd_left, 0)    # fixed width — knobs don't stretch
+        cvd_tab_lay.addLayout(cvd_right, 1)   # info panel takes the rest
+
+        tabs.addTab(cvd_tab, self.STRATEGY_PRIORITY_LABELS["cvd_range_breakout"])
         tabs.addTab(
             _strategy_tab(brk_grp),
             self.STRATEGY_PRIORITY_LABELS["range_breakout"],
@@ -870,6 +1106,31 @@ class SetupPanelMixin:
         root.addLayout(close_row)
 
 
+
+    def _on_cvd_reset_defaults(self):
+        """Reset all CVD Range Breakout parameters to their default values."""
+        _CVD_DEFAULTS = {
+            "cvd_range_lookback_input":      30,
+            "cvd_breakout_buffer_input":     0.10,
+            "cvd_min_consol_bars_input":     15,
+            "cvd_max_range_ratio_input":     0.80,
+            "cvd_breakout_min_adx_input":    15.0,
+            "cvd_conviction_score_input":    3,
+            "cvd_vol_expansion_mult_input":  1.15,
+            "cvd_atr_expansion_pct_input":   0.05,
+            "cvd_htf_bars_input":            5,
+            "cvd_regime_adx_block_input":    30.0,
+            "breakout_min_consol_input":     0,
+            "breakout_min_consol_adx_input": 0.0,
+        }
+        for attr, default in _CVD_DEFAULTS.items():
+            widget = getattr(self, attr, None)
+            if widget is not None:
+                widget.blockSignals(True)
+                widget.setValue(default)
+                widget.blockSignals(False)
+        # Fire one consolidated update after all resets
+        self._on_chop_filter_settings_changed()
 
     def _open_setup_dialog(self):
         self.setup_dialog.show()

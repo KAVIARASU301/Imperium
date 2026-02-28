@@ -415,12 +415,17 @@ class SignalRendererMixin:
             price_ema10=price_fast_filter,
             cvd_data=cvd_data,
             cvd_ema10=cvd_fast_filter,
-            volume=volume_data,  # 🔥 FIX: pass volume
+            volume=volume_data,
             cvd_range_lookback_bars=int(self.cvd_range_lookback_input.value()),
             cvd_breakout_buffer=float(self.cvd_breakout_buffer_input.value()),
             cvd_min_consol_bars=int(self.cvd_min_consol_bars_input.value()),
             cvd_max_range_ratio=float(self.cvd_max_range_ratio_input.value()),
             min_consolidation_adx=float(self.cvd_breakout_min_adx_input.value()),
+            min_conviction_score=int(self.cvd_conviction_score_input.value()),
+            vol_expansion_mult=float(self.cvd_vol_expansion_mult_input.value()),
+            atr_expansion_pct=float(self.cvd_atr_expansion_pct_input.value()),
+            htf_bars=int(self.cvd_htf_bars_input.value()),
+            regime_adx_block=float(self.cvd_regime_adx_block_input.value()),
         )
 
         session_keys = [ts.date() for ts in self.all_timestamps]
