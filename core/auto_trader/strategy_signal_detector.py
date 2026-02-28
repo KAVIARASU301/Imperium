@@ -336,18 +336,38 @@ class StrategySignalDetector:
         cvd_above_ema10 = cvd_data > cvd_ema10
         cvd_below_ema10 = cvd_data < cvd_ema10
 
-        # Detect CVD crosses of EMA51
+        # Detect CVD crosses of EMA10/EMA51
         cvd_prev = np.concatenate(([cvd_data[0]], cvd_data[:-1]))
+        cvd_ema10_prev = np.concatenate(([cvd_ema10[0]], cvd_ema10[:-1]))
         cvd_ema51_prev = np.concatenate(([cvd_ema51[0]], cvd_ema51[:-1]))
 
+        cvd_cross_above_ema10_raw = (cvd_prev <= cvd_ema10_prev) & (cvd_data > cvd_ema10)
+        cvd_cross_below_ema10_raw = (cvd_prev >= cvd_ema10_prev) & (cvd_data < cvd_ema10)
         cvd_cross_above_ema51_raw = (cvd_prev <= cvd_ema51_prev) & (cvd_data > cvd_ema51)
         cvd_cross_below_ema51_raw = (cvd_prev >= cvd_ema51_prev) & (cvd_data < cvd_ema51)
+
+        # Enforce ordered cross sequence for EMA cross strategy only:
+        # long  -> CVD must cross EMA10 first, then EMA51 (not on same bar)
+        # short -> CVD must cross EMA10 first, then EMA51 (not on same bar)
+        cvd_was_above_ema10 = cvd_prev > cvd_ema10_prev
+        cvd_was_below_ema10 = cvd_prev < cvd_ema10_prev
+
+        cvd_cross_above_ema51_ordered = (
+            cvd_cross_above_ema51_raw &
+            cvd_was_above_ema10 &
+            ~cvd_cross_above_ema10_raw
+        )
+        cvd_cross_below_ema51_ordered = (
+            cvd_cross_below_ema51_raw &
+            cvd_was_below_ema10 &
+            ~cvd_cross_below_ema10_raw
+        )
 
         # Anti-hug filter - CVD must be meaningfully away from EMA51
         gap = np.abs(cvd_data - cvd_ema51)
         min_gap = cvd_ema_gap_threshold * 0.5
-        cvd_cross_above_ema51 = cvd_cross_above_ema51_raw & (gap > min_gap)
-        cvd_cross_below_ema51 = cvd_cross_below_ema51_raw & (gap > min_gap)
+        cvd_cross_above_ema51 = cvd_cross_above_ema51_ordered & (gap > min_gap)
+        cvd_cross_below_ema51 = cvd_cross_below_ema51_ordered & (gap > min_gap)
 
         # Slope confirmation - both price and CVD trending in same direction
         price_up_slope, price_down_slope = self._calculate_slope_masks(price_data)

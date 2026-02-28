@@ -3714,12 +3714,14 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
             self.price_today_tick_curve.clear()
             return
 
-        points = self._downsample_live_points(points)
+        # Keep live rendering intentionally simple: draw only one segment from
+        # the last historical minute close to the latest received tick.
+        latest_ts, latest_raw_cvd = points[-1]
+        latest_price = float(self._live_price_points[-1][1]) if self._live_price_points else np.nan
 
         x_vals: list[float] = []
         y_vals: list[float] = []
         price_vals: list[float] = []
-        price_map = {ts: px for ts, px in self._live_price_points}
 
         # ── Anchor point ────────────────────────────────────────────────────
         # Prepend the last historical candle's close as the first point of the
@@ -3735,14 +3737,10 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
             price_vals.append(float(self._current_session_last_price_value))
         # ────────────────────────────────────────────────────────────────────
 
-        for ts, raw_cvd in points:
-            tick_ts = _align_tick_ts(ts)
-
-            x = self._ts_to_x(tick_ts.to_pydatetime())
-
-            x_vals.append(x)
-            y_vals.append(raw_cvd + self._live_cvd_offset)
-            price_vals.append(float(price_map.get(ts, np.nan)))
+        tick_ts = _align_tick_ts(latest_ts)
+        x_vals.append(self._ts_to_x(tick_ts.to_pydatetime()))
+        y_vals.append(latest_raw_cvd + self._live_cvd_offset)
+        price_vals.append(latest_price)
 
         # Convert to numpy arrays for consistent handling
         x_arr = np.array(x_vals)
@@ -3752,20 +3750,6 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         # Remove any NaN or invalid values to prevent vertical lines
         valid_cvd_mask = np.isfinite(y_arr)
         valid_price_mask = np.isfinite(price_arr)
-
-        # Detect large jumps in CVD that would create vertical lines
-        # This happens when offset changes or session restarts
-        if len(y_arr) > 1:
-            cvd_deltas = np.abs(np.diff(y_arr))
-            # If any jump is > 10x the median change, it's likely an offset issue
-            median_change = np.median(cvd_deltas[cvd_deltas > 0]) if np.any(cvd_deltas > 0) else 1
-            large_jump_threshold = max(median_change * 10, 10000)  # At least 10k or 10x median
-            large_jumps = cvd_deltas > large_jump_threshold
-
-            # Mark points after large jumps as invalid to break connection
-            if np.any(large_jumps):
-                jump_indices = np.where(large_jumps)[0] + 1  # +1 because diff is offset by 1
-                valid_cvd_mask[jump_indices] = False
 
         # Plot CVD ticks - only connect finite values with consistent pen
         if np.any(valid_cvd_mask):
