@@ -156,27 +156,53 @@ class SetupPanelMixin:
             trend_exit_lay.addWidget(cb)
         auto_frm.addRow("Trend Exit On", trend_exit_row)
 
-        trend_thresh_widget = QWidget()
-        trend_thresh_lay = QFormLayout(trend_thresh_widget)
-        trend_thresh_lay.setContentsMargins(0, 2, 0, 2)
-        trend_thresh_lay.setSpacing(3)
-        trend_thresh_lay.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        # ── Trend-ride ENTRY conditions ───────────────────────────────────
+        trend_entry_widget = QWidget()
+        trend_entry_lay = QFormLayout(trend_entry_widget)
+        trend_entry_lay.setContentsMargins(0, 2, 0, 2)
+        trend_entry_lay.setSpacing(3)
+        trend_entry_lay.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
         _w(self.trend_exit_adx_min_input)
         _w(self.trend_exit_atr_ratio_min_input)
+        _w(self.trend_entry_consecutive_bars_input)
         _w(self.trend_exit_confirm_bars_input)
         _w(self.trend_exit_min_profit_input)
-        _w(self.trend_exit_vol_drop_pct_input)
+
+        trend_entry_lay.addRow("ADX Min",          self.trend_exit_adx_min_input)
+        trend_entry_lay.addRow("ATR Ratio Min",    self.trend_exit_atr_ratio_min_input)
+        trend_entry_lay.addRow("Consec Bars ↑",    self.trend_entry_consecutive_bars_input)
+        trend_entry_lay.addRow("Confirm Bars",     self.trend_exit_confirm_bars_input)
+        trend_entry_lay.addRow("Min Profit (pts)", self.trend_exit_min_profit_input)
+
+        # Slope gate toggles on one row
+        slope_row = QWidget()
+        slope_lay = QHBoxLayout(slope_row)
+        slope_lay.setContentsMargins(0, 0, 0, 0)
+        slope_lay.setSpacing(6)
+        slope_lay.addWidget(self.trend_entry_require_adx_slope_check)
+        slope_lay.addWidget(self.trend_entry_require_vol_slope_check)
+        slope_lay.addStretch()
+        trend_entry_lay.addRow("Slope Gates", slope_row)
+
+        auto_frm.addRow("Trend Entry", trend_entry_widget)
+
+        # ── Trend-ride EXIT (regime breakdown) conditions ─────────────────
+        trend_exit_thresh_widget = QWidget()
+        trend_exit_thresh_lay = QFormLayout(trend_exit_thresh_widget)
+        trend_exit_thresh_lay.setContentsMargins(0, 2, 0, 2)
+        trend_exit_thresh_lay.setSpacing(3)
+        trend_exit_thresh_lay.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+
         _w(self.trend_exit_breakdown_bars_input)
+        _w(self.trend_exit_breakdown_lookback_input)
+        _w(self.trend_exit_vol_drop_pct_input)
 
-        trend_thresh_lay.addRow("ADX Min",        self.trend_exit_adx_min_input)
-        trend_thresh_lay.addRow("ATR Ratio Min",  self.trend_exit_atr_ratio_min_input)
-        trend_thresh_lay.addRow("Confirm Bars",   self.trend_exit_confirm_bars_input)
-        trend_thresh_lay.addRow("Min Profit",     self.trend_exit_min_profit_input)
-        trend_thresh_lay.addRow("Vol Drop %",     self.trend_exit_vol_drop_pct_input)
-        trend_thresh_lay.addRow("Breakdown Bars", self.trend_exit_breakdown_bars_input)
+        trend_exit_thresh_lay.addRow("Breakdown Bars",     self.trend_exit_breakdown_bars_input)
+        trend_exit_thresh_lay.addRow("Breakdown Lookback", self.trend_exit_breakdown_lookback_input)
+        trend_exit_thresh_lay.addRow("Vol Drop %",         self.trend_exit_vol_drop_pct_input)
 
-        auto_frm.addRow("Trend Exit Config", trend_thresh_widget)
+        auto_frm.addRow("Trend Exit", trend_exit_thresh_widget)
 
         auto_time_row = QWidget()
         auto_time_lay = QHBoxLayout(auto_time_row)

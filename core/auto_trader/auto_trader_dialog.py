@@ -527,6 +527,53 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         )
         self.trend_exit_breakdown_bars_input.valueChanged.connect(self._on_automation_settings_changed)
 
+        # ── Breakdown lookback (the "5 bars ago" check) ───────────────────
+        self.trend_exit_breakdown_lookback_input = QSpinBox()
+        self.trend_exit_breakdown_lookback_input.setRange(3, 15)
+        self.trend_exit_breakdown_lookback_input.setValue(5)
+        self.trend_exit_breakdown_lookback_input.setStyleSheet(compact_spinbox_style)
+        self.trend_exit_breakdown_lookback_input.setToolTip(
+            "Lookback window (bars) for the regime breakdown 'below X bars ago' check.\n"
+            "ADX and vol must both be below their value N bars ago to confirm breakdown.\n"
+            "Default 5. Increase for stricter exit (needs deeper sustained fall).\n"
+            "Decrease for faster exits (shallow pullbacks trigger breakdown sooner)."
+        )
+        self.trend_exit_breakdown_lookback_input.valueChanged.connect(self._on_automation_settings_changed)
+
+        # ── Entry: consecutive rising bars required before trend-ride ─────
+        self.trend_entry_consecutive_bars_input = QSpinBox()
+        self.trend_entry_consecutive_bars_input.setRange(1, 8)
+        self.trend_entry_consecutive_bars_input.setValue(3)
+        self.trend_entry_consecutive_bars_input.setStyleSheet(compact_spinbox_style)
+        self.trend_entry_consecutive_bars_input.setToolTip(
+            "How many consecutive bars ADX AND vol must both be rising before the\n"
+            "trend-ride mode entry check passes. Independent of Confirm Bars.\n"
+            "Default 3 (same as old hardcoded value). Set to 2 for faster entry,\n"
+            "4-5 for only entering on strong sustained momentum."
+        )
+        self.trend_entry_consecutive_bars_input.valueChanged.connect(self._on_automation_settings_changed)
+
+        # ── Entry slope gates (toggleable) ────────────────────────────────
+        self.trend_entry_require_adx_slope_check = QCheckBox("Require ADX slope ↑")
+        self.trend_entry_require_adx_slope_check.setChecked(True)
+        self.trend_entry_require_adx_slope_check.setToolTip(
+            "When ON: ADX must be rising on the current bar to enter trend-ride.\n"
+            "When OFF: only the ADX Min threshold and consecutive check apply.\n"
+            "Turn OFF for markets where ADX oscillates around a high level without\n"
+            "continuously rising (e.g. strong sustained trend with choppy ADX)."
+        )
+        self.trend_entry_require_adx_slope_check.toggled.connect(self._on_automation_settings_changed)
+
+        self.trend_entry_require_vol_slope_check = QCheckBox("Require Vol slope ↑")
+        self.trend_entry_require_vol_slope_check.setChecked(True)
+        self.trend_entry_require_vol_slope_check.setToolTip(
+            "When ON: ATR/vol must be rising on the current bar to enter trend-ride.\n"
+            "When OFF: only the ATR Ratio Min threshold applies.\n"
+            "Turn OFF when trading high-vol regimes where volatility stays elevated\n"
+            "but individual-bar slope flips noise-ily."
+        )
+        self.trend_entry_require_vol_slope_check.toggled.connect(self._on_automation_settings_changed)
+
         self.automation_route_combo = QComboBox()
         self.automation_route_combo.setFixedWidth(180)
         self.automation_route_combo.setStyleSheet(compact_combo_style)
@@ -1267,6 +1314,10 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.trend_exit_min_profit_input.blockSignals(True)
         self.trend_exit_vol_drop_pct_input.blockSignals(True)
         self.trend_exit_breakdown_bars_input.blockSignals(True)
+        self.trend_exit_breakdown_lookback_input.blockSignals(True)
+        self.trend_entry_consecutive_bars_input.blockSignals(True)
+        self.trend_entry_require_adx_slope_check.blockSignals(True)
+        self.trend_entry_require_vol_slope_check.blockSignals(True)
         self.automation_route_combo.blockSignals(True)
         self.automation_order_type_combo.blockSignals(True)
         self.automation_start_time_hour_input.blockSignals(True)
@@ -1374,6 +1425,10 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.trend_exit_min_profit_input.setValue(_read_setting("trend_exit_min_profit", 0.0, float))
         self.trend_exit_vol_drop_pct_input.setValue(_read_setting("trend_exit_vol_drop_pct", 0.85, float))
         self.trend_exit_breakdown_bars_input.setValue(_read_setting("trend_exit_breakdown_bars", 3, int))
+        self.trend_exit_breakdown_lookback_input.setValue(_read_setting("trend_exit_breakdown_lookback", 5, int))
+        self.trend_entry_consecutive_bars_input.setValue(_read_setting("trend_entry_consecutive_bars", 3, int))
+        self.trend_entry_require_adx_slope_check.setChecked(_read_setting("trend_entry_require_adx_slope", True, bool))
+        self.trend_entry_require_vol_slope_check.setChecked(_read_setting("trend_entry_require_vol_slope", True, bool))
         _apply_combo_value(
             self.automation_route_combo,
             _read_setting("route", self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL),
@@ -1611,6 +1666,10 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.trend_exit_min_profit_input.blockSignals(False)
         self.trend_exit_vol_drop_pct_input.blockSignals(False)
         self.trend_exit_breakdown_bars_input.blockSignals(False)
+        self.trend_exit_breakdown_lookback_input.blockSignals(False)
+        self.trend_entry_consecutive_bars_input.blockSignals(False)
+        self.trend_entry_require_adx_slope_check.blockSignals(False)
+        self.trend_entry_require_vol_slope_check.blockSignals(False)
         self.automation_route_combo.blockSignals(False)
         self.automation_order_type_combo.blockSignals(False)
         self.automation_start_time_hour_input.blockSignals(False)
@@ -1744,6 +1803,10 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
             "trend_exit_min_profit": float(self.trend_exit_min_profit_input.value()),
             "trend_exit_vol_drop_pct": float(self.trend_exit_vol_drop_pct_input.value()),
             "trend_exit_breakdown_bars": int(self.trend_exit_breakdown_bars_input.value()),
+            "trend_exit_breakdown_lookback": int(self.trend_exit_breakdown_lookback_input.value()),
+            "trend_entry_consecutive_bars": int(self.trend_entry_consecutive_bars_input.value()),
+            "trend_entry_require_adx_slope": self.trend_entry_require_adx_slope_check.isChecked(),
+            "trend_entry_require_vol_slope": self.trend_entry_require_vol_slope_check.isChecked(),
             "route": self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL,
             "order_type": self.automation_order_type_combo.currentData() or self.ORDER_TYPE_MARKET,
             "automation_start_hour": int(self.automation_start_time_hour_input.value()),
@@ -1872,6 +1935,10 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
             "trend_exit_min_profit": float(self.trend_exit_min_profit_input.value()),
             "trend_exit_vol_drop_pct": float(self.trend_exit_vol_drop_pct_input.value()),
             "trend_exit_breakdown_bars": int(self.trend_exit_breakdown_bars_input.value()),
+            "trend_exit_breakdown_lookback": int(self.trend_exit_breakdown_lookback_input.value()),
+            "trend_entry_consecutive_bars": int(self.trend_entry_consecutive_bars_input.value()),
+            "trend_entry_require_adx_slope": self.trend_entry_require_adx_slope_check.isChecked(),
+            "trend_entry_require_vol_slope": self.trend_entry_require_vol_slope_check.isChecked(),
             "open_drive_max_profit_giveback_points": float(self.open_drive_max_profit_giveback_input.value()),
             "open_drive_tick_drawdown_limit_points": float(self.open_drive_tick_drawdown_limit_input.value()),
             "atr_trailing_step_points": float(self.atr_trailing_step_input.value()),
