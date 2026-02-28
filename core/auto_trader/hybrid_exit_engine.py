@@ -29,7 +29,6 @@ Key Concepts Used (Institutional)
 
 from __future__ import annotations
 
-import numpy as np
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -264,66 +263,54 @@ class HybridExitEngine:
         cfg = self.config
         s = state  # alias
 
-        # ── Update rolling history ──────────────────────────────
+        # ── Update rolling ADX history ────────────────────────────────────
         s.adx_history.append(adx)
-        if len(s.adx_history) > max(cfg.adx_rising_bars + 2, cfg.adx_breakdown_lookback + 2):
+        max_adx_hist = max(cfg.adx_rising_bars + 3, cfg.adx_breakdown_lookback + 2)
+        if len(s.adx_history) > max_adx_hist:
             s.adx_history.pop(0)
 
-        rolling_atr = self._rolling_mean(
-            # store ATR in velocity_history temporarily for ratio calc
-            # we'll use a separate list inside state
-            # simplified: use ATR history piggy-backed on atr_ratio_history
-            s.atr_ratio_history, cfg.rolling_atr_window
-        )
-        # atr_ratio_history actually stores raw ATR values for rolling mean
-        # then we compute ratio on the fly
+        # ── Update raw ATR history (used to compute rolling ATR and ratios) ─
+        # atr_ratio_history stores RAW ATR values (not ratios — the name is legacy).
         s.atr_ratio_history.append(atr)
-        if len(s.atr_ratio_history) > cfg.rolling_atr_window + 5:
+        if len(s.atr_ratio_history) > cfg.rolling_atr_window + 8:
             s.atr_ratio_history.pop(0)
 
+        # Rolling ATR baseline and current ratio
         rolling_atr_val = self._rolling_mean(s.atr_ratio_history, cfg.rolling_atr_window)
         atr_ratio = _compute_atr_ratio(atr, rolling_atr_val)
 
-        # Velocity: we store atr_ratio_history for vol collapse, velocity_history for velocity
-        # Re-use velocity_history for normalized velocity values
+        # ── Build ATR-ratio series for vol acceleration detection ────────
+        # Compute a ratio value for each raw ATR in history using a rolling
+        # baseline.  Done purely from stored history — no out-of-bounds risk.
+        raw_atrs = s.atr_ratio_history
+        ratio_series = []
+        for i in range(len(raw_atrs)):
+            window_slice = raw_atrs[max(0, i - cfg.rolling_atr_window + 1): i + 1]
+            rm = sum(window_slice) / len(window_slice) if window_slice else 1e-9
+            ratio_series.append(raw_atrs[i] / max(rm, 1e-9))
+
+        # ── Velocity (ATR-normalised signed impulse) ─────────────────────
         if velocity_window_close and len(velocity_window_close) >= cfg.velocity_window:
             price_delta = velocity_window_close[-1] - velocity_window_close[-cfg.velocity_window]
             velocity = price_delta / max(atr, 1e-9)
-            # sign it by trade direction so collapse detection is direction-agnostic
             if signal_side == "short":
                 velocity = -velocity
         else:
             velocity = 0.0
         s.velocity_history.append(velocity)
-        if len(s.velocity_history) > 6:
+        if len(s.velocity_history) > 8:
             s.velocity_history.pop(0)
 
-        # ── Update peak profit & peak ATR ─────────────────────
+        # ── Update peak profit & peak ATR ─────────────────────────────────
         s.peak_profit = max(s.peak_profit, favorable_move)
         if atr > s.peak_atr:
             s.peak_atr = atr
 
-        # ── Build a separate ATR-ratio slope list ──────────────
-        # We store the ratio in a separate way: use the last few atr_ratio_history
-        # ratios to compute vol collapse.  We store computed ratios inside
-        # velocity_history as a proxy (separate field would be cleaner but this
-        # avoids changing the dataclass for now).
-        # Instead — we compute vol collapse from actual ATR history slope directly.
-        atr_vals_for_slope = s.atr_ratio_history  # these ARE raw ATR values
-        # compute rolling ratio series (last 6 values)
-        ratio_series = []
-        for i in range(min(6, len(atr_vals_for_slope))):
-            window_slice = atr_vals_for_slope[max(0, len(atr_vals_for_slope) - 6 + i - cfg.rolling_atr_window):
-                                               len(atr_vals_for_slope) - 6 + i + 1]
-            rm = sum(window_slice) / len(window_slice) if window_slice else 1e-9
-            ratio_series.append(atr_vals_for_slope[len(atr_vals_for_slope) - 6 + i] / max(rm, 1e-9))
-
-        # ── Phase transitions ──────────────────────────────────
+        # ── Phase transitions ──────────────────────────────────────────────
         exit_now = False
         exit_reason = "none"
 
         if s.phase == PHASE_EARLY:
-            # Try to unlock expansion
             adx_rising = _adx_is_rising(s.adx_history, cfg.adx_rising_bars)
             profit_ok = favorable_move >= cfg.min_profit_unlock
             if (
@@ -335,26 +322,31 @@ class HybridExitEngine:
                 s.phase = PHASE_EXPANSION
 
         elif s.phase == PHASE_EXPANSION:
-            # Detect momentum peak → enter distribution
-            # Trigger 1: ADX slope turns negative for 2 bars
+            # Trigger 1: ADX slope turns negative for N bars
             adx_slope_negative = (
-                len(s.adx_history) >= 3
-                and s.adx_history[-1] < s.adx_history[-2] < s.adx_history[-3]  # 2 falling bars
+                len(s.adx_history) >= cfg.adx_rising_bars + 1
+                and all(
+                    s.adx_history[-(j + 1)] < s.adx_history[-(j + 2)]
+                    for j in range(cfg.adx_rising_bars)
+                )
             )
-            # Trigger 2: Vol acceleration collapse
-            vol_collapse = _vol_acceleration_collapse(ratio_series, min(cfg.vol_lookback_positive, len(ratio_series) - 1))
-
-            # Trigger 3: Velocity collapse
-            vel_collapse = _velocity_collapse(s.velocity_history, cfg.velocity_threshold, cfg.velocity_collapse_ratio)
-
-            # Trigger 4: Extreme extension (mean reversion risk)
+            # Trigger 2: Vol acceleration collapse (first derivative of ratio turns negative)
+            vol_collapse = _vol_acceleration_collapse(
+                ratio_series,
+                min(cfg.vol_lookback_positive, max(0, len(ratio_series) - 2))
+            )
+            # Trigger 3: Velocity impulse death
+            vel_collapse = _velocity_collapse(
+                s.velocity_history, cfg.velocity_threshold, cfg.velocity_collapse_ratio
+            )
+            # Trigger 4: Extreme extension — mean reversion risk
             extreme_ext = _extreme_extension(close, ema51, atr, cfg.extreme_extension_atr_multiple)
 
             if adx_slope_negative or vol_collapse or vel_collapse or extreme_ext:
                 s.phase = PHASE_DISTRIBUTION
 
         elif s.phase == PHASE_DISTRIBUTION:
-            # Check for full structural breakdown → immediate exit override
+            # Full structural breakdown → immediate exit, no giveback wait
             structural = _structural_breakdown(
                 s.adx_history, atr, s.peak_atr,
                 cfg.adx_breakdown_lookback, cfg.atr_breakdown_ratio
@@ -371,7 +363,6 @@ class HybridExitEngine:
                 exit_now = True
                 exit_reason = "hybrid_structural_breakdown"
             else:
-                # Dynamic giveback trail
                 giveback_threshold = _compute_dynamic_giveback(
                     cfg, s.peak_profit, entry_price, atr
                 )
