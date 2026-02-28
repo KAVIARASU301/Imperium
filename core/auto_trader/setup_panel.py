@@ -367,6 +367,69 @@ class SetupPanelMixin:
         self.canary_ratio_input.setToolTip("Fraction of qualified signals allowed live in canary mode.")
         self.canary_ratio_input.valueChanged.connect(self._on_governance_settings_changed)
         gov_frm.addRow("Canary Ratio", self.canary_ratio_input)
+
+        # ── 4 new knobs ───────────────────────────────────────────────────
+        self.health_alert_threshold_input = QDoubleSpinBox()
+        self.health_alert_threshold_input.setRange(0.10, 0.70)
+        self.health_alert_threshold_input.setDecimals(2)
+        self.health_alert_threshold_input.setSingleStep(0.05)
+        self.health_alert_threshold_input.setValue(0.40)
+        self.health_alert_threshold_input.setStyleSheet(compact_spinbox_style)
+        _w(self.health_alert_threshold_input)
+        self.health_alert_threshold_input.setToolTip(
+            "Strategy health score below this flags it as 'degraded' and adds a warning reason.\n"
+            "Health = win-rate weighted 65% + edge 35%, computed over last 80 bars.\n"
+            "Lower = more tolerant of drawdown; Higher = cuts strategies faster."
+        )
+        self.health_alert_threshold_input.valueChanged.connect(self._on_governance_settings_changed)
+        gov_frm.addRow("Health Alert", self.health_alert_threshold_input)
+
+        self.strategy_weight_decay_input = QDoubleSpinBox()
+        self.strategy_weight_decay_input.setRange(0.50, 0.99)
+        self.strategy_weight_decay_input.setDecimals(2)
+        self.strategy_weight_decay_input.setSingleStep(0.01)
+        self.strategy_weight_decay_input.setValue(0.90)
+        self.strategy_weight_decay_input.setStyleSheet(compact_spinbox_style)
+        _w(self.strategy_weight_decay_input)
+        self.strategy_weight_decay_input.setToolTip(
+            "Exponential decay λ for adaptive strategy weights.\n"
+            "Higher (0.95) = longer memory, slower to react to recent results.\n"
+            "Lower (0.80) = highly reactive, forgets old wins/losses quickly.\n"
+            "Institutional default: 0.90 (≈ 10-bar half-life on signal edge)."
+        )
+        self.strategy_weight_decay_input.valueChanged.connect(self._on_governance_settings_changed)
+        gov_frm.addRow("Weight Decay λ", self.strategy_weight_decay_input)
+
+        self.strategy_weight_floor_input = QDoubleSpinBox()
+        self.strategy_weight_floor_input.setRange(0.01, 0.25)
+        self.strategy_weight_floor_input.setDecimals(2)
+        self.strategy_weight_floor_input.setSingleStep(0.01)
+        self.strategy_weight_floor_input.setValue(0.05)
+        self.strategy_weight_floor_input.setStyleSheet(compact_spinbox_style)
+        _w(self.strategy_weight_floor_input)
+        self.strategy_weight_floor_input.setToolTip(
+            "Minimum weight any strategy can be assigned in the adaptive weighting system.\n"
+            "Prevents a losing strategy from being zeroed out entirely — keeps it in 'reserve'.\n"
+            "0.05 = floor at 5%%. Set higher (0.10) for more equal allocation."
+        )
+        self.strategy_weight_floor_input.valueChanged.connect(self._on_governance_settings_changed)
+        gov_frm.addRow("Weight Floor", self.strategy_weight_floor_input)
+
+        self.drift_window_input = QSpinBox()
+        self.drift_window_input.setRange(20, 480)
+        self.drift_window_input.setSingleStep(10)
+        self.drift_window_input.setValue(120)
+        self.drift_window_input.setStyleSheet(compact_spinbox_style)
+        _w(self.drift_window_input)
+        self.drift_window_input.setToolTip(
+            "Feature drift detection window (bars).\n"
+            "Compares recent N-bar feature distribution vs. baseline to detect regime shift.\n"
+            "Shorter (60) = catches drift faster but more noisy.\n"
+            "Longer (240) = smoother, catches structural drift only."
+        )
+        self.drift_window_input.valueChanged.connect(self._on_governance_settings_changed)
+        gov_frm.addRow("Drift Window", self.drift_window_input)
+
         c2.addWidget(gov_grp)
 
         # ── Open Drive Model ──────────────────────────────────────────────

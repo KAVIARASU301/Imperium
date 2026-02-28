@@ -1292,6 +1292,10 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.deploy_mode_combo.blockSignals(True)
         self.min_confidence_input.blockSignals(True)
         self.canary_ratio_input.blockSignals(True)
+        self.health_alert_threshold_input.blockSignals(True)
+        self.strategy_weight_decay_input.blockSignals(True)
+        self.strategy_weight_floor_input.blockSignals(True)
+        self.drift_window_input.blockSignals(True)
         self.hide_simulator_btn_check.blockSignals(True)
         self.hide_tick_backtest_controls_check.blockSignals(True)
         self.chop_filter_atr_reversal_check.blockSignals(True)
@@ -1461,6 +1465,18 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.canary_ratio_input.setValue(
             _read_setting("canary_live_ratio", self.signal_governance.canary_live_ratio, float)
         )
+        self.health_alert_threshold_input.setValue(
+            _read_setting("health_alert_threshold", self.signal_governance.health_alert_threshold, float)
+        )
+        self.strategy_weight_decay_input.setValue(
+            _read_setting("strategy_weight_decay_lambda", self.signal_governance.strategy_weight_decay_lambda, float)
+        )
+        self.strategy_weight_floor_input.setValue(
+            _read_setting("strategy_weight_floor", self.signal_governance._strategy_weight_floor, float)
+        )
+        self.drift_window_input.setValue(
+            _read_setting("drift_feature_window", self.signal_governance.feature_window, int)
+        )
         self._on_governance_settings_changed()
 
         self.hide_simulator_btn_check.setChecked(
@@ -1620,6 +1636,10 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.deploy_mode_combo.blockSignals(False)
         self.min_confidence_input.blockSignals(False)
         self.canary_ratio_input.blockSignals(False)
+        self.health_alert_threshold_input.blockSignals(False)
+        self.strategy_weight_decay_input.blockSignals(False)
+        self.strategy_weight_floor_input.blockSignals(False)
+        self.drift_window_input.blockSignals(False)
         self.hide_simulator_btn_check.blockSignals(False)
         self.hide_tick_backtest_controls_check.blockSignals(False)
         self.chop_filter_atr_reversal_check.blockSignals(False)
@@ -1749,6 +1769,10 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
             "deploy_mode": self.deploy_mode_combo.currentData() or "canary",
             "min_confidence_for_live": float(self.min_confidence_input.value()),
             "canary_live_ratio": float(self.canary_ratio_input.value()),
+            "health_alert_threshold": float(self.health_alert_threshold_input.value()),
+            "strategy_weight_decay_lambda": float(self.strategy_weight_decay_input.value()),
+            "strategy_weight_floor": float(self.strategy_weight_floor_input.value()),
+            "drift_feature_window": int(self.drift_window_input.value()),
             "hide_simulator_button": self.hide_simulator_btn_check.isChecked(),
             "hide_tick_backtest_controls": self.hide_tick_backtest_controls_check.isChecked(),
             "stacker_enabled": self.stacker_enabled_check.isChecked(),
@@ -1937,6 +1961,12 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.signal_governance.deploy_mode = self.deploy_mode_combo.currentData() or "canary"
         self.signal_governance.min_confidence_for_live = float(self.min_confidence_input.value())
         self.signal_governance.canary_live_ratio = float(self.canary_ratio_input.value())
+        self.signal_governance.health_alert_threshold = float(self.health_alert_threshold_input.value())
+        self.signal_governance.strategy_weight_decay_lambda = float(self.strategy_weight_decay_input.value())
+        self.signal_governance._strategy_weight_floor = float(self.strategy_weight_floor_input.value())
+        self.signal_governance.feature_window = int(self.drift_window_input.value())
+        # keep quality_scorer threshold in sync with min_confidence
+        self.signal_governance.quality_scorer.min_score = float(self.min_confidence_input.value())
         self._persist_setup_values()
 
     def _on_ema_toggled(self, period: int, checked: bool):
