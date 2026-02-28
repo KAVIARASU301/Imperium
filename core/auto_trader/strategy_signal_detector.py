@@ -884,7 +884,7 @@ class StrategySignalDetector:
         require a MINIMUM TOTAL SCORE. This lets signals through when
         4/5 filters agree, not just when all 5 are perfect.
 
-        5 INSTITUTIONAL FILTERS (each worth 1 point):
+        6 CONVICTION FILTERS (each worth 1 point, max score = 6):
         ┌─────┬──────────────────────────────────────────────────────┐
         │  1  │ ADX expansion: ADX rising at breakout bar            │
         │     │ = Trend momentum is actually building (not decaying) │
@@ -895,19 +895,33 @@ class StrategySignalDetector:
         │  3  │ Volume expansion: volume[i] > avg_volume × mult      │
         │     │ = Real participation, not a ghost breakout           │
         ├─────┼──────────────────────────────────────────────────────┤
-        │  4  │ HTF alignment: price trend over last N bars agrees   │
+        │  4  │ EMA position bonus: price on the expected side       │
+        │     │ = Trend-confirmed entry (bonus, not a blocker)       │
+        │     │   Long below EMA still fires — just scores lower     │
+        ├─────┼──────────────────────────────────────────────────────┤
+        │  5  │ HTF alignment: price trend over last N bars agrees   │
         │     │ = You're trading WITH the higher-timeframe structure │
         ├─────┼──────────────────────────────────────────────────────┤
-        │  5  │ Regime check: ADX of opposing side is not dominant   │
-        │     │ = Don't long into a strong downtrend (or vice versa) │
+        │  6  │ Regime check: no strong opposing regime active       │
+        │     │ = Don't long into a raging downtrend (or vice versa) │
         └─────┴──────────────────────────────────────────────────────┘
 
-        Default: min_conviction_score=3 → need 3 of 5. Raise to 4 for
+        Default: min_conviction_score=3 → need 3 of 6. Raise to 4-5 for
         tighter signals, lower to 2 for more signals.
 
         The 3 BASE conditions from the production method (price slope,
         price vs EMA10, CVD EMA slope) remain as HARD GATES — they are
         cheap to compute and filter obvious noise.
+
+        ── EMA POSITION GATE REMOVED ──────────────────────────────────
+        price_close > price_ema10 (for longs) and its mirror for shorts
+        is deliberately NOT a gate in this strategy. Reason: CVD leads
+        price. The highest-conviction breakouts are often ones where CVD
+        breaks its range while price is still below EMA (accumulation) or
+        above EMA (distribution). Filtering those out discards the alpha.
+        Price SLOPE (direction) and CVD EMA slope remain as hard gates —
+        they confirm momentum without requiring price to have already moved.
+        ────────────────────────────────────────────────────────────────
         """
         length = min(
             len(price_high), len(price_low), len(price_close),
@@ -995,16 +1009,22 @@ class StrategySignalDetector:
             # ════════════════════════════════════════════════════════════════
             # HARD GATES (base conditions — must pass to even score)
             # ════════════════════════════════════════════════════════════════
+            # NOTE: price_close vs price_ema10 is intentionally NOT a gate here.
+            # CVD leads price — the whole edge of this strategy is catching
+            # institutional positioning BEFORE price crosses the EMA.
+            # A long CVD breakout below EMA10 often precedes the most aggressive
+            # upside moves (accumulation into EMA, then explosion through it).
+            # Same in reverse for shorts above EMA10 (distribution).
+            # Confirmation comes from price SLOPE (direction) + CVD EMA slope
+            # (orderflow momentum) — not price position vs its rolling average.
             if long_break:
                 base_ok = (
                         price_up_slope[i]
-                        and price_close[i] > price_ema10[i]
                         and cvd_ema_up[i]
                 )
             else:
                 base_ok = (
                         price_down_slope[i]
-                        and price_close[i] < price_ema10[i]
                         and cvd_ema_down[i]
                 )
 
@@ -1039,7 +1059,18 @@ class StrategySignalDetector:
             if vol_avg > 0 and volume[i] >= vol_avg * vol_expansion_mult:
                 score += 1
 
-            # FILTER 4 — Higher timeframe alignment (HTF proxy)
+            # FILTER 4 — EMA position alignment (bonus, not a block)
+            # Price above EMA10 on a long = extra confluence. Price below EMA10
+            # on a long = the early aggressive entry (still valid, just no bonus).
+            # This replaces the old hard gate — now it rewards but doesn't kill.
+            ema_aligned = (
+                (long_break and price_close[i] > price_ema10[i]) or
+                (short_break and price_close[i] < price_ema10[i])
+            )
+            if ema_aligned:
+                score += 1
+
+            # FILTER 5 — Higher timeframe alignment (HTF proxy)
             # Use last N bars as a "higher timeframe" trend proxy.
             # Long: price trend over htf_bars is up. Short: down.
             # This is a cheap way to avoid counter-trend breakouts.
@@ -1052,7 +1083,7 @@ class StrategySignalDetector:
             if htf_ok:
                 score += 1
 
-            # FILTER 5 — Regime block (don't long into a raging downtrend)
+            # FILTER 6 — Regime block (don't long into a raging downtrend)
             # If ADX > regime_adx_block AND opposing side is dominant → skip.
             adx_val = float(adx_series[i]) if np.isfinite(adx_series[i]) else 0.0
             if regime_adx_block > 0 and adx_val > regime_adx_block:
