@@ -28,6 +28,11 @@ from core.auto_trader.settings_manager import SetupSettingsMigrationMixin
 from core.auto_trader.signal_renderer import SignalRendererMixin
 from core.auto_trader.simulator import SimulatorMixin
 from core.auto_trader.indicators import calculate_ema, calculate_vwap, calculate_atr, compute_adx, build_slope_direction_masks, is_chop_regime
+from core.auto_trader.hybrid_exit_engine import (
+    HybridExitConfig,
+    HybridExitEngine,
+    HybridExitState,
+)
 from core.auto_trader.signal_governance import SignalGovernance
 from core.auto_trader.stacker import StackerState
 from utils.cpr_calculator import CPRCalculator
@@ -199,6 +204,8 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self._live_atr_skip_count: int = 0
         self._live_active_breakout_side: str | None = None  # tracks which side the breakout is on
         self._live_trade_info: dict | None = None
+        self._live_hybrid_engine: HybridExitEngine | None = None
+        self._live_close_history: list[float] = []
         self._live_stacker_state: StackerState | None = None
         self._live_stacker_side: str | None = None
         self._live_stacker_strategy_type: str | None = None
@@ -1971,6 +1978,48 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
             else:
                 self._status_bar.set("mode", "MANUAL", "dim")
 
+        # Rebuild hybrid exit engine from current UI settings.
+        self._live_hybrid_engine = self._build_hybrid_engine_from_ui()
+
+    def _build_hybrid_engine_from_ui(self) -> HybridExitEngine | None:
+        """Build hybrid engine from UI controls. Returns None if disabled."""
+        if not (
+            getattr(self, "hybrid_exit_enabled_check", None)
+            and self.hybrid_exit_enabled_check.isChecked()
+        ):
+            return None
+
+        def _v(attr: str, default):
+            widget = getattr(self, attr, None)
+            if widget is None:
+                return default
+            with suppress(Exception):
+                return widget.value()
+            return default
+
+        def _b(attr: str, default: bool = True) -> bool:
+            widget = getattr(self, attr, None)
+            if widget is None:
+                return default
+            with suppress(Exception):
+                return bool(widget.isChecked())
+            return default
+
+        return HybridExitEngine(HybridExitConfig(
+            adx_unlock_threshold=float(_v("hybrid_adx_unlock_input", 28.0)),
+            atr_ratio_unlock_threshold=float(_v("hybrid_atr_ratio_input", 1.15)),
+            adx_rising_bars=int(_v("hybrid_adx_rising_input", 2)),
+            velocity_threshold=float(_v("hybrid_vel_thresh_input", 1.5)),
+            velocity_collapse_ratio=float(_v("hybrid_vel_collapse_input", 0.5)),
+            extreme_extension_atr_multiple=float(_v("hybrid_ext_mult_input", 3.0)),
+            profit_giveback_ratio=float(_v("hybrid_profit_ratio_input", 0.30)),
+            atr_giveback_multiple=float(_v("hybrid_atr_giveback_input", 1.2)),
+            base_giveback_pct=float(_v("hybrid_base_pct_input", 0.003)),
+            adx_breakdown_lookback=int(_v("hybrid_breakdown_lb_input", 10)),
+            atr_breakdown_ratio=float(_v("hybrid_atr_bdown_input", 0.90)),
+            ema_breakdown_crosses=_b("hybrid_ema_bdown_check", True),
+        ))
+
     def reset_stacker(self):
         """Called by coordinator when anchor trade fully exits."""
         self._live_stacker_state = None
@@ -1985,6 +2034,11 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         """Receive coordinator trade updates and keep stacker anchor aligned to fill."""
         self._live_trade_info = trade_info if isinstance(trade_info, dict) else None
 
+        if state == "entered" and self._live_trade_info is not None:
+            if self._live_hybrid_engine is not None:
+                self._live_trade_info.update(HybridExitState().to_dict())
+            self._live_close_history.clear()
+
         # Re-anchor stacker to actual fill price from coordinator
         if state == "entered" and self._live_stacker_state is not None:
             actual_entry = (trade_info or {}).get("entry_underlying")
@@ -1996,6 +2050,90 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
                     "[STACKER] Re-anchored to actual fill: %.2f (was bar close)",
                     actual_entry,
                 )
+
+    def _check_live_hybrid_exit(
+        self,
+        current_price: float,
+        ema51: float,
+        atr: float,
+        adx: float,
+    ) -> None:
+        """Run hybrid exit evaluation for live trade on bar close."""
+        if self._live_hybrid_engine is None:
+            return
+        if self._live_trade_info is None:
+            return
+        if not self.automate_toggle.isChecked():
+            return
+
+        trade = self._live_trade_info
+        strategy_type = trade.get("signal_type") or trade.get("strategy_type") or ""
+        if strategy_type not in set(self._selected_dynamic_exit_strategies()):
+            return
+
+        signal_side = trade.get("signal_side", "long")
+        entry_price = float(trade.get("entry_underlying") or trade.get("entry_price", current_price))
+        favorable_move = current_price - entry_price if signal_side == "long" else entry_price - current_price
+
+        self._live_close_history.append(current_price)
+        max_vel_window = self._live_hybrid_engine.config.velocity_window + 2
+        if len(self._live_close_history) > max_vel_window:
+            self._live_close_history.pop(0)
+
+        state = HybridExitState.from_dict(trade)
+        decision = self._live_hybrid_engine.evaluate(
+            state=state,
+            favorable_move=favorable_move,
+            entry_price=entry_price,
+            close=current_price,
+            ema51=ema51,
+            atr=atr,
+            adx=adx,
+            signal_side=signal_side,
+            velocity_window_close=list(self._live_close_history),
+        )
+        trade.update(decision.updated_state.to_dict())
+
+        logger.debug(
+            "[HYBRID EXIT] token=%s side=%s strategy=%s phase=%s profit=%.1f peak=%.1f exit=%s reason=%s",
+            self.instrument_token,
+            signal_side,
+            strategy_type,
+            decision.phase_name,
+            favorable_move,
+            decision.peak_profit,
+            decision.exit_now,
+            decision.exit_reason,
+        )
+
+        if decision.exit_now:
+            active_priority_list, strategy_priorities = self._active_strategy_priorities()
+            payload = {
+                "instrument_token": self.instrument_token,
+                "symbol": self.symbol,
+                "signal_side": signal_side,
+                "signal_type": strategy_type,
+                "priority_list": active_priority_list,
+                "strategy_priorities": strategy_priorities,
+                "signal_x": 0.0,
+                "price_close": current_price,
+                "stoploss_points": float(self.automation_stoploss_input.value()),
+                "route": self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL,
+                "order_type": self.automation_order_type_combo.currentData() or self.ORDER_TYPE_MARKET,
+                "timestamp": f"hybrid_exit_{decision.exit_reason}",
+                "is_exit": True,
+                "exit_reason": decision.exit_reason,
+            }
+            logger.info(
+                "[HYBRID EXIT] FIRING EXIT token=%s side=%s reason=%s price=%.2f",
+                self.instrument_token,
+                signal_side,
+                decision.exit_reason,
+                current_price,
+            )
+            self.automation_signal.emit(payload)
+            self._live_trade_info = None
+            self._live_close_history.clear()
 
     def _on_signal_filter_changed(self, *_):
         if getattr(self, "_syncing_signal_filters", False):
@@ -3598,6 +3736,29 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
 
         if current_minute <= self._last_live_refresh_minute:
             return
+
+        # Hybrid exit check on bar close before historical reload.
+        if self._live_trade_info is not None and self._live_hybrid_engine is not None:
+            try:
+                price_arr = self.all_price_data
+                high_arr = self.all_price_high_data
+                low_arr = self.all_price_low_data
+                if len(price_arr) >= 14 and len(high_arr) >= 14 and len(low_arr) >= 14:
+                    closes = np.array(price_arr[-50:], dtype=float)
+                    highs = np.array(high_arr[-50:], dtype=float)
+                    lows = np.array(low_arr[-50:], dtype=float)
+                    atr_arr = calculate_atr(highs, lows, closes, 14)
+                    adx_arr = compute_adx(highs, lows, closes, 14)
+                    ema51_arr = calculate_ema(closes, 51)
+                    if len(atr_arr) and len(adx_arr) and len(ema51_arr):
+                        self._check_live_hybrid_exit(
+                            current_price=float(closes[-1]),
+                            ema51=float(ema51_arr[-1]),
+                            atr=float(atr_arr[-1]),
+                            adx=float(adx_arr[-1]),
+                        )
+            except Exception as exc:
+                logger.warning("[HYBRID EXIT] Bar-close check failed: %s", exc)
 
         self._load_and_plot(force=True)
 
