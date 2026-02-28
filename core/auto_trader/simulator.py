@@ -335,6 +335,7 @@ class SimulatorMixin:
         stop_points = float(max(0.1, self.automation_stoploss_input.value()))
         max_profit_giveback_points = float(max(0.0, self.max_profit_giveback_input.value()))
         open_drive_max_profit_giveback_points = float(max(0.0, getattr(self, "open_drive_max_profit_giveback_input", None).value() if getattr(self, "open_drive_max_profit_giveback_input", None) is not None else 0.0))
+        giveback_promotion_points = float(max(0.0, getattr(self, "giveback_promotion_points_input", None).value() if getattr(self, "giveback_promotion_points_input", None) is not None else 150.0))
         max_profit_giveback_strategies = set(self._selected_max_giveback_strategies())
         atr_skip_limit = int(getattr(self, "atr_skip_limit_input", None) and
                              self.atr_skip_limit_input.value() or 0)
@@ -609,6 +610,23 @@ class SimulatorMixin:
                 cvd_cross_below_ema51 = has_cvd_ema51 and prev_cvd >= prev_cvd_ema51 and cvd_close[idx] < cvd_ema51[idx]
 
                 active_strategy_type = active_trade.get("strategy_type") or "atr_reversal"
+                effective_exit_mode = active_trade.get("effective_exit_mode", _exit_mode)
+
+                if (
+                    active_trade.get("giveback_upgrade_eligible", False)
+                    and effective_exit_mode == "giveback"
+                ):
+                    requested_exit_mode = active_trade.get("requested_exit_mode", _exit_mode)
+                    promotion_points = float(active_trade.get("giveback_promotion_points", giveback_promotion_points))
+                    if promotion_points <= 0 or max_favorable_points >= promotion_points:
+                        effective_exit_mode = requested_exit_mode
+                        active_trade["effective_exit_mode"] = effective_exit_mode
+                        if (
+                            effective_exit_mode == "hybrid"
+                            and _hybrid_engine is not None
+                            and "hybrid_phase" not in active_trade
+                        ):
+                            active_trade.update(HybridExitState().to_dict())
 
                 adx_now = float(adx_full[idx]) if idx < len(adx_full) and np.isfinite(adx_full[idx]) else 0.0
                 regime_is_chop = adx_now < 20.0
@@ -673,7 +691,7 @@ class SimulatorMixin:
                             else max_profit_giveback_points
                         )
                         giveback_enabled_for_strategy = (
-                            _exit_mode == "giveback"
+                            effective_exit_mode == "giveback"
                             and (
                                 use_open_drive_override
                                 or active_strategy_type in max_profit_giveback_strategies
@@ -691,7 +709,7 @@ class SimulatorMixin:
                 # If the impulse never qualifies (low ADX, quiet market), EMA exits still fire.
                 _hybrid_phase = active_trade.get("hybrid_phase", PHASE_EARLY)
                 _skip_structural = (
-                    _exit_mode == "hybrid"
+                    effective_exit_mode == "hybrid"
                     and active_strategy_type in HYBRID_EXIT_STRATEGIES
                     and _hybrid_phase != PHASE_EARLY   # ← KEY FIX: only skip when hybrid is active
                 )
@@ -875,10 +893,19 @@ class SimulatorMixin:
             if not np.isfinite(entry_price):
                 continue
             sl_underlying = entry_price - stop_points if signal_side == "long" else entry_price + stop_points
+            use_giveback_qualification = (
+                _exit_mode in {"trend", "hybrid"}
+                and signal_strategy in max_profit_giveback_strategies
+            )
+            effective_exit_mode = "giveback" if use_giveback_qualification else _exit_mode
             active_trade = {
                 "signal_side": signal_side,
                 "signal_timestamp": ts,
                 "strategy_type": signal_strategy,
+                "requested_exit_mode": _exit_mode,
+                "effective_exit_mode": effective_exit_mode,
+                "giveback_upgrade_eligible": use_giveback_qualification,
+                "giveback_promotion_points": giveback_promotion_points,
                 "entry_price": entry_price,
                 "entry_atr": float(atr_full[idx]) if idx < len(atr_full) and np.isfinite(atr_full[idx]) and atr_full[idx] > 0 else 0.0,
                 "max_favorable_points": 0.0,
@@ -894,7 +921,7 @@ class SimulatorMixin:
                 "last_cvd_ema51": float(cvd_ema51[idx]),
                 "last_cvd_ema51_simple": float(cvd_ema51[idx]),
             }
-            if _exit_mode == "hybrid":
+            if effective_exit_mode == "hybrid":
                 active_trade.update(HybridExitState().to_dict())
 
             stacker_allowed_for_trade = stacker_enabled and (signal_strategy != "open_drive" or open_drive_stack_enabled)

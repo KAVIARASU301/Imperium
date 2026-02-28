@@ -124,10 +124,12 @@ class SetupPanelMixin:
         auto_grp, auto_frm = _group("Automation")
         _w(self.automation_stoploss_input)
         _w(self.max_profit_giveback_input)
+        _w(self.giveback_promotion_points_input)
         _wc(self.automation_route_combo)
         _wc(self.automation_order_type_combo)
         auto_frm.addRow("Stop Loss",         self.automation_stoploss_input)
         auto_frm.addRow("Max Giveback",      self.max_profit_giveback_input)
+        auto_frm.addRow("Promo Points",      self.giveback_promotion_points_input)
 
         gb_row = QWidget()
         gb_lay = QHBoxLayout(gb_row)

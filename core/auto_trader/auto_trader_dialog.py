@@ -410,6 +410,19 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         )
         self.max_profit_giveback_input.valueChanged.connect(self._on_automation_settings_changed)
 
+        self.giveback_promotion_points_input = QSpinBox()
+        self.giveback_promotion_points_input.setRange(50, 5000)
+        self.giveback_promotion_points_input.setValue(150)
+        self.giveback_promotion_points_input.setSingleStep(10)
+        self.giveback_promotion_points_input.setFixedWidth(96)
+        self.giveback_promotion_points_input.setStyleSheet(compact_spinbox_style)
+        self.giveback_promotion_points_input.setToolTip(
+            "Qualification points for Giveback → Trend/Hybrid promotion.\n"
+            "When toolbar mode is Trend/Hybrid and strategy is in Giveback On list,\n"
+            "trade starts in Giveback and upgrades after reaching this favorable move."
+        )
+        self.giveback_promotion_points_input.valueChanged.connect(self._on_automation_settings_changed)
+
         # ── Exit mode selector ─────────────────────────────────────────────
         self.exit_mode_combo = QComboBox()
         self.exit_mode_combo.setFixedWidth(160)
@@ -1471,6 +1484,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.automate_toggle.blockSignals(True)
         self.automation_stoploss_input.blockSignals(True)
         self.max_profit_giveback_input.blockSignals(True)
+        self.giveback_promotion_points_input.blockSignals(True)
         self.exit_mode_combo.blockSignals(True)
         self.hybrid_adx_unlock_input.blockSignals(True)
         self.hybrid_atr_ratio_input.blockSignals(True)
@@ -1590,6 +1604,9 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         )
         self.max_profit_giveback_input.setValue(
             _read_setting("max_profit_giveback_points", self.max_profit_giveback_input.value(), int)
+        )
+        self.giveback_promotion_points_input.setValue(
+            _read_setting("giveback_promotion_points", self.giveback_promotion_points_input.value(), int)
         )
         _mode_map = {"giveback": 0, "trend": 1, "hybrid": 2}
         persisted_exit_mode = _read_setting("exit_mode", None, str)
@@ -1854,6 +1871,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.automate_toggle.blockSignals(False)
         self.automation_stoploss_input.blockSignals(False)
         self.max_profit_giveback_input.blockSignals(False)
+        self.giveback_promotion_points_input.blockSignals(False)
         self.exit_mode_combo.blockSignals(False)
         self.hybrid_adx_unlock_input.blockSignals(False)
         self.hybrid_atr_ratio_input.blockSignals(False)
@@ -2012,6 +2030,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
             "enabled": self.automate_toggle.isChecked(),
             "stoploss_points": int(self.automation_stoploss_input.value()),
             "max_profit_giveback_points": int(self.max_profit_giveback_input.value()),
+            "giveback_promotion_points": int(self.giveback_promotion_points_input.value()),
             "exit_mode": self._selected_exit_mode(),
             "hybrid_adx_unlock": float(self.hybrid_adx_unlock_input.value()),
             "hybrid_atr_ratio_unlock": float(self.hybrid_atr_ratio_input.value()),
@@ -2157,6 +2176,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
             "enabled": self.automate_toggle.isChecked(),
             "stoploss_points": float(self.automation_stoploss_input.value()),
             "max_profit_giveback_points": float(self.max_profit_giveback_input.value()),
+            "giveback_promotion_points": float(self.giveback_promotion_points_input.value()),
             "exit_mode": self._selected_exit_mode(),
             "max_profit_giveback_strategies": self._selected_max_giveback_strategies(),
             "dynamic_exit_trend_following_strategies": self._selected_dynamic_exit_strategies(),

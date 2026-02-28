@@ -24,6 +24,14 @@ class DummyCheck:
         return self._checked
 
 
+class DummyCombo:
+    def __init__(self, data):
+        self._data = data
+
+    def currentData(self):
+        return self._data
+
+
 class DummySimulator(SimulatorMixin):
 
     def __init__(self):
@@ -54,6 +62,8 @@ class DummySimulator(SimulatorMixin):
         self.max_profit_giveback_strategies = set()
 
         self._selected_max_giveback_strategies = lambda: set()
+        self.giveback_promotion_points_input = DummyInput(150)
+        self.exit_mode_combo = DummyCombo("giveback")
 
         self._active_strategy_priorities = lambda: ([], {})
         self._selected_dynamic_exit_strategies = lambda: set()
@@ -110,3 +120,62 @@ def test_simulator_stacker_engine_accounting():
     # Expected = 45
 
     assert round(total_points, 2) == 45.0
+
+
+def test_giveback_qualification_promotes_to_trend_mode():
+    sim = DummySimulator()
+    sim.all_price_data = np.array([100, 300, 260, 250], dtype=float)
+    sim.all_price_high_data = sim.all_price_data
+    sim.all_price_low_data = sim.all_price_data
+    sim.all_cvd_data = sim.all_price_data
+
+    base_time = datetime(2024, 1, 1, 9, 15)
+    sim.all_timestamps = [base_time + timedelta(minutes=i) for i in range(len(sim.all_price_data))]
+
+    sim.max_profit_giveback_input = DummyInput(40)
+    sim.exit_mode_combo = DummyCombo("trend")
+    sim._selected_max_giveback_strategies = lambda: {"ema_cross"}
+
+    def _resolve_signal(**kwargs):
+        idx = kwargs["idx"]
+        return ("long", "ema_cross") if idx == 0 else (None, None)
+
+    sim._resolve_signal_side_and_strategy = _resolve_signal
+
+    x_arr = np.arange(len(sim.all_price_data))
+    long_mask = np.array([True, False, False, False])
+    short_mask = np.array([False, False, False, False])
+
+    results = sim._run_trade_simulation(x_arr=x_arr, short_mask=short_mask, long_mask=long_mask, strategy_masks=None)
+
+    assert round(results["total_points"], 2) == 150.0
+
+
+def test_giveback_qualification_keeps_giveback_before_threshold():
+    sim = DummySimulator()
+    sim.all_price_data = np.array([100, 220, 170, 160], dtype=float)
+    sim.all_price_high_data = sim.all_price_data
+    sim.all_price_low_data = sim.all_price_data
+    sim.all_cvd_data = sim.all_price_data
+
+    base_time = datetime(2024, 1, 1, 9, 15)
+    sim.all_timestamps = [base_time + timedelta(minutes=i) for i in range(len(sim.all_price_data))]
+
+    sim.max_profit_giveback_input = DummyInput(40)
+    sim.exit_mode_combo = DummyCombo("trend")
+    sim.giveback_promotion_points_input = DummyInput(150)
+    sim._selected_max_giveback_strategies = lambda: {"ema_cross"}
+
+    def _resolve_signal(**kwargs):
+        idx = kwargs["idx"]
+        return ("long", "ema_cross") if idx == 0 else (None, None)
+
+    sim._resolve_signal_side_and_strategy = _resolve_signal
+
+    x_arr = np.arange(len(sim.all_price_data))
+    long_mask = np.array([True, False, False, False])
+    short_mask = np.array([False, False, False, False])
+
+    results = sim._run_trade_simulation(x_arr=x_arr, short_mask=short_mask, long_mask=long_mask, strategy_masks=None)
+
+    assert round(results["total_points"], 2) == 70.0
