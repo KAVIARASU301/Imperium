@@ -302,7 +302,7 @@ class SetupPanelMixin:
         c2 = _col()
         c2.addWidget(stk_grp)
 
-        # ── Range Breakout (built here, displayed in its own strategy tab) ─
+        # ── Range Breakout (built here, shown in its own strategy tab) ────
         brk_grp, brk_frm = _group("Range Breakout")
 
         self.range_lookback_input = QSpinBox()
@@ -1131,6 +1131,285 @@ class SetupPanelMixin:
         priority_layout_root.addLayout(cpr_col, 1)
         priority_layout_root.addWidget(priority_panel, 3)
 
+        # ══════════════════════════════════════════════════════════════════
+        # SHARED INFO PANEL FACTORY
+        # Reuses the same visual language as the CVD Range Breakout panel.
+        # ══════════════════════════════════════════════════════════════════
+        _PANEL_BG_S      = "#1A1F2E"
+        _PANEL_BORDER_S  = "#2A3348"
+        _HEAD_COLOR_S    = "#9CCAF4"
+        _BODY_COLOR_S    = "#B8C8D8"
+        _ACCENT_LONG_S   = "#4CAF82"
+        _ACCENT_SHORT_S  = "#E05C5C"
+        _ACCENT_EXIT_S   = "#F0A040"
+        _GUIDE_COLOR_S   = "#A8BCC8"
+        _ACCENT_NOTE_S   = "#C8A8E0"
+
+        def _make_info_panel() -> tuple:
+            """Return (panel_widget, layout) pre-styled."""
+            panel = QWidget()
+            panel.setObjectName("stratInfoPanel")
+            panel.setStyleSheet(f"""
+                QWidget#stratInfoPanel {{
+                    background: {_PANEL_BG_S};
+                    border: 1px solid {_PANEL_BORDER_S};
+                    border-radius: 6px;
+                }}
+            """)
+            lay = QVBoxLayout(panel)
+            lay.setContentsMargins(12, 10, 12, 10)
+            lay.setSpacing(5)
+            return panel, lay
+
+        def _sh(text, color=_HEAD_COLOR_S):
+            lbl = QLabel(text)
+            lbl.setStyleSheet(
+                f"color:{color}; font-size:10px; font-weight:700; border:none; padding:2px 0 1px 0;")
+            return lbl
+
+        def _sb(text, color=_BODY_COLOR_S):
+            lbl = QLabel(text)
+            lbl.setStyleSheet(
+                f"color:{color}; font-size:9px; font-weight:400; border:none;")
+            lbl.setWordWrap(True)
+            return lbl
+
+        def _sdiv():
+            line = QWidget()
+            line.setFixedHeight(1)
+            line.setStyleSheet(f"background:{_PANEL_BORDER_S}; border:none;")
+            return line
+
+        def _sguide(entries: list[tuple[str, str]], lay: QVBoxLayout):
+            for problem, fix in entries:
+                rw = QWidget(); rw.setStyleSheet("border:none;")
+                rl = QHBoxLayout(rw); rl.setContentsMargins(0,1,0,1); rl.setSpacing(6)
+                pl = QLabel(f"• {problem}")
+                pl.setStyleSheet(f"color:{_GUIDE_COLOR_S}; font-size:9px; font-weight:400; border:none;")
+                pl.setMinimumWidth(200)
+                fl = QLabel(fix)
+                fl.setStyleSheet(f"color:{_ACCENT_LONG_S}; font-size:9px; font-weight:600; border:none;")
+                rl.addWidget(pl); rl.addWidget(fl); rl.addStretch()
+                lay.addWidget(rw)
+
+        def _two_col_tab(left_widgets: list, info_panel: QWidget) -> QWidget:
+            tab = QWidget()
+            tl = QHBoxLayout(tab)
+            tl.setContentsMargins(6, 12, 6, 6)
+            tl.setSpacing(10)
+            left = QVBoxLayout(); left.setSpacing(_GRP_SPACING)
+            for w in left_widgets:
+                left.addWidget(w)
+            left.addStretch()
+            right = QVBoxLayout(); right.setSpacing(0)
+            right.addWidget(info_panel)
+            tl.addLayout(left, 0)
+            tl.addLayout(right, 1)
+            return tab
+
+        # ── ATR Reversal info panel ────────────────────────────────────────
+        atr_rev_panel, atr_rev_lay = _make_info_panel()
+
+        atr_rev_lay.addWidget(_sh("⚡  Entry Triggers"))
+        atr_rev_lay.addWidget(_sb(
+            "Confluence of ATR reversal in both Price AND CVD simultaneously. "
+            "CVD confirmation is valid within a 5-bar rolling window.", _BODY_COLOR_S))
+        for color, text in [
+            (_ACCENT_LONG_S,  "LONG  — Price ATR reversal below EMA  +  CVD ATR reversal below EMA51"),
+            (_ACCENT_SHORT_S, "SHORT — Price ATR reversal above EMA  +  CVD ATR reversal above EMA51"),
+        ]:
+            atr_rev_lay.addWidget(_sb(text, color))
+
+        atr_rev_lay.addWidget(_sb(
+            "Volatility gate: normalized ATR must be > 1.10× baseline AND ATR "
+            "velocity must be flat/contracting — OR both price & CVD fire on the exact same bar.", _ACCENT_NOTE_S))
+
+        atr_rev_lay.addSpacing(4); atr_rev_lay.addWidget(_sdiv()); atr_rev_lay.addSpacing(4)
+        atr_rev_lay.addWidget(_sh("🚪  Exit Triggers", _ACCENT_EXIT_S))
+        for txt in [
+            "LONG  exit — Stop Loss hit  |  Max Giveback triggered  |  Trend Exit if enabled",
+            "SHORT exit — Stop Loss hit  |  Max Giveback triggered  |  Trend Exit if enabled",
+            "Breakout active: opposing ATR reversal signals suppressed (Adaptive mode)",
+        ]:
+            atr_rev_lay.addWidget(_sb(f"• {txt}"))
+
+        atr_rev_lay.addSpacing(4); atr_rev_lay.addWidget(_sdiv()); atr_rev_lay.addSpacing(4)
+        atr_rev_lay.addWidget(_sh("🎯  Quick Tuning Guide"))
+        _sguide([
+            ("Getting zero signals?",              "Check ATR Ext Min — lower to 1.05 or 0"),
+            ("Too many bad reversal signals?",     "Raise ATR Ext Min → 1.20,  ATR Flat Vel% → 0.03"),
+            ("Signals fire too early (not peaked)?","Raise ATR Flat Vel% → 0.05"),
+            ("ATR firing during breakout trends?", "Set Breakout vs ATR → Keep Breakout"),
+            ("Missing big mean-reversion moves?",  "Lower ATR Base EMA,  raise CVD Z-Score Min"),
+            ("Signals cancelled by regime block?", "Check chop filter — disable ATR Reversal filter"),
+        ], atr_rev_lay)
+        atr_rev_lay.addStretch()
+
+        # ── ATR Divergence info panel ──────────────────────────────────────
+        atr_div_panel, atr_div_lay = _make_info_panel()
+
+        atr_div_lay.addWidget(_sh("⚡  Entry Triggers"))
+        atr_div_lay.addWidget(_sb(
+            "Price makes an ATR reversal while CVD is ALREADY trending strongly "
+            "in the trade direction — no reversal in CVD expected.", _BODY_COLOR_S))
+        for color, text in [
+            (_ACCENT_LONG_S,  "LONG  — Price ATR reversal below EMA  +  CVD above BOTH EMA10 & EMA51  +  CVD slope up"),
+            (_ACCENT_SHORT_S, "SHORT — Price ATR reversal above EMA  +  CVD below BOTH EMA10 & EMA51  +  CVD slope down"),
+        ]:
+            atr_div_lay.addWidget(_sb(text, color))
+        atr_div_lay.addWidget(_sb(
+            "Key difference from ATR Reversal: CVD is not reversing — it is in a "
+            "persistent trend. Price dips/pops are counter-trend moves to fade.", _ACCENT_NOTE_S))
+        atr_div_lay.addWidget(_sb(
+            "EMA Cross signals are excluded to avoid double-firing on the same bar.", _BODY_COLOR_S))
+
+        atr_div_lay.addSpacing(4); atr_div_lay.addWidget(_sdiv()); atr_div_lay.addSpacing(4)
+        atr_div_lay.addWidget(_sh("🚪  Exit Triggers", _ACCENT_EXIT_S))
+        for txt in [
+            "LONG  exit — Stop Loss hit  |  Max Giveback  |  Trend Exit if enabled",
+            "SHORT exit — Stop Loss hit  |  Max Giveback  |  Trend Exit if enabled",
+            "CVD slope flip (if Trend Exit enabled) — divergence assumption invalidated",
+        ]:
+            atr_div_lay.addWidget(_sb(f"• {txt}"))
+
+        atr_div_lay.addSpacing(4); atr_div_lay.addWidget(_sdiv()); atr_div_lay.addSpacing(4)
+        atr_div_lay.addWidget(_sh("🎯  Quick Tuning Guide"))
+        _sguide([
+            ("Getting zero signals?",               "CVD Z-Score Min too high — lower to 0.3"),
+            ("Too many signals in sideways market?", "Enable Chop Filter for ATR Divergence"),
+            ("Signals in wrong direction?",          "CVD may be oscillating — raise CVD Z-Score Min"),
+            ("Want only strongest trend fades?",     "Raise ATR Ext Min → 1.25"),
+            ("Regime blocks too aggressive?",        "Disable chop filter for this strategy"),
+            ("Missing entries in strong trends?",    "Lower ATR Flat Vel% → 0.01"),
+        ], atr_div_lay)
+        atr_div_lay.addStretch()
+
+        # ── EMA Cross info panel ───────────────────────────────────────────
+        ema_cross_panel, ema_cross_panel_lay = _make_info_panel()
+
+        ema_cross_panel_lay.addWidget(_sh("⚡  Entry Triggers"))
+        ema_cross_panel_lay.addWidget(_sb(
+            "Momentum continuation: price is already committed to a side, and CVD "
+            "crossing EMA51 confirms institutional order flow is aligned.", _BODY_COLOR_S))
+        for color, text in [
+            (_ACCENT_LONG_S,  "LONG  — Price > EMA10 & EMA51  +  CVD > EMA10  +  CVD crosses ABOVE EMA51  +  price & CVD slope up"),
+            (_ACCENT_SHORT_S, "SHORT — Price < EMA10 & EMA51  +  CVD < EMA10  +  CVD crosses BELOW EMA51  +  price & CVD slope down"),
+        ]:
+            ema_cross_panel_lay.addWidget(_sb(text, color))
+        ema_cross_panel_lay.addWidget(_sb(
+            "Anti-hug filter: CVD must be meaningfully away from EMA51 (gap > CVD EMA Gap × 0.5) "
+            "to avoid false crosses in flat/hugging CVD.", _ACCENT_NOTE_S))
+        ema_cross_panel_lay.addWidget(_sb(
+            "Parent Trend (optional): 5-minute EMA10 must be above/below EMA51 "
+            "with both slopes confirming — acts as a higher-timeframe gate.", _BODY_COLOR_S))
+
+        ema_cross_panel_lay.addSpacing(4); ema_cross_panel_lay.addWidget(_sdiv()); ema_cross_panel_lay.addSpacing(4)
+        ema_cross_panel_lay.addWidget(_sh("🚪  Exit Triggers", _ACCENT_EXIT_S))
+        for txt in [
+            "LONG  exit — Price closes below EMA10  OR  CVD crosses below EMA10",
+            "SHORT exit — Price closes above EMA10  OR  CVD crosses above EMA10",
+            "Stop Loss hit  |  Max Giveback  |  Trend Exit if enabled",
+        ]:
+            ema_cross_panel_lay.addWidget(_sb(f"• {txt}"))
+
+        ema_cross_panel_lay.addSpacing(4); ema_cross_panel_lay.addWidget(_sdiv()); ema_cross_panel_lay.addSpacing(4)
+        ema_cross_panel_lay.addWidget(_sh("🎯  Quick Tuning Guide"))
+        _sguide([
+            ("Too many false crosses in chop?",     "Raise CVD EMA Gap threshold → 2.0+"),
+            ("Missing signals in strong trends?",   "Lower CVD EMA Gap → 0.3,  disable Parent Trend"),
+            ("Parent Trend blocking valid signals?","Disable 'Require 5m Parent Trend'"),
+            ("Signals too late (momentum faded)?",  "Lower CVD EMA Gap so crosses fire earlier"),
+            ("Want higher-quality trend rides only?","Keep Parent Trend ON,  raise CVD EMA Gap"),
+            ("CVD hugging EMA51 giving phantom signals?", "Raise CVD EMA Gap → 1.5"),
+        ], ema_cross_panel_lay)
+        ema_cross_panel_lay.addStretch()
+
+        # ── Range Breakout info panel ──────────────────────────────────────
+        brk_panel, brk_panel_lay = _make_info_panel()
+
+        brk_panel_lay.addWidget(_sh("⚡  Entry Triggers"))
+        brk_panel_lay.addWidget(_sb(
+            "Price consolidates within a rolling range window, then breaks out with "
+            "volume and CVD confirmation. Squeeze tightness adjusts breakout threshold dynamically.", _BODY_COLOR_S))
+        for color, text in [
+            (_ACCENT_LONG_S,  "LONG  — Price closes ABOVE range high  +  CVD bullish or rising  +  volume ≥ avg × 1.05  +  breakout strength ≥ threshold"),
+            (_ACCENT_SHORT_S, "SHORT — Price closes BELOW range low   +  CVD bearish or falling +  volume ≥ avg × 1.05  +  breakout strength ≥ threshold"),
+        ]:
+            brk_panel_lay.addWidget(_sb(text, color))
+        brk_panel_lay.addWidget(_sb(
+            "Min Consolidation: if set, price must have been range-bound for at least N minutes "
+            "before breakout fires — prevents chasing extended moves.", _ACCENT_NOTE_S))
+        brk_panel_lay.addWidget(_sb(
+            "ATR Trail Base: trailing stop expands with volatility (current ATR / entry ATR). "
+            "Fast breakouts widen automatically so you stay in.", _BODY_COLOR_S))
+
+        brk_panel_lay.addSpacing(4); brk_panel_lay.addWidget(_sdiv()); brk_panel_lay.addSpacing(4)
+        brk_panel_lay.addWidget(_sh("🚪  Exit Triggers", _ACCENT_EXIT_S))
+        for txt in [
+            "LONG  exit — Price closes below EMA10",
+            "SHORT exit — Price closes above EMA10",
+            "ATR Trailing Stop hit (ATR Trail Base, scales with volatility)",
+            "Stop Loss hit  |  Max Giveback  |  Trend Exit if enabled",
+            "Breakout vs ATR mode: 'Keep Breakout' suppresses opposing ATR reversals",
+        ]:
+            brk_panel_lay.addWidget(_sb(f"• {txt}"))
+
+        brk_panel_lay.addSpacing(4); brk_panel_lay.addWidget(_sdiv()); brk_panel_lay.addSpacing(4)
+        brk_panel_lay.addWidget(_sh("🎯  Quick Tuning Guide"))
+        _sguide([
+            ("No signals firing?",                  "Lower Range Lookback → 10,  check volume data"),
+            ("Too many false breakouts?",            "Enable Min Consol → 15 min,  Max ADX → 20"),
+            ("Breakout reverses immediately?",       "Raise ATR Trail Base → 15,  add Min Consol"),
+            ("ATR reversals killing breakout ride?", "Set Breakout vs ATR → Keep Breakout"),
+            ("Want only strong squeeze breakouts?",  "Set Min Consol → 20,  Max ADX → 18"),
+            ("Missing moves after ATR signals?",     "Raise ATR Skip Limit → 2–3"),
+        ], brk_panel_lay)
+        brk_panel_lay.addStretch()
+
+        # ── Open Drive info panel ──────────────────────────────────────────
+        od_panel, od_panel_lay = _make_info_panel()
+
+        od_panel_lay.addWidget(_sh("⚡  Entry Triggers"))
+        od_panel_lay.addWidget(_sb(
+            "Fires ONCE per session, at the exact configured time (default 09:17). "
+            "Missed window = no signal for that day. Never chases later bars.", _BODY_COLOR_S))
+        for color, text in [
+            (_ACCENT_LONG_S,  "LONG  — Price > EMA10 AND Price > EMA51  +  CVD > CVD EMA10"),
+            (_ACCENT_SHORT_S, "SHORT — Price < EMA10 AND Price < EMA51  +  CVD < CVD EMA10"),
+        ]:
+            od_panel_lay.addWidget(_sb(text, color))
+        od_panel_lay.addWidget(_sb(
+            "Price must be cleanly above or below BOTH EMAs — EMA ordering is not required. "
+            "This captures clear directional alignment early in the session.", _ACCENT_NOTE_S))
+        od_panel_lay.addWidget(_sb(
+            "VWAP is monitored but not a hard gate — use as additional confluence context.", _BODY_COLOR_S))
+
+        od_panel_lay.addSpacing(4); od_panel_lay.addWidget(_sdiv()); od_panel_lay.addSpacing(4)
+        od_panel_lay.addWidget(_sh("🚪  Exit Triggers", _ACCENT_EXIT_S))
+        for txt in [
+            "OD Tick Drawdown — exits if adverse move from entry exceeds limit (live ticks)",
+            "OD Giveback — per-trade max profit giveback, overrides global setting",
+            "Stop Loss hit (global Automation stop loss)",
+            "Stacker continuation if 'Stack' is enabled — pyramid the open drive move",
+            "No time-based exit — holds until stop/giveback/manual close",
+        ]:
+            od_panel_lay.addWidget(_sb(f"• {txt}"))
+
+        od_panel_lay.addSpacing(4); od_panel_lay.addWidget(_sdiv()); od_panel_lay.addSpacing(4)
+        od_panel_lay.addWidget(_sh("🎯  Quick Tuning Guide"))
+        _sguide([
+            ("Signal never fires?",                 "Check Entry Time matches your session open"),
+            ("Firing on wrong direction days?",      "Lower OD Tick DD → 50 pts for quick exit"),
+            ("Getting stopped out too early?",       "Raise OD Tick DD → 150,  lower Stop Loss"),
+            ("Want to pyramid the open drive?",      "Enable Stack,  set Stacker step → 15–20 pts"),
+            ("OD runs far but no stacking?",         "Enable Stack in OD tab + Stacker in General"),
+            ("OD giveback too generous?",            "Set OD Giveback → 30–50 pts"),
+        ], od_panel_lay)
+        od_panel_lay.addStretch()
+
+        # ══════════════════════════════════════════════════════════════════
+        # ASSEMBLE TABS
+        # ══════════════════════════════════════════════════════════════════
         def _strategy_tab(*widgets: QWidget):
             tab = QWidget()
             lay = QVBoxLayout(tab)
@@ -1142,53 +1421,57 @@ class SetupPanelMixin:
             return tab
 
         tabs.addTab(general_tab, "General")
+
+        # ATR Reversal — knobs (sig_grp) left, info panel right
         tabs.addTab(
-            _strategy_tab(sig_grp),
+            _two_col_tab([sig_grp], atr_rev_panel),
             self.STRATEGY_PRIORITY_LABELS["atr_reversal"],
         )
-        tabs.addTab(
-            _strategy_tab(),
-            self.STRATEGY_PRIORITY_LABELS["atr_divergence"],
-        )
+
+        # ATR Divergence — no dedicated knobs yet, info panel full-width
+        atr_div_tab = QWidget()
+        atr_div_lay_root = QHBoxLayout(atr_div_tab)
+        atr_div_lay_root.setContentsMargins(6, 12, 6, 6)
+        atr_div_lay_root.setSpacing(0)
+        atr_div_lay_root.addWidget(atr_div_panel)
+        tabs.addTab(atr_div_tab, self.STRATEGY_PRIORITY_LABELS["atr_divergence"])
+
+        # EMA Cross — knobs left, info panel right
         ema_cross_grp, ema_cross_frm = _group("EMA & CVD Cross")
         _w(self.cvd_ema_gap_input)
         ema_cross_frm.addRow(_note("Configure EMA+CVD cross confluence behavior."))
         ema_cross_frm.addRow("CVD EMA Gap", self.cvd_ema_gap_input)
         ema_cross_frm.addRow("Parent Trend", self.ema_cross_use_parent_mask_check)
-
         tabs.addTab(
-            _strategy_tab(ema_cross_grp),
+            _two_col_tab([ema_cross_grp], ema_cross_panel),
             self.STRATEGY_PRIORITY_LABELS["ema_cross"],
         )
 
-        # ── CVD Range Breakout tab — 2-column layout ──────────────────────
+        # CVD Range Breakout — consol_grp removed; it belongs to Range Breakout tab
         cvd_tab = QWidget()
         cvd_tab_lay = QHBoxLayout(cvd_tab)
         cvd_tab_lay.setContentsMargins(6, 12, 6, 6)
         cvd_tab_lay.setSpacing(10)
-
-        # Left column: all knobs + consol group
         cvd_left = QVBoxLayout()
         cvd_left.setSpacing(_GRP_SPACING)
         cvd_left.addWidget(cvdbk_grp)
-        cvd_left.addWidget(consol_grp)
         cvd_left.addStretch()
-
-        # Right column: info panel (takes remaining space)
         cvd_right = QVBoxLayout()
         cvd_right.setSpacing(0)
         cvd_right.addWidget(cvd_info_panel)
-
-        cvd_tab_lay.addLayout(cvd_left, 0)    # fixed width — knobs don't stretch
-        cvd_tab_lay.addLayout(cvd_right, 1)   # info panel takes the rest
-
+        cvd_tab_lay.addLayout(cvd_left, 0)
+        cvd_tab_lay.addLayout(cvd_right, 1)
         tabs.addTab(cvd_tab, self.STRATEGY_PRIORITY_LABELS["cvd_range_breakout"])
+
+        # Range Breakout — brk_grp + consol_grp (pre-squeeze gate) left, info panel right
         tabs.addTab(
-            _strategy_tab(brk_grp),
+            _two_col_tab([brk_grp, consol_grp], brk_panel),
             self.STRATEGY_PRIORITY_LABELS["range_breakout"],
         )
+
+        # Open Drive — knobs left, info panel right
         tabs.addTab(
-            _strategy_tab(od_grp),
+            _two_col_tab([od_grp], od_panel),
             self.STRATEGY_PRIORITY_LABELS["open_drive"],
         )
         self._build_regime_tab(tabs, compact_spinbox_style, compact_combo_style)

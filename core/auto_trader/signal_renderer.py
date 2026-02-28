@@ -405,7 +405,9 @@ class SignalRendererMixin:
                 cvd_ema10=cvd_fast_filter,
                 volume=volume_data,
                 range_lookback_minutes=self.range_lookback_input.value(),
-                breakout_threshold_multiplier=1.5
+                breakout_threshold_multiplier=1.5,
+                min_consolidation_minutes=int(self.breakout_min_consol_input.value()),
+                min_consolidation_adx=float(self.breakout_min_consol_adx_input.value()),
             )
 
         short_cvd_range_breakout, long_cvd_range_breakout = self.strategy_detector.detect_cvd_range_breakout_strategy(
