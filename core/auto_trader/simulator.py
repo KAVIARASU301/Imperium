@@ -12,6 +12,15 @@ from core.auto_trader.indicators import (
 )
 from core.auto_trader.regime_engine import RegimeEngine
 from core.auto_trader.stacker import StackerState
+from core.auto_trader.hybrid_exit_engine import (
+    HybridExitEngine,
+    HybridExitState,
+    HybridExitConfig,
+    create_default_engine,
+    PHASE_EARLY,
+    PHASE_EXPANSION,
+    PHASE_DISTRIBUTION,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -363,6 +372,15 @@ class SimulatorMixin:
         stacker_max = int(self.stacker_max_input.value()) \
             if hasattr(self, "stacker_max_input") else 2
 
+        # ── Hybrid Exit Engine ────────────────────────────────────────
+        hybrid_exit_enabled = bool(
+            getattr(self, "hybrid_exit_enabled_check", None)
+            and self.hybrid_exit_enabled_check.isChecked()
+        )
+        _hybrid_engine = create_default_engine() if hybrid_exit_enabled else None
+        # Strategies that opt-in to hybrid exit (tune as needed)
+        HYBRID_EXIT_STRATEGIES = {"ema_cross", "range_breakout", "cvd_range_breakout", "open_drive"}
+
         active_trade = None
         sim_stacker: StackerState | None = None
         stack_window_minutes = 15.0
@@ -601,25 +619,60 @@ class SimulatorMixin:
                     )
                     if exit_now:
                         exit_reason = "atr_reversal_target"
-                elif active_strategy_type != "atr_reversal" and max_favorable_points > 0:
-                    use_open_drive_override = (
-                        active_strategy_type == "open_drive"
-                        and open_drive_max_profit_giveback_points > 0
-                    )
-                    effective_giveback_points = (
-                        open_drive_max_profit_giveback_points
-                        if use_open_drive_override
-                        else max_profit_giveback_points
-                    )
-                    giveback_enabled_for_strategy = (
-                        use_open_drive_override
-                        or active_strategy_type in max_profit_giveback_strategies
-                    )
-                    if giveback_enabled_for_strategy and effective_giveback_points > 0:
-                        giveback_points = max_favorable_points - favorable_move
-                        exit_now = giveback_points >= effective_giveback_points
-                        if exit_now:
-                            exit_reason = "max_profit_giveback"
+                elif active_strategy_type != "atr_reversal" and max_favorable_points >= 0:
+
+                    # ── HYBRID EXIT (phase-aware, options-optimised) ──────────
+                    if (
+                        _hybrid_engine is not None
+                        and active_strategy_type in HYBRID_EXIT_STRATEGIES
+                    ):
+                        _h_state = HybridExitState.from_dict(active_trade)
+
+                        # Build rolling close buffer for velocity calculation
+                        # (we read last velocity_window closes from the data arrays)
+                        _vel_win = _hybrid_engine.config.velocity_window
+                        _vel_closes = [
+                            float(close[max(0, idx - _vel_win + i)])
+                            for i in range(_vel_win)
+                        ]
+
+                        _decision = _hybrid_engine.evaluate(
+                            state=_h_state,
+                            favorable_move=favorable_move,
+                            entry_price=float(active_trade["entry_price"]),
+                            close=float(price_close),
+                            ema51=float(ema51[idx]),
+                            atr=float(atr_full[idx]) if idx < len(atr_full) else 0.0,
+                            adx=adx_now,
+                            signal_side=signal_side,
+                            velocity_window_close=_vel_closes,
+                        )
+                        active_trade.update(_decision.updated_state.to_dict())
+
+                        if _decision.exit_now:
+                            exit_now = True
+                            exit_reason = _decision.exit_reason
+
+                    # ── FALLBACK: legacy flat giveback (used when hybrid disabled) ──
+                    else:
+                        use_open_drive_override = (
+                            active_strategy_type == "open_drive"
+                            and open_drive_max_profit_giveback_points > 0
+                        )
+                        effective_giveback_points = (
+                            open_drive_max_profit_giveback_points
+                            if use_open_drive_override
+                            else max_profit_giveback_points
+                        )
+                        giveback_enabled_for_strategy = (
+                            use_open_drive_override
+                            or active_strategy_type in max_profit_giveback_strategies
+                        )
+                        if giveback_enabled_for_strategy and effective_giveback_points > 0:
+                            giveback_points = max_favorable_points - favorable_move
+                            exit_now = giveback_points >= effective_giveback_points
+                            if exit_now:
+                                exit_reason = "max_profit_giveback"
                 if (not exit_now) and active_strategy_type == "ema_cross":
                     ema_cross_exit_long = cvd_cross_below_ema10 or (regime_is_chop and (price_cross_below_ema10 or price_close < ema10[idx]))
                     ema_cross_exit_short = cvd_cross_above_ema10 or (regime_is_chop and (price_cross_above_ema10 or price_close > ema10[idx]))
@@ -818,6 +871,8 @@ class SimulatorMixin:
                 "last_cvd_ema51": float(cvd_ema51[idx]),
                 "last_cvd_ema51_simple": float(cvd_ema51[idx]),
             }
+            if hybrid_exit_enabled:
+                active_trade.update(HybridExitState().to_dict())
 
             stacker_allowed_for_trade = stacker_enabled and (signal_strategy != "open_drive" or open_drive_stack_enabled)
             if stacker_allowed_for_trade:

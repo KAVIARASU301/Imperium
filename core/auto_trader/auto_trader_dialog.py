@@ -403,6 +403,11 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         )
         self.max_profit_giveback_input.valueChanged.connect(self._on_automation_settings_changed)
 
+        self.hybrid_exit_enabled_check = QCheckBox("Hybrid Exit (Options Phase Engine)")
+        self.hybrid_exit_enabled_check.setChecked(True)
+        self.hybrid_exit_enabled_check.setToolTip("Enable phase-aware hybrid exit engine for selected trend-following strategies.")
+        self.hybrid_exit_enabled_check.toggled.connect(self._on_automation_settings_changed)
+
         self.max_giveback_atr_reversal_check = QCheckBox("ATR Rev")
         self.max_giveback_atr_reversal_check.setChecked(False)
         self.max_giveback_atr_reversal_check.setToolTip("Apply max profit giveback exit to ATR Reversal trades.")
@@ -1298,6 +1303,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.automate_toggle.blockSignals(True)
         self.automation_stoploss_input.blockSignals(True)
         self.max_profit_giveback_input.blockSignals(True)
+        self.hybrid_exit_enabled_check.blockSignals(True)
         self.max_giveback_atr_reversal_check.blockSignals(True)
         self.max_giveback_ema_cross_check.blockSignals(True)
         self.max_giveback_atr_divergence_check.blockSignals(True)
@@ -1405,6 +1411,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.max_profit_giveback_input.setValue(
             _read_setting("max_profit_giveback_points", self.max_profit_giveback_input.value(), int)
         )
+        self.hybrid_exit_enabled_check.setChecked(_read_setting("hybrid_exit_enabled", True, bool))
         max_giveback_strategies = _read_setting(
             "max_profit_giveback_strategies",
             list(self._max_giveback_strategy_defaults()),
@@ -1650,6 +1657,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.automate_toggle.blockSignals(False)
         self.automation_stoploss_input.blockSignals(False)
         self.max_profit_giveback_input.blockSignals(False)
+        self.hybrid_exit_enabled_check.blockSignals(False)
         self.max_giveback_atr_reversal_check.blockSignals(False)
         self.max_giveback_ema_cross_check.blockSignals(False)
         self.max_giveback_atr_divergence_check.blockSignals(False)
@@ -1795,6 +1803,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
             "enabled": self.automate_toggle.isChecked(),
             "stoploss_points": int(self.automation_stoploss_input.value()),
             "max_profit_giveback_points": int(self.max_profit_giveback_input.value()),
+            "hybrid_exit_enabled": self.hybrid_exit_enabled_check.isChecked(),
             "max_profit_giveback_strategies": self._selected_max_giveback_strategies(),
             "dynamic_exit_trend_following_strategies": self._selected_dynamic_exit_strategies(),
             "trend_exit_adx_min": float(self.trend_exit_adx_min_input.value()),
@@ -1927,6 +1936,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
             "enabled": self.automate_toggle.isChecked(),
             "stoploss_points": float(self.automation_stoploss_input.value()),
             "max_profit_giveback_points": float(self.max_profit_giveback_input.value()),
+            "hybrid_exit_enabled": self.hybrid_exit_enabled_check.isChecked(),
             "max_profit_giveback_strategies": self._selected_max_giveback_strategies(),
             "dynamic_exit_trend_following_strategies": self._selected_dynamic_exit_strategies(),
             "trend_exit_adx_min": float(self.trend_exit_adx_min_input.value()),
