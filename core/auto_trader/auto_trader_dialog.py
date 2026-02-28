@@ -410,15 +410,19 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         )
         self.max_profit_giveback_input.valueChanged.connect(self._on_automation_settings_changed)
 
-        # ── Hybrid Exit widgets ───────────────────────────────────────────
-        self.hybrid_exit_enabled_check = QCheckBox("Enable Hybrid Phase Exit")
-        self.hybrid_exit_enabled_check.setChecked(True)
-        self.hybrid_exit_enabled_check.setToolTip(
-            "Replace flat giveback with the 3-phase momentum exit engine.\n"
-            "EARLY → EXPANSION (ride premium) → DISTRIBUTION (convex trail).\n"
-            "Designed for options scalping where premium spikes non-linearly."
+        # ── Exit mode selector ─────────────────────────────────────────────
+        self.exit_mode_combo = QComboBox()
+        self.exit_mode_combo.setFixedWidth(160)
+        self.exit_mode_combo.addItem("Giveback Exit", "giveback")
+        self.exit_mode_combo.addItem("Trend Exit", "trend")
+        self.exit_mode_combo.addItem("Hybrid Exit", "hybrid")
+        self.exit_mode_combo.setCurrentIndex(2)
+        self.exit_mode_combo.setToolTip(
+            "Giveback Exit — Flat pullback from peak profit\n"
+            "Trend Exit    — EMA/CVD structural exits only\n"
+            "Hybrid Exit   — 3-phase: EARLY → EXPANSION → DISTRIBUTION"
         )
-        self.hybrid_exit_enabled_check.toggled.connect(self._on_automation_settings_changed)
+        self.exit_mode_combo.currentIndexChanged.connect(self._on_automation_settings_changed)
 
         self.hybrid_adx_unlock_input = QDoubleSpinBox()
         self.hybrid_adx_unlock_input.setRange(15.0, 50.0)
@@ -1465,7 +1469,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.automate_toggle.blockSignals(True)
         self.automation_stoploss_input.blockSignals(True)
         self.max_profit_giveback_input.blockSignals(True)
-        self.hybrid_exit_enabled_check.blockSignals(True)
+        self.exit_mode_combo.blockSignals(True)
         self.hybrid_adx_unlock_input.blockSignals(True)
         self.hybrid_atr_ratio_input.blockSignals(True)
         self.hybrid_adx_rising_input.blockSignals(True)
@@ -1585,7 +1589,12 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.max_profit_giveback_input.setValue(
             _read_setting("max_profit_giveback_points", self.max_profit_giveback_input.value(), int)
         )
-        self.hybrid_exit_enabled_check.setChecked(_read_setting("hybrid_exit_enabled", True, bool))
+        _mode_map = {"giveback": 0, "trend": 1, "hybrid": 2}
+        persisted_exit_mode = _read_setting("exit_mode", None, str)
+        if not persisted_exit_mode:
+            hybrid_enabled = _read_setting("hybrid_exit_enabled", True, bool)
+            persisted_exit_mode = "hybrid" if hybrid_enabled else "giveback"
+        self.exit_mode_combo.setCurrentIndex(_mode_map.get(persisted_exit_mode, 2))
         self.hybrid_adx_unlock_input.setValue(_read_setting("hybrid_adx_unlock", 28.0, float))
         self.hybrid_atr_ratio_input.setValue(_read_setting("hybrid_atr_ratio_unlock", 1.15, float))
         self.hybrid_adx_rising_input.setValue(_read_setting("hybrid_adx_rising_bars", 2, int))
@@ -1843,7 +1852,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.automate_toggle.blockSignals(False)
         self.automation_stoploss_input.blockSignals(False)
         self.max_profit_giveback_input.blockSignals(False)
-        self.hybrid_exit_enabled_check.blockSignals(False)
+        self.exit_mode_combo.blockSignals(False)
         self.hybrid_adx_unlock_input.blockSignals(False)
         self.hybrid_atr_ratio_input.blockSignals(False)
         self.hybrid_adx_rising_input.blockSignals(False)
@@ -2001,7 +2010,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
             "enabled": self.automate_toggle.isChecked(),
             "stoploss_points": int(self.automation_stoploss_input.value()),
             "max_profit_giveback_points": int(self.max_profit_giveback_input.value()),
-            "hybrid_exit_enabled": self.hybrid_exit_enabled_check.isChecked(),
+            "exit_mode": self._selected_exit_mode(),
             "hybrid_adx_unlock": float(self.hybrid_adx_unlock_input.value()),
             "hybrid_atr_ratio_unlock": float(self.hybrid_atr_ratio_input.value()),
             "hybrid_adx_rising_bars": int(self.hybrid_adx_rising_input.value()),
@@ -2146,7 +2155,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
             "enabled": self.automate_toggle.isChecked(),
             "stoploss_points": float(self.automation_stoploss_input.value()),
             "max_profit_giveback_points": float(self.max_profit_giveback_input.value()),
-            "hybrid_exit_enabled": self.hybrid_exit_enabled_check.isChecked(),
+            "exit_mode": self._selected_exit_mode(),
             "max_profit_giveback_strategies": self._selected_max_giveback_strategies(),
             "dynamic_exit_trend_following_strategies": self._selected_dynamic_exit_strategies(),
             "trend_exit_adx_min": float(self.trend_exit_adx_min_input.value()),
@@ -2184,12 +2193,16 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         # Rebuild hybrid exit engine from current UI settings.
         self._live_hybrid_engine = self._build_hybrid_engine_from_ui()
 
+    def _selected_exit_mode(self) -> str:
+        """Returns 'giveback', 'trend', or 'hybrid'."""
+        combo = getattr(self, "exit_mode_combo", None)
+        if combo is None:
+            return "hybrid"
+        return combo.currentData() or "hybrid"
+
     def _build_hybrid_engine_from_ui(self) -> HybridExitEngine | None:
-        """Build hybrid engine from UI controls. Returns None if disabled."""
-        if not (
-            getattr(self, "hybrid_exit_enabled_check", None)
-            and self.hybrid_exit_enabled_check.isChecked()
-        ):
+        """Build hybrid engine from UI controls. Returns None unless mode is hybrid."""
+        if self._selected_exit_mode() != "hybrid":
             return None
 
         def _v(attr: str, default):

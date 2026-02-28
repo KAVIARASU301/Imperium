@@ -128,7 +128,7 @@ class SetupPanelMixin:
         _wc(self.automation_order_type_combo)
         auto_frm.addRow("Stop Loss",         self.automation_stoploss_input)
         auto_frm.addRow("Max Giveback",      self.max_profit_giveback_input)
-        auto_frm.addRow("Hybrid Exit",       self.hybrid_exit_enabled_check)
+        auto_frm.addRow("Exit Mode",        self.exit_mode_combo)
 
         gb_row = QWidget()
         gb_lay = QHBoxLayout(gb_row)
@@ -1490,7 +1490,7 @@ class SetupPanelMixin:
             "EARLY → EXPANSION (ride full premium spike) → DISTRIBUTION (convex trail).\n"
             "Built for options scalping — premium is non-linear with momentum."
         ))
-        enable_frm.addRow("", self.hybrid_exit_enabled_check)
+        enable_frm.addRow("Exit Mode", self.exit_mode_combo)
         hybrid_root.addWidget(enable_grp)
 
         # ── Unlock thresholds ─────────────────────────────────────────────

@@ -372,12 +372,11 @@ class SimulatorMixin:
         stacker_max = int(self.stacker_max_input.value()) \
             if hasattr(self, "stacker_max_input") else 2
 
-        # ── Hybrid Exit Engine ────────────────────────────────────────
-        hybrid_exit_enabled = bool(
-            getattr(self, "hybrid_exit_enabled_check", None)
-            and self.hybrid_exit_enabled_check.isChecked()
-        )
-        _hybrid_engine = create_default_engine() if hybrid_exit_enabled else None
+        # ── Exit mode selection ────────────────────────────────────────
+        _exit_mode = "hybrid"
+        if hasattr(self, "exit_mode_combo"):
+            _exit_mode = self.exit_mode_combo.currentData() or "hybrid"
+        _hybrid_engine = create_default_engine() if _exit_mode == "hybrid" else None
         # Strategies that opt-in to hybrid exit (tune as needed)
         HYBRID_EXIT_STRATEGIES = {"ema_cross", "range_breakout", "cvd_range_breakout", "open_drive"}
 
@@ -665,35 +664,43 @@ class SimulatorMixin:
                             else max_profit_giveback_points
                         )
                         giveback_enabled_for_strategy = (
-                            use_open_drive_override
-                            or active_strategy_type in max_profit_giveback_strategies
+                            _exit_mode == "giveback"
+                            and (
+                                use_open_drive_override
+                                or active_strategy_type in max_profit_giveback_strategies
+                            )
                         )
                         if giveback_enabled_for_strategy and effective_giveback_points > 0:
                             giveback_points = max_favorable_points - favorable_move
                             exit_now = giveback_points >= effective_giveback_points
                             if exit_now:
                                 exit_reason = "max_profit_giveback"
-                if (not exit_now) and active_strategy_type == "ema_cross":
-                    ema_cross_exit_long = cvd_cross_below_ema10 or (regime_is_chop and (price_cross_below_ema10 or price_close < ema10[idx]))
-                    ema_cross_exit_short = cvd_cross_above_ema10 or (regime_is_chop and (price_cross_above_ema10 or price_close > ema10[idx]))
-                    exit_now = (signal_side == "long" and ema_cross_exit_long) or (signal_side == "short" and ema_cross_exit_short)
-                    if exit_now:
-                        exit_reason = "ema_cross_exit_chop" if regime_is_chop else "ema_cross_exit"
-                elif (not exit_now) and active_strategy_type == "atr_divergence":
-                    exit_now = (signal_side == "long" and price_cross_above_ema51) or (signal_side == "short" and price_cross_below_ema51)
-                    if exit_now:
-                        exit_reason = "atr_divergence_exit"
-                elif (not exit_now) and active_strategy_type in {"range_breakout", "cvd_range_breakout"}:
-                    exit_now = (signal_side == "long" and (price_cross_below_ema10 or price_cross_below_ema51)) or (signal_side == "short" and (price_cross_above_ema10 or price_cross_above_ema51))
-                    if exit_now:
-                        exit_reason = "breakout_ema_reversal"
-                elif (not exit_now) and active_strategy_type == "open_drive":
-                    exit_now = (
-                        (signal_side == "long" and (price_close < ema10[idx] or cvd_close[idx] < cvd_ema10[idx]))
-                        or (signal_side == "short" and (price_close > ema10[idx] or cvd_close[idx] > cvd_ema10[idx]))
-                    )
-                    if exit_now:
-                        exit_reason = "open_drive_ema_exit"
+                _skip_structural = (
+                    _exit_mode == "hybrid"
+                    and active_strategy_type in HYBRID_EXIT_STRATEGIES
+                )
+                if not _skip_structural:
+                    if (not exit_now) and active_strategy_type == "ema_cross":
+                        ema_cross_exit_long = cvd_cross_below_ema10 or (regime_is_chop and (price_cross_below_ema10 or price_close < ema10[idx]))
+                        ema_cross_exit_short = cvd_cross_above_ema10 or (regime_is_chop and (price_cross_above_ema10 or price_close > ema10[idx]))
+                        exit_now = (signal_side == "long" and ema_cross_exit_long) or (signal_side == "short" and ema_cross_exit_short)
+                        if exit_now:
+                            exit_reason = "ema_cross_exit_chop" if regime_is_chop else "ema_cross_exit"
+                    elif (not exit_now) and active_strategy_type == "atr_divergence":
+                        exit_now = (signal_side == "long" and price_cross_above_ema51) or (signal_side == "short" and price_cross_below_ema51)
+                        if exit_now:
+                            exit_reason = "atr_divergence_exit"
+                    elif (not exit_now) and active_strategy_type in {"range_breakout", "cvd_range_breakout"}:
+                        exit_now = (signal_side == "long" and (price_cross_below_ema10 or price_cross_below_ema51)) or (signal_side == "short" and (price_cross_above_ema10 or price_cross_above_ema51))
+                        if exit_now:
+                            exit_reason = "breakout_ema_reversal"
+                    elif (not exit_now) and active_strategy_type == "open_drive":
+                        exit_now = (
+                            (signal_side == "long" and (price_close < ema10[idx] or cvd_close[idx] < cvd_ema10[idx]))
+                            or (signal_side == "short" and (price_close > ema10[idx] or cvd_close[idx] > cvd_ema10[idx]))
+                        )
+                        if exit_now:
+                            exit_reason = "open_drive_ema_exit"
 
                 if exit_now:
                     _close_trade(idx, reason=exit_reason if exit_reason != "none" else "rule_exit")
@@ -871,7 +878,7 @@ class SimulatorMixin:
                 "last_cvd_ema51": float(cvd_ema51[idx]),
                 "last_cvd_ema51_simple": float(cvd_ema51[idx]),
             }
-            if hybrid_exit_enabled:
+            if _exit_mode == "hybrid":
                 active_trade.update(HybridExitState().to_dict())
 
             stacker_allowed_for_trade = stacker_enabled and (signal_strategy != "open_drive" or open_drive_stack_enabled)
