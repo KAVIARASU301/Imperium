@@ -165,10 +165,16 @@ class SetupPanelMixin:
         _w(self.trend_exit_adx_min_input)
         _w(self.trend_exit_atr_ratio_min_input)
         _w(self.trend_exit_confirm_bars_input)
+        _w(self.trend_exit_min_profit_input)
+        _w(self.trend_exit_vol_drop_pct_input)
+        _w(self.trend_exit_breakdown_bars_input)
 
-        trend_thresh_lay.addRow("ADX Min", self.trend_exit_adx_min_input)
-        trend_thresh_lay.addRow("ATR Ratio Min", self.trend_exit_atr_ratio_min_input)
-        trend_thresh_lay.addRow("Confirm Bars", self.trend_exit_confirm_bars_input)
+        trend_thresh_lay.addRow("ADX Min",        self.trend_exit_adx_min_input)
+        trend_thresh_lay.addRow("ATR Ratio Min",  self.trend_exit_atr_ratio_min_input)
+        trend_thresh_lay.addRow("Confirm Bars",   self.trend_exit_confirm_bars_input)
+        trend_thresh_lay.addRow("Min Profit",     self.trend_exit_min_profit_input)
+        trend_thresh_lay.addRow("Vol Drop %",     self.trend_exit_vol_drop_pct_input)
+        trend_thresh_lay.addRow("Breakdown Bars", self.trend_exit_breakdown_bars_input)
 
         auto_frm.addRow("Trend Exit Config", trend_thresh_widget)
 

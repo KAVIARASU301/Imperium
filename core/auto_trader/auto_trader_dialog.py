@@ -490,6 +490,43 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         )
         self.trend_exit_confirm_bars_input.valueChanged.connect(self._on_automation_settings_changed)
 
+        # ── Dynamic Exit Conditions — breakdown detection knobs ───────────────
+        self.trend_exit_min_profit_input = QDoubleSpinBox()
+        self.trend_exit_min_profit_input.setRange(0.5, 50.0)
+        self.trend_exit_min_profit_input.setDecimals(1)
+        self.trend_exit_min_profit_input.setSingleStep(0.5)
+        self.trend_exit_min_profit_input.setValue(0.0)   # 0 = use stoploss_points as floor (legacy behaviour)
+        self.trend_exit_min_profit_input.setStyleSheet(compact_spinbox_style)
+        self.trend_exit_min_profit_input.setToolTip(
+            "Minimum favorable move (points) the trade must show before trend-ride\n"
+            "mode can activate. 0 = auto (uses stoploss value as the floor).\n"
+            "Raise this to avoid switching to trend mode on shallow moves."
+        )
+        self.trend_exit_min_profit_input.valueChanged.connect(self._on_automation_settings_changed)
+
+        self.trend_exit_vol_drop_pct_input = QDoubleSpinBox()
+        self.trend_exit_vol_drop_pct_input.setRange(0.50, 0.99)
+        self.trend_exit_vol_drop_pct_input.setDecimals(2)
+        self.trend_exit_vol_drop_pct_input.setSingleStep(0.01)
+        self.trend_exit_vol_drop_pct_input.setValue(0.85)
+        self.trend_exit_vol_drop_pct_input.setStyleSheet(compact_spinbox_style)
+        self.trend_exit_vol_drop_pct_input.setToolTip(
+            "Regime breakdown: exit trend-ride when ATR/vol falls below this fraction\n"
+            "of its peak value since trend-ride started. 0.85 = exit if vol drops >15%%\n"
+            "from peak. Lower = more tolerant; Higher = exits on small vol pullbacks."
+        )
+        self.trend_exit_vol_drop_pct_input.valueChanged.connect(self._on_automation_settings_changed)
+
+        self.trend_exit_breakdown_bars_input = QSpinBox()
+        self.trend_exit_breakdown_bars_input.setRange(2, 8)
+        self.trend_exit_breakdown_bars_input.setValue(3)
+        self.trend_exit_breakdown_bars_input.setStyleSheet(compact_spinbox_style)
+        self.trend_exit_breakdown_bars_input.setToolTip(
+            "Consecutive bars of falling ADX required to confirm regime breakdown\n"
+            "and exit trend-ride mode. Default 3. Higher = waits longer, rides more."
+        )
+        self.trend_exit_breakdown_bars_input.valueChanged.connect(self._on_automation_settings_changed)
+
         self.automation_route_combo = QComboBox()
         self.automation_route_combo.setFixedWidth(180)
         self.automation_route_combo.setStyleSheet(compact_combo_style)
@@ -1227,6 +1264,9 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.trend_exit_adx_min_input.blockSignals(True)
         self.trend_exit_atr_ratio_min_input.blockSignals(True)
         self.trend_exit_confirm_bars_input.blockSignals(True)
+        self.trend_exit_min_profit_input.blockSignals(True)
+        self.trend_exit_vol_drop_pct_input.blockSignals(True)
+        self.trend_exit_breakdown_bars_input.blockSignals(True)
         self.automation_route_combo.blockSignals(True)
         self.automation_order_type_combo.blockSignals(True)
         self.automation_start_time_hour_input.blockSignals(True)
@@ -1327,6 +1367,9 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.trend_exit_adx_min_input.setValue(_read_setting("trend_exit_adx_min", 28.0, float))
         self.trend_exit_atr_ratio_min_input.setValue(_read_setting("trend_exit_atr_ratio_min", 1.15, float))
         self.trend_exit_confirm_bars_input.setValue(_read_setting("trend_exit_confirm_bars", 3, int))
+        self.trend_exit_min_profit_input.setValue(_read_setting("trend_exit_min_profit", 0.0, float))
+        self.trend_exit_vol_drop_pct_input.setValue(_read_setting("trend_exit_vol_drop_pct", 0.85, float))
+        self.trend_exit_breakdown_bars_input.setValue(_read_setting("trend_exit_breakdown_bars", 3, int))
         _apply_combo_value(
             self.automation_route_combo,
             _read_setting("route", self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL),
@@ -1549,6 +1592,9 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.trend_exit_adx_min_input.blockSignals(False)
         self.trend_exit_atr_ratio_min_input.blockSignals(False)
         self.trend_exit_confirm_bars_input.blockSignals(False)
+        self.trend_exit_min_profit_input.blockSignals(False)
+        self.trend_exit_vol_drop_pct_input.blockSignals(False)
+        self.trend_exit_breakdown_bars_input.blockSignals(False)
         self.automation_route_combo.blockSignals(False)
         self.automation_order_type_combo.blockSignals(False)
         self.automation_start_time_hour_input.blockSignals(False)
@@ -1675,6 +1721,9 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
             "trend_exit_adx_min": float(self.trend_exit_adx_min_input.value()),
             "trend_exit_atr_ratio_min": float(self.trend_exit_atr_ratio_min_input.value()),
             "trend_exit_confirm_bars": int(self.trend_exit_confirm_bars_input.value()),
+            "trend_exit_min_profit": float(self.trend_exit_min_profit_input.value()),
+            "trend_exit_vol_drop_pct": float(self.trend_exit_vol_drop_pct_input.value()),
+            "trend_exit_breakdown_bars": int(self.trend_exit_breakdown_bars_input.value()),
             "route": self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL,
             "order_type": self.automation_order_type_combo.currentData() or self.ORDER_TYPE_MARKET,
             "automation_start_hour": int(self.automation_start_time_hour_input.value()),
@@ -1796,6 +1845,9 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
             "trend_exit_adx_min": float(self.trend_exit_adx_min_input.value()),
             "trend_exit_atr_ratio_min": float(self.trend_exit_atr_ratio_min_input.value()),
             "trend_exit_confirm_bars": int(self.trend_exit_confirm_bars_input.value()),
+            "trend_exit_min_profit": float(self.trend_exit_min_profit_input.value()),
+            "trend_exit_vol_drop_pct": float(self.trend_exit_vol_drop_pct_input.value()),
+            "trend_exit_breakdown_bars": int(self.trend_exit_breakdown_bars_input.value()),
             "open_drive_max_profit_giveback_points": float(self.open_drive_max_profit_giveback_input.value()),
             "open_drive_tick_drawdown_limit_points": float(self.open_drive_tick_drawdown_limit_input.value()),
             "atr_trailing_step_points": float(self.atr_trailing_step_input.value()),

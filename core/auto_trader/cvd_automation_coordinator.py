@@ -40,15 +40,22 @@ class CvdAutomationCoordinator:
     def _is_regime_breakdown(active_trade: dict) -> bool:
         adx_hist = active_trade.get("regime_adx_hist") or []
         vol_hist = active_trade.get("regime_vol_hist") or []
-        if len(adx_hist) < 6 or len(vol_hist) < 6:
+
+        # Read tunable knobs (with safe fallbacks to old hardcoded values)
+        breakdown_bars = max(2, int(_to_finite_float(active_trade.get("trend_exit_breakdown_bars"), 3)))
+        vol_drop_pct = float(_to_finite_float(active_trade.get("trend_exit_vol_drop_pct"), 0.85))
+        lookback = breakdown_bars + 2   # dynamic lookback (old hardcoded = 5 when breakdown_bars=3)
+
+        if len(adx_hist) < lookback or len(vol_hist) < lookback:
             return False
 
-        adx_falling = all(adx_hist[-i] < adx_hist[-i - 1] for i in range(1, 4))
-        adx_below_5bar = adx_hist[-1] < adx_hist[-6]
-        vol_below_5bar = vol_hist[-1] < vol_hist[-6]
+        # ADX must be falling for `breakdown_bars` consecutive bars
+        adx_falling = all(adx_hist[-i] < adx_hist[-i - 1] for i in range(1, breakdown_bars + 1))
+        adx_below_lookback = adx_hist[-1] < adx_hist[-lookback]
+        vol_below_lookback = vol_hist[-1] < vol_hist[-lookback]
         peak_vol = float(active_trade.get("trend_mode_peak_vol") or 0.0)
-        vol_contracting = vol_hist[-1] < (0.85 * peak_vol) if peak_vol > 0 else False
-        return adx_falling and adx_below_5bar and vol_below_5bar and vol_contracting
+        vol_contracting = vol_hist[-1] < (vol_drop_pct * peak_vol) if peak_vol > 0 else False
+        return adx_falling and adx_below_lookback and vol_below_lookback and vol_contracting
 
     @staticmethod
     def _to_int(value, default: int) -> int:
@@ -255,6 +262,9 @@ class CvdAutomationCoordinator:
         trend_exit_adx_min = _to_finite_float(payload.get("trend_exit_adx_min"), _to_finite_float(state.get("trend_exit_adx_min"), 28.0))
         trend_exit_atr_ratio_min = _to_finite_float(payload.get("trend_exit_atr_ratio_min"), _to_finite_float(state.get("trend_exit_atr_ratio_min"), 1.15))
         trend_exit_confirm_bars = max(1, int(_to_finite_float(payload.get("trend_exit_confirm_bars"), _to_finite_float(state.get("trend_exit_confirm_bars"), 3))))
+        trend_exit_min_profit = _to_finite_float(payload.get("trend_exit_min_profit"), _to_finite_float(state.get("trend_exit_min_profit"), 0.0))
+        trend_exit_vol_drop_pct = _to_finite_float(payload.get("trend_exit_vol_drop_pct"), _to_finite_float(state.get("trend_exit_vol_drop_pct"), 0.85))
+        trend_exit_breakdown_bars = max(2, int(_to_finite_float(payload.get("trend_exit_breakdown_bars"), _to_finite_float(state.get("trend_exit_breakdown_bars"), 3))))
 
         entry_underlying = float(payload.get("price_close") or state.get("price_close") or 0.0)
         signal_type = payload.get("signal_type") or state.get("signal_filter")
@@ -357,6 +367,9 @@ class CvdAutomationCoordinator:
             "trend_exit_adx_min": trend_exit_adx_min,
             "trend_exit_atr_ratio_min": trend_exit_atr_ratio_min,
             "trend_exit_confirm_bars": trend_exit_confirm_bars,
+            "trend_exit_min_profit": trend_exit_min_profit,
+            "trend_exit_vol_drop_pct": trend_exit_vol_drop_pct,
+            "trend_exit_breakdown_bars": trend_exit_breakdown_bars,
             "atr_trailing_step_points": atr_trailing_step_points,
             "entry_underlying": entry_underlying,
             "entry_atr": current_atr if math.isfinite(current_atr) and current_atr > 0 else 0.0,
@@ -620,19 +633,32 @@ class CvdAutomationCoordinator:
         trend_exit_adx_min = _to_finite_float(active_trade.get("trend_exit_adx_min"), 28.0)
         trend_exit_atr_ratio_min = _to_finite_float(active_trade.get("trend_exit_atr_ratio_min"), 1.15)
         trend_exit_confirm_bars = max(1, int(_to_finite_float(active_trade.get("trend_exit_confirm_bars"), 3)))
+        trend_exit_min_profit = _to_finite_float(active_trade.get("trend_exit_min_profit"), 0.0)
+
+        # Min profit floor: if user set > 0, use that; otherwise fall back to stoploss (legacy)
+        effective_min_profit = trend_exit_min_profit if trend_exit_min_profit > 0 else unlock_profit_buffer
+
+        # Consecutive bars both ADX and vol must have been rising (uses confirm_bars as window)
+        confirm_window = max(2, trend_exit_confirm_bars)
+        adx_hist_ok = (
+            len(adx_hist) >= confirm_window
+            and all(adx_hist[-i] > adx_hist[-i - 1] for i in range(1, confirm_window))
+        )
+        vol_hist_ok = (
+            len(vol_hist) >= confirm_window
+            and all(vol_hist[-i] > vol_hist[-i - 1] for i in range(1, confirm_window))
+        )
 
         trend_unlock = (
             trend_mode_eligible
             and not stacked_active
-            and favorable_move >= unlock_profit_buffer
+            and favorable_move >= effective_min_profit
             and adx >= trend_exit_adx_min
             and atr_normalized >= trend_exit_atr_ratio_min
             and adx_slope > 0
             and vol_slope > 0
-            and len(adx_hist) >= 3
-            and len(vol_hist) >= 3
-            and adx_hist[-1] > adx_hist[-2] > adx_hist[-3]
-            and vol_hist[-1] > vol_hist[-2] > vol_hist[-3]
+            and adx_hist_ok
+            and vol_hist_ok
         )
         unlock_bar_count = int(active_trade.get("trend_mode_unlock_bar_count") or 0)
         if trend_unlock:
