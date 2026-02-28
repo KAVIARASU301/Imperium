@@ -60,7 +60,7 @@ class HybridExitConfig:
     # ── Momentum velocity detection ──────────────────────────────
     velocity_window: int = 2                  # bars for price delta (2 = quicker impulse read)
     velocity_threshold: float = 1.0           # lowered so more moves qualify as "strong impulse"
-    velocity_collapse_ratio: float = 0.4      # 40% drop in velocity = collapse (was 50%)
+    velocity_collapse_ratio: float = 0.65     # faster distribution trigger: even moderate slowdown counts
 
     # ── Vol acceleration collapse ─────────────────────────────────
     vol_lookback_positive: int = 2            # only need 2 prior rising bars (was 3) → fires sooner
@@ -76,16 +76,16 @@ class HybridExitConfig:
     # ── Dynamic giveback formula ─────────────────────────────────
     # giveback = max(base_giveback_pct * entry_price, profit_ratio * peak_profit, atr_multiple * ATR)
     # KEY FIX: atr_giveback_multiple was 1.2x which = ~24pts on Nifty 1m → far too loose for scalping
-    base_giveback_pct: float = 0.002          # 0.2% floor (tighter)
-    profit_giveback_ratio: float = 0.20       # 20% of peak profit (was 30%) → tighter trail
-    atr_giveback_multiple: float = 0.5        # 0.5x ATR floor (was 1.2x) → much tighter, ~8-10pts
+    base_giveback_pct: float = 0.0005         # tiny hard floor so winners can exit near the top
+    profit_giveback_ratio: float = 0.12       # protect 88% of peak profit (very aggressive capture)
+    atr_giveback_multiple: float = 0.35       # tighter ATR floor for faster pullback exits
 
     # ── Momentum-peak exit (NEW) ──────────────────────────────────
     # Exit immediately when velocity AND vol both peak together — catches the exact
     # inflection point before the giveback even starts. Pure momentum capture.
     momentum_peak_exit: bool = True           # enable momentum-peak early exit
-    momentum_peak_vel_drop: float = 0.35      # velocity drops to ≤35% of its own peak → peak confirmed
-    momentum_peak_atr_drop: float = 0.85      # ATR ratio drops to ≤85% of its peak ratio → vol topping
+    momentum_peak_vel_drop: float = 0.60      # exit on first meaningful momentum fade (earlier than 35%)
+    momentum_peak_atr_drop: float = 0.95      # require only slight vol fade to call the peak
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -473,15 +473,15 @@ def create_default_engine() -> HybridExitEngine:
         rolling_atr_window=14,
         velocity_window=2,
         velocity_threshold=1.0,
-        velocity_collapse_ratio=0.4,
+        velocity_collapse_ratio=0.65,
         vol_lookback_positive=2,
         extreme_extension_atr_multiple=2.5,
         adx_breakdown_lookback=5,
         atr_breakdown_ratio=0.92,
-        base_giveback_pct=0.002,
-        profit_giveback_ratio=0.20,
-        atr_giveback_multiple=0.5,
+        base_giveback_pct=0.0005,
+        profit_giveback_ratio=0.12,
+        atr_giveback_multiple=0.35,
         momentum_peak_exit=True,
-        momentum_peak_vel_drop=0.35,
-        momentum_peak_atr_drop=0.85,
+        momentum_peak_vel_drop=0.60,
+        momentum_peak_atr_drop=0.95,
     ))

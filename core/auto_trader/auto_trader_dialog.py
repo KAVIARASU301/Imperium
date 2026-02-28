@@ -479,7 +479,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.hybrid_vel_collapse_input.setRange(0.1, 0.9)
         self.hybrid_vel_collapse_input.setDecimals(2)
         self.hybrid_vel_collapse_input.setSingleStep(0.05)
-        self.hybrid_vel_collapse_input.setValue(0.4)
+        self.hybrid_vel_collapse_input.setValue(0.65)
         self.hybrid_vel_collapse_input.setStyleSheet(compact_spinbox_style)
         self.hybrid_vel_collapse_input.setToolTip(
             "Velocity collapse ratio: if current velocity < prev * ratio,\n"
@@ -506,7 +506,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.hybrid_profit_ratio_input.setRange(0.10, 0.80)
         self.hybrid_profit_ratio_input.setDecimals(2)
         self.hybrid_profit_ratio_input.setSingleStep(0.05)
-        self.hybrid_profit_ratio_input.setValue(0.20)
+        self.hybrid_profit_ratio_input.setValue(0.12)
         self.hybrid_profit_ratio_input.setStyleSheet(compact_spinbox_style)
         self.hybrid_profit_ratio_input.setToolTip(
             "Convex giveback: protect this fraction of peak profit.\n"
@@ -517,10 +517,10 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.hybrid_profit_ratio_input.valueChanged.connect(self._on_automation_settings_changed)
 
         self.hybrid_atr_giveback_input = QDoubleSpinBox()
-        self.hybrid_atr_giveback_input.setRange(0.5, 4.0)
+        self.hybrid_atr_giveback_input.setRange(0.2, 4.0)
         self.hybrid_atr_giveback_input.setDecimals(1)
         self.hybrid_atr_giveback_input.setSingleStep(0.1)
-        self.hybrid_atr_giveback_input.setValue(0.5)
+        self.hybrid_atr_giveback_input.setValue(0.35)
         self.hybrid_atr_giveback_input.setStyleSheet(compact_spinbox_style)
         self.hybrid_atr_giveback_input.setToolTip(
             "ATR-based giveback floor: exit if pullback > N × ATR.\n"
@@ -530,10 +530,10 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.hybrid_atr_giveback_input.valueChanged.connect(self._on_automation_settings_changed)
 
         self.hybrid_base_pct_input = QDoubleSpinBox()
-        self.hybrid_base_pct_input.setRange(0.001, 0.020)
+        self.hybrid_base_pct_input.setRange(0.0001, 0.020)
         self.hybrid_base_pct_input.setDecimals(3)
         self.hybrid_base_pct_input.setSingleStep(0.001)
-        self.hybrid_base_pct_input.setValue(0.002)
+        self.hybrid_base_pct_input.setValue(0.0005)
         self.hybrid_base_pct_input.setStyleSheet(compact_spinbox_style)
         self.hybrid_base_pct_input.setToolTip(
             "Base giveback floor as a % of entry price.\n"
@@ -1601,11 +1601,11 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.hybrid_atr_ratio_input.setValue(_read_setting("hybrid_atr_ratio_unlock", 1.15, float))
         self.hybrid_adx_rising_input.setValue(_read_setting("hybrid_adx_rising_bars", 2, int))
         self.hybrid_vel_thresh_input.setValue(_read_setting("hybrid_velocity_threshold", 1.5, float))
-        self.hybrid_vel_collapse_input.setValue(_read_setting("hybrid_velocity_collapse", 0.5, float))
+        self.hybrid_vel_collapse_input.setValue(_read_setting("hybrid_velocity_collapse", 0.65, float))
         self.hybrid_ext_mult_input.setValue(_read_setting("hybrid_ext_mult", 3.0, float))
-        self.hybrid_profit_ratio_input.setValue(_read_setting("hybrid_profit_ratio", 0.30, float))
-        self.hybrid_atr_giveback_input.setValue(_read_setting("hybrid_atr_giveback_mult", 1.2, float))
-        self.hybrid_base_pct_input.setValue(_read_setting("hybrid_base_giveback_pct", 0.003, float))
+        self.hybrid_profit_ratio_input.setValue(_read_setting("hybrid_profit_ratio", 0.12, float))
+        self.hybrid_atr_giveback_input.setValue(_read_setting("hybrid_atr_giveback_mult", 0.35, float))
+        self.hybrid_base_pct_input.setValue(_read_setting("hybrid_base_giveback_pct", 0.0005, float))
         self.hybrid_breakdown_lb_input.setValue(_read_setting("hybrid_breakdown_lookback", 10, int))
         self.hybrid_atr_bdown_input.setValue(_read_setting("hybrid_atr_breakdown_ratio", 0.90, float))
         self.hybrid_ema_bdown_check.setChecked(_read_setting("hybrid_ema_breakdown", True, bool))
@@ -2228,17 +2228,17 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
             atr_ratio_unlock_threshold=float(_v("hybrid_atr_ratio_input", 1.05)),
             adx_rising_bars=int(_v("hybrid_adx_rising_input", 1)),
             velocity_threshold=float(_v("hybrid_vel_thresh_input", 1.0)),
-            velocity_collapse_ratio=float(_v("hybrid_vel_collapse_input", 0.4)),
+            velocity_collapse_ratio=float(_v("hybrid_vel_collapse_input", 0.65)),
             extreme_extension_atr_multiple=float(_v("hybrid_ext_mult_input", 2.5)),
-            profit_giveback_ratio=float(_v("hybrid_profit_ratio_input", 0.20)),
-            atr_giveback_multiple=float(_v("hybrid_atr_giveback_input", 0.5)),
-            base_giveback_pct=float(_v("hybrid_base_pct_input", 0.002)),
+            profit_giveback_ratio=float(_v("hybrid_profit_ratio_input", 0.12)),
+            atr_giveback_multiple=float(_v("hybrid_atr_giveback_input", 0.35)),
+            base_giveback_pct=float(_v("hybrid_base_pct_input", 0.0005)),
             adx_breakdown_lookback=int(_v("hybrid_breakdown_lb_input", 5)),
             atr_breakdown_ratio=float(_v("hybrid_atr_bdown_input", 0.92)),
             ema_breakdown_crosses=_b("hybrid_ema_bdown_check", True),
             momentum_peak_exit=True,
-            momentum_peak_vel_drop=0.35,
-            momentum_peak_atr_drop=0.85,
+            momentum_peak_vel_drop=0.60,
+            momentum_peak_atr_drop=0.95,
         ))
 
     def reset_stacker(self):
