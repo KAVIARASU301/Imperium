@@ -703,9 +703,12 @@ class StrategySignalDetector:
 
     def _calculate_slope_masks(self, series: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """
-        Build per-bar slope direction masks using two lookbacks:
-        - 15 minutes
-        - 30 minutes
+        Build per-bar slope direction masks.
+
+        Uses timeframe-relative lookbacks (3x and 6x the current timeframe)
+        while enforcing a minimum of 3 bars per lookback to avoid 1-bar
+        noise on higher timeframes.
+
         A direction qualifies when either lookback indicates that direction.
         """
         length = len(series)
@@ -715,9 +718,10 @@ class StrategySignalDetector:
         if length < 2:
             return up_mask, down_mask
 
-        lookback_minutes = (15, 30)
-        for minutes in lookback_minutes:
-            bars_back = max(1, int(round(minutes / max(self.timeframe_minutes, 1))))
+        tf_minutes = max(float(self.timeframe_minutes), 1.0)
+        for multiplier in (3, 6):
+            lookback_minutes = multiplier * tf_minutes
+            bars_back = max(3, int(round(lookback_minutes / tf_minutes)))
             if bars_back >= length:
                 continue
 
