@@ -295,11 +295,13 @@ class StrategySignalDetector:
             cvd_low_of_window = np.min(cvd_window)
 
             price_at_high = price_close[i] >= price_high_of_window * 0.9995
-            cvd_not_at_high = cvd_data[i] < cvd_high_of_window * 0.9995
+            cvd_high_epsilon = abs(cvd_high_of_window) * 0.0005
+            cvd_not_at_high = cvd_data[i] < (cvd_high_of_window - cvd_high_epsilon)
             bearish_div[i] = price_at_high and cvd_not_at_high
 
             price_at_low = price_close[i] <= price_low_of_window * 1.0005
-            cvd_not_at_low = cvd_data[i] > cvd_low_of_window * 1.0005
+            cvd_low_epsilon = abs(cvd_low_of_window) * 0.0005
+            cvd_not_at_low = cvd_data[i] > (cvd_low_of_window + cvd_low_epsilon)
             bullish_div[i] = price_at_low and cvd_not_at_low
 
         return bearish_div, bullish_div
