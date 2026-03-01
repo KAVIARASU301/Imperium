@@ -9,6 +9,23 @@ from core.auto_trader.constants import TRADING_START, TRADING_END, MINUTES_PER_S
 logger = logging.getLogger(__name__)
 
 
+def _rolling_confirmation_vectorized(mask: np.ndarray, window: int) -> np.ndarray:
+    """Return True when at least one True exists in trailing window ending at each bar."""
+    if window <= 0:
+        return mask.copy()
+    if len(mask) == 0:
+        return mask.copy()
+
+    int_mask = mask.astype(np.int32)
+    cumsum = np.cumsum(int_mask)
+
+    shifted = np.empty_like(cumsum)
+    shifted[:window] = 0
+    shifted[window:] = cumsum[:-window]
+
+    return (cumsum - shifted) > 0
+
+
 # =============================================================================
 # STRATEGY IMPLEMENTATION - KEY CHANGES START HERE
 # =============================================================================
@@ -105,16 +122,12 @@ class StrategySignalDetector:
         # Scale the 5-minute confirmation logic to bars for the selected chart timeframe.
         confirmation_window_bars = max(1, int(round(self.CONFIRMATION_WAIT_MINUTES / max(float(self.timeframe_minutes), 1.0))))
 
-        def _rolling_confirmation(mask: np.ndarray) -> np.ndarray:
-            confirmed = np.zeros(signal_length, dtype=bool)
-            for idx in range(signal_length):
-                start = max(0, idx - confirmation_window_bars + 1)
-                if np.any(mask[start: idx + 1]):
-                    confirmed[idx] = True
-            return confirmed
-
-        cvd_short_confirmed = _rolling_confirmation(cvd_atr_above[:signal_length])
-        cvd_long_confirmed = _rolling_confirmation(cvd_atr_below[:signal_length])
+        cvd_short_confirmed = _rolling_confirmation_vectorized(
+            cvd_atr_above[:signal_length], confirmation_window_bars
+        )
+        cvd_long_confirmed = _rolling_confirmation_vectorized(
+            cvd_atr_below[:signal_length], confirmation_window_bars
+        )
 
         # Base confluence with timeframe-aware CVD confirmation window.
         short_atr_reversal = price_atr_above[:signal_length] & cvd_short_confirmed
@@ -267,27 +280,39 @@ class StrategySignalDetector:
             return long_strong, short_strong
 
         eps = 1e-9
-        vol_avg = pd.Series(volume[:length]).rolling(10, min_periods=1).mean().to_numpy()
         bars_back = max(1, int(slope_lookback_bars))
 
-        for idx in range(length):
-            start_idx = max(0, idx - bars_back)
-            price_delta = price_close[idx] - price_close[start_idx]
-            cvd_delta = cvd_data[idx] - cvd_data[start_idx]
+        price_arr = np.asarray(price_close[:length], dtype=float)
+        ema10_arr = np.asarray(price_ema10[:length], dtype=float)
+        cvd_arr = np.asarray(cvd_data[:length], dtype=float)
+        cvd_ema_arr = np.asarray(cvd_ema10[:length], dtype=float)
+        vol_arr = np.asarray(volume[:length], dtype=float)
 
-            price_trend_score = abs(price_close[idx] - price_ema10[idx]) / max(abs(price_ema10[idx]), eps)
-            cvd_trend_score = abs(cvd_data[idx] - cvd_ema10[idx]) / max(abs(cvd_ema10[idx]), 1.0)
-            vol_score = volume[idx] / max(vol_avg[idx], eps)
+        shifted_price = np.empty(length, dtype=float)
+        shifted_cvd = np.empty(length, dtype=float)
+        shifted_price[:bars_back] = price_arr[:bars_back]
+        shifted_cvd[:bars_back] = cvd_arr[:bars_back]
+        shifted_price[bars_back:] = price_arr[:-bars_back]
+        shifted_cvd[bars_back:] = cvd_arr[:-bars_back]
 
-            bullish_alignment = price_delta > 0 and cvd_delta > 0 and price_close[idx] > price_ema10[idx]
-            bearish_alignment = price_delta < 0 and cvd_delta < 0 and price_close[idx] < price_ema10[idx]
+        price_delta = price_arr - shifted_price
+        cvd_delta = cvd_arr - shifted_cvd
 
-            composite = (price_trend_score * 0.45) + (cvd_trend_score * 0.35) + (vol_score * 0.20)
+        price_trend_score = np.abs(price_arr - ema10_arr) / np.maximum(np.abs(ema10_arr), eps)
+        cvd_trend_score = np.abs(cvd_arr - cvd_ema_arr) / np.maximum(np.abs(cvd_ema_arr), 1.0)
+        vol_avg = pd.Series(vol_arr).rolling(10, min_periods=1).mean().to_numpy()
+        vol_score = vol_arr / np.maximum(vol_avg, eps)
 
-            if long_context[idx] and bullish_alignment and composite >= 1.05:
-                long_strong[idx] = True
-            if short_context[idx] and bearish_alignment and composite >= 1.05:
-                short_strong[idx] = True
+        composite = (price_trend_score * 0.45) + (cvd_trend_score * 0.35) + (vol_score * 0.20)
+
+        bullish_alignment = (price_delta > 0) & (cvd_delta > 0) & (price_arr > ema10_arr)
+        bearish_alignment = (price_delta < 0) & (cvd_delta < 0) & (price_arr < ema10_arr)
+
+        long_context_arr = np.asarray(long_context[:length], dtype=bool)
+        short_context_arr = np.asarray(short_context[:length], dtype=bool)
+
+        long_strong = long_context_arr & bullish_alignment & (composite >= 1.05)
+        short_strong = short_context_arr & bearish_alignment & (composite >= 1.05)
 
         return long_strong, short_strong
 
