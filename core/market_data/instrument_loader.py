@@ -237,10 +237,11 @@ class InstrumentLoader(QThread):
                 inst for inst in data["instruments"] if inst.get("expiry") in allowed_expiries
             ]
             data["strikes"] = sorted({inst["strike"] for inst in data["instruments"]})
-            data["futures"] = [
-                fut for fut in sorted(data["futures"], key=lambda item: item["expiry"])
-                if fut["expiry"] in allowed_expiries
-            ]
+            # Keep futures independent from option expiry pruning.
+            # Weekly option expiries can push the monthly futures expiry
+            # outside the capped option-expiry list, which would wrongly
+            # drop all futures for symbols like NIFTY and break token lookup.
+            data["futures"] = sorted(data["futures"], key=lambda item: item["expiry"])
 
         post_prune_count = sum(len(data["instruments"]) for data in symbol_data.values())
         logger.info(
