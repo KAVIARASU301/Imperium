@@ -1,7 +1,9 @@
 import numpy as np
 import pandas as pd
+from core.auto_trader.chop_filter import ChopFilter
 
 ADX_WARMUP_DEFAULT = 28.0  # Neutral ADX value during warm-up (pre-Wilder validity)
+_chop_filter_instance = ChopFilter(period=14, threshold=61.8)
 
 def calculate_ema(data: np.ndarray, period: int) -> np.ndarray:
     """Calculate Exponential Moving Average"""
@@ -308,6 +310,8 @@ def is_chop_regime(
     ema_slow: np.ndarray,
     atr: np.ndarray,
     adx: np.ndarray,
+    price_high: np.ndarray | None = None,
+    price_low: np.ndarray | None = None,
     chop_filter_atr_reversal: bool = True,
     chop_filter_ema_cross: bool = True,
     chop_filter_atr_divergence: bool = True,
@@ -316,16 +320,13 @@ def is_chop_regime(
     """
     Strategy-aware chop regime detection.
 
-    Accepts pre-computed arrays so callers avoid redundant recalculation
-    on every bar. Call this once per bar using cached indicator arrays.
+    Three-path detection (any one is sufficient to declare chop):
+      1. ADX < 18  (trend strength too low)
+      2. Price hugging EMA51 + flat slope + ADX < 22  (EMA-hug heuristic)
+      3. Choppiness Index > 61.8  (CI: range too small relative to ATR sum)
 
-    - range_breakout / open_drive  : NEVER filtered — chop is their setup.
-    - cvd_range_breakout           : exempt by default (False). Low-ADX consolidation
-                                     is the precondition for CVD breakout signals —
-                                     filtering on chop would eat the best setups.
-                                     Set chop_filter_cvd_range_breakout=True only if
-                                     you want to require a trending market first.
-    - atr_reversal / ema_cross / atr_divergence : filtered per toggle flags.
+    range_breakout and open_drive are NEVER filtered (chop IS their setup).
+    cvd_range_breakout is exempt by default (consolidation is the setup).
     """
     if strategy_type in {"range_breakout", "open_drive"}:
         return False
@@ -351,4 +352,18 @@ def is_chop_regime(
     flat = abs(slope) < (0.02 * atr_val)
     hugging = abs(price[idx] - ema_slow[idx]) < (0.25 * atr_val)
 
-    return low_adx or (hugging and flat and adx[idx] < 22)
+    if low_adx or (hugging and flat and adx[idx] < 22):
+        return True
+
+    if price_high is not None and price_low is not None:
+        n = _chop_filter_instance.period
+        start = idx - n + 1
+        if start >= 1:
+            h_slice = price_high[start: idx + 1]
+            l_slice = price_low[start: idx + 1]
+            c_slice = price[start - 1: idx + 1]
+            if len(c_slice) == n + 1 and len(h_slice) == n and len(l_slice) == n:
+                if _chop_filter_instance.is_choppy(h_slice, l_slice, c_slice):
+                    return True
+
+    return False

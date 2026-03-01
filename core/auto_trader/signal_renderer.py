@@ -510,6 +510,8 @@ class SignalRendererMixin:
                         ema_slow=price_slow_filter,
                         atr=atr_values,
                         adx=adx_arr,
+                        price_high=price_high,
+                        price_low=price_low,
                         chop_filter_atr_reversal=getattr(self, "_chop_filter_atr_reversal", True),
                         chop_filter_ema_cross=getattr(self, "_chop_filter_ema_cross", True),
                         chop_filter_atr_divergence=getattr(self, "_chop_filter_atr_divergence", True),

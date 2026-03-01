@@ -816,6 +816,8 @@ class SimulatorMixin:
                     ema_slow=ema51,
                     atr=atr_full,
                     adx=adx_full,
+                    price_high=high,
+                    price_low=low,
                     chop_filter_atr_reversal=getattr(self, "_chop_filter_atr_reversal", True),
                     chop_filter_ema_cross=getattr(self, "_chop_filter_ema_cross", True),
                     chop_filter_atr_divergence=getattr(self, "_chop_filter_atr_divergence", True),
