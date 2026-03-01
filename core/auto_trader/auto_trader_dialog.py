@@ -191,6 +191,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.all_cvd_high_data: list[float] = []
         self.all_cvd_low_data: list[float] = []
         self.all_price_data: list[float] = []
+        self.all_price_open_data: list[float] = []
         self.all_price_high_data: list[float] = []
         self.all_price_low_data: list[float] = []
         self.all_volume_data: list[float] = []
@@ -3218,6 +3219,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.all_cvd_high_data = []
         self.all_cvd_low_data = []
         self.all_price_data = []
+        self.all_price_open_data = []
         self.all_price_high_data = []
         self.all_price_low_data = []
         self.all_volume_data = []  # 🆕 NEW - Store volume data
@@ -3238,6 +3240,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
             cvd_y_raw = df_cvd_sess["close"].to_numpy(dtype=float)
             cvd_high_raw = df_cvd_sess["high"].to_numpy(dtype=float) if "high" in df_cvd_sess.columns else cvd_y_raw
             cvd_low_raw = df_cvd_sess["low"].to_numpy(dtype=float) if "low" in df_cvd_sess.columns else cvd_y_raw
+            price_open_raw = df_price_sess["open"].values if "open" in df_price_sess.columns else df_price_sess["close"].values
             price_y_raw = df_price_sess["close"].values
             price_high_raw = df_price_sess["high"].values
             price_low_raw = df_price_sess["low"].values
@@ -3294,6 +3297,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
             self.all_cvd_high_data.extend(cvd_high.tolist())
             self.all_cvd_low_data.extend(cvd_low.tolist())
             self.all_price_data.extend(price_y.tolist())
+            self.all_price_open_data.extend(price_open_raw.tolist())
             self.all_price_high_data.extend(price_high_raw.tolist())
             self.all_price_low_data.extend(price_low_raw.tolist())
             self.all_volume_data.extend(volume_raw.tolist())  # 🆕 NEW

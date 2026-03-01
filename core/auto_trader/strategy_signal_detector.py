@@ -88,10 +88,10 @@ class StrategySignalDetector:
 
     def detect_atr_reversal_strategy(
             self,
-            price_atr_above: np.ndarray,  # Price ATR reversal - above EMA (potential SHORT)
-            price_atr_below: np.ndarray,  # Price ATR reversal - below EMA (potential LONG)
-            cvd_atr_above: np.ndarray,  # CVD ATR reversal - above EMA51 (potential SHORT)
-            cvd_atr_below: np.ndarray,  # CVD ATR reversal - below EMA51 (potential LONG)
+            price_atr_above: np.ndarray,
+            price_atr_below: np.ndarray,
+            cvd_atr_above: np.ndarray,
+            cvd_atr_below: np.ndarray,
             atr_values: np.ndarray | None = None,
             timestamps: list | None = None,
             active_breakout_long: np.ndarray | None = None,
@@ -99,45 +99,75 @@ class StrategySignalDetector:
             breakout_long_momentum_strong: np.ndarray | None = None,
             breakout_short_momentum_strong: np.ndarray | None = None,
             breakout_switch_mode: str = BREAKOUT_SWITCH_ADAPTIVE,
-    ) -> tuple[np.ndarray, np.ndarray]:
+            price_close: np.ndarray | None = None,
+            price_open: np.ndarray | None = None,
+            price_ema51: np.ndarray | None = None,
+            price_vwap: np.ndarray | None = None,
+            cvd_data: np.ndarray | None = None,
+            vwap_min_distance_atr_mult: float = 0.3,
+            divergence_lookback: int = 5,
+            exhaustion_min_score: int = 2,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
-        ATR REVERSAL STRATEGY:
-        Confluence of ATR reversal signals in BOTH Price and CVD at the same time.
-
-        - SHORT: Price ATR reversal above + CVD ATR reversal above (both overbought)
-        - LONG: Price ATR reversal below + CVD ATR reversal below (both oversold)
-
-        No waiting required - the confluence itself is the signal.
-
-        🆕 SUPPRESSION: Opposing ATR signals blocked during active breakout trades.
+        Institutional ATR reversal strategy with exhaustion scoring and confirmation candles.
         """
 
-        signal_length = min(len(price_atr_above), len(price_atr_below), len(cvd_atr_above), len(cvd_atr_below))
+        signal_length = min(
+            len(price_atr_above),
+            len(price_atr_below),
+            len(cvd_atr_above),
+            len(cvd_atr_below),
+        )
         short_atr_reversal = np.zeros(signal_length, dtype=bool)
         long_atr_reversal = np.zeros(signal_length, dtype=bool)
 
         if signal_length == 0:
             return short_atr_reversal, long_atr_reversal, short_atr_reversal.copy(), long_atr_reversal.copy()
 
-        # Scale the 5-minute confirmation logic to bars for the selected chart timeframe.
-        confirmation_window_bars = max(1, int(round(self.CONFIRMATION_WAIT_MINUTES / max(float(self.timeframe_minutes), 1.0))))
+        price_overextended_short = price_atr_above[:signal_length].copy()
+        price_overextended_long = price_atr_below[:signal_length].copy()
 
-        cvd_short_confirmed = _rolling_confirmation_vectorized(
-            cvd_atr_above[:signal_length], confirmation_window_bars
-        )
-        cvd_long_confirmed = _rolling_confirmation_vectorized(
-            cvd_atr_below[:signal_length], confirmation_window_bars
-        )
+        vwap_gate_short = np.ones(signal_length, dtype=bool)
+        vwap_gate_long = np.ones(signal_length, dtype=bool)
 
-        # Base confluence with timeframe-aware CVD confirmation window.
-        short_atr_reversal = price_atr_above[:signal_length] & cvd_short_confirmed
-        long_atr_reversal = price_atr_below[:signal_length] & cvd_long_confirmed
+        if (
+            price_vwap is not None and
+            price_close is not None and
+            atr_values is not None and
+            len(price_vwap) >= signal_length and
+            len(price_close) >= signal_length and
+            len(atr_values) >= signal_length
+        ):
+            atr_s = np.asarray(atr_values[:signal_length], dtype=float)
+            close_s = np.asarray(price_close[:signal_length], dtype=float)
+            vwap_s = np.asarray(price_vwap[:signal_length], dtype=float)
+            min_vwap_gap = atr_s * vwap_min_distance_atr_mult
+            vwap_gate_short = (close_s - vwap_s) > min_vwap_gap
+            vwap_gate_long = (vwap_s - close_s) > min_vwap_gap
 
-        # Adaptive volatility gating:
-        # 1) normalized ATR > threshold (extended regime)
-        # 2) ATR velocity is flattening/contracting at signal bar
-        # 3) if both price and CVD ATR reversal fire on the same bar,
-        #    allow signal even when volatility extension is marginal.
+        base_short = price_overextended_short & vwap_gate_short
+        base_long = price_overextended_long & vwap_gate_long
+
+        exhaustion_score_short = np.zeros(signal_length, dtype=int)
+        exhaustion_score_long = np.zeros(signal_length, dtype=int)
+
+        if cvd_data is not None and price_close is not None:
+            div_short, div_long = self._cvd_price_divergence_masks(
+                price_close=np.asarray(price_close[:signal_length], dtype=float),
+                cvd_data=np.asarray(cvd_data[:signal_length], dtype=float),
+                lookback=divergence_lookback,
+            )
+            exhaustion_score_short += div_short.astype(int)
+            exhaustion_score_long += div_long.astype(int)
+
+        if cvd_data is not None:
+            decel_short, decel_long = self._cvd_deceleration_mask(
+                cvd_data=np.asarray(cvd_data[:signal_length], dtype=float),
+                lookback=max(3, int(round(3 / max(float(self.timeframe_minutes), 1.0)))),
+            )
+            exhaustion_score_short += decel_short.astype(int)
+            exhaustion_score_long += decel_long.astype(int)
+
         if atr_values is not None and len(atr_values) >= signal_length:
             atr_slice = np.asarray(atr_values[:signal_length], dtype=float)
             atr_velocity = np.diff(atr_slice, prepend=atr_slice[0])
@@ -147,7 +177,7 @@ class StrategySignalDetector:
                 atr_velocity,
                 np.where(np.abs(prev_atr) > 1e-9, np.abs(prev_atr), 1.0),
             )
-            atr_flat_or_contracting = (atr_velocity <= 0.0) | (atr_velocity_pct <= self.ATR_FLAT_VELOCITY_PCT)
+            atr_contracting = (atr_velocity <= 0.0) | (atr_velocity_pct <= self.ATR_FLAT_VELOCITY_PCT)
 
             if timestamps is not None and len(timestamps) >= signal_length:
                 session_index = pd.to_datetime(pd.Series(timestamps[:signal_length])).dt.date
@@ -162,14 +192,38 @@ class StrategySignalDetector:
                 atr_slice,
                 np.where(np.abs(baseline) > 1e-9, baseline, np.nan),
             )
-            normalized_atr_extended = np.nan_to_num(normalized_atr, nan=0.0) > self.ATR_EXTENSION_THRESHOLD
+            atr_extended_and_contracting = (
+                (np.nan_to_num(normalized_atr, nan=0.0) > self.ATR_EXTENSION_THRESHOLD)
+                & atr_contracting
+            )
+            exhaustion_score_short += atr_extended_and_contracting.astype(int)
+            exhaustion_score_long += atr_extended_and_contracting.astype(int)
 
-            atr_gate = normalized_atr_extended & atr_flat_or_contracting
-            short_same_bar_confluence = price_atr_above[:signal_length] & cvd_atr_above[:signal_length]
-            long_same_bar_confluence = price_atr_below[:signal_length] & cvd_atr_below[:signal_length]
+        exhaustion_gate_short = exhaustion_score_short >= exhaustion_min_score
+        exhaustion_gate_long = exhaustion_score_long >= exhaustion_min_score
 
-            short_atr_reversal &= (atr_gate | short_same_bar_confluence)
-            long_atr_reversal &= (atr_gate | long_same_bar_confluence)
+        pre_confirmation_short = base_short & exhaustion_gate_short
+        pre_confirmation_long = base_long & exhaustion_gate_long
+
+        confirmation_window = max(1, int(round(5 / max(float(self.timeframe_minutes), 1.0))))
+
+        if price_close is not None and price_open is not None:
+            close_s = np.asarray(price_close[:signal_length], dtype=float)
+            open_s = np.asarray(price_open[:signal_length], dtype=float)
+            prev_low = np.concatenate(([close_s[0]], close_s[:-1]))
+            prev_high = np.concatenate(([close_s[0]], close_s[:-1]))
+
+            bearish_confirm = (close_s < open_s) & (close_s < prev_low)
+            bullish_confirm = (close_s > open_s) & (close_s > prev_high)
+
+            pre_conf_short_window = _rolling_confirmation_vectorized(pre_confirmation_short, confirmation_window)
+            pre_conf_long_window = _rolling_confirmation_vectorized(pre_confirmation_long, confirmation_window)
+
+            short_atr_reversal = pre_conf_short_window & bearish_confirm
+            long_atr_reversal = pre_conf_long_window & bullish_confirm
+        else:
+            short_atr_reversal = pre_confirmation_short
+            long_atr_reversal = pre_confirmation_long
 
         # Keep raw copies BEFORE any suppression — callers use these to count
         # how many ATR signals were skipped during an active breakout trade.
@@ -179,8 +233,8 @@ class StrategySignalDetector:
         if (
                 active_breakout_long is not None and
                 active_breakout_short is not None and
-                len(active_breakout_long) == len(short_atr_reversal) and
-                len(active_breakout_short) == len(short_atr_reversal)
+                len(active_breakout_long) == signal_length and
+                len(active_breakout_short) == signal_length
         ):
             long_context = active_breakout_long.astype(bool)
             short_context = active_breakout_short.astype(bool)
@@ -218,6 +272,67 @@ class StrategySignalDetector:
                 long_atr_reversal = np.zeros_like(long_atr_reversal)
 
         return short_atr_reversal, long_atr_reversal, short_atr_reversal_raw, long_atr_reversal_raw
+
+    def _cvd_price_divergence_masks(
+            self,
+            price_close: np.ndarray,
+            cvd_data: np.ndarray,
+            lookback: int = 5,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Detect CVD-price divergence around local extremes."""
+        n = len(price_close)
+        bearish_div = np.zeros(n, dtype=bool)
+        bullish_div = np.zeros(n, dtype=bool)
+
+        for i in range(lookback, n):
+            start = i - lookback
+            price_window = price_close[start:i + 1]
+            cvd_window = cvd_data[start:i + 1]
+
+            price_high_of_window = np.max(price_window)
+            price_low_of_window = np.min(price_window)
+            cvd_high_of_window = np.max(cvd_window)
+            cvd_low_of_window = np.min(cvd_window)
+
+            price_at_high = price_close[i] >= price_high_of_window * 0.9995
+            cvd_not_at_high = cvd_data[i] < cvd_high_of_window * 0.9995
+            bearish_div[i] = price_at_high and cvd_not_at_high
+
+            price_at_low = price_close[i] <= price_low_of_window * 1.0005
+            cvd_not_at_low = cvd_data[i] > cvd_low_of_window * 1.0005
+            bullish_div[i] = price_at_low and cvd_not_at_low
+
+        return bearish_div, bullish_div
+
+    def _cvd_deceleration_mask(
+            self,
+            cvd_data: np.ndarray,
+            lookback: int = 3,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Detect deceleration in CVD momentum."""
+        n = len(cvd_data)
+        decel_short = np.zeros(n, dtype=bool)
+        decel_long = np.zeros(n, dtype=bool)
+
+        min_bars = lookback * 2 + 1
+        if n < min_bars:
+            return decel_short, decel_long
+
+        slope = np.zeros(n, dtype=float)
+        slope[lookback:] = cvd_data[lookback:] - cvd_data[:-lookback]
+
+        prev_slope = np.zeros(n, dtype=float)
+        prev_slope[lookback * 2:] = slope[lookback:-lookback] if lookback > 0 else slope[:-lookback]
+
+        cvd_was_rising = prev_slope > 0
+        slope_shrinking_up = (slope > 0) & (slope < prev_slope)
+        decel_short = cvd_was_rising & slope_shrinking_up
+
+        cvd_was_falling = prev_slope < 0
+        slope_shrinking_down = (slope < 0) & (slope > prev_slope)
+        decel_long = cvd_was_falling & slope_shrinking_down
+
+        return decel_short, decel_long
 
     def build_breakout_context_masks(
             self,

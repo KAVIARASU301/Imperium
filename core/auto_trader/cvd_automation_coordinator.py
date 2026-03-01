@@ -281,6 +281,14 @@ class CvdAutomationCoordinator:
             return
 
         sl_underlying = entry_underlying - stoploss_points if signal_side == "long" else entry_underlying + stoploss_points
+        if strategy_type == "atr_reversal":
+            sl_extreme_high = _to_finite_float(payload.get("sl_extreme_high"), _to_finite_float(state.get("sl_extreme_high"), 0.0))
+            sl_extreme_low = _to_finite_float(payload.get("sl_extreme_low"), _to_finite_float(state.get("sl_extreme_low"), 0.0))
+            atr_buffer = max(0.0, 0.5 * max(current_atr, 0.0))
+            if signal_side == "short" and sl_extreme_high > 0:
+                sl_underlying = sl_extreme_high + atr_buffer
+            elif signal_side == "long" and sl_extreme_low > 0:
+                sl_underlying = sl_extreme_low - atr_buffer
 
         order_params = {
             "contract": contract,
@@ -367,6 +375,8 @@ class CvdAutomationCoordinator:
             "signal_timestamp": payload.get("timestamp"),
             "strategy_type": strategy_type,
             "stoploss_points": stoploss_points,
+            "sl_extreme_high": payload.get("sl_extreme_high"),
+            "sl_extreme_low": payload.get("sl_extreme_low"),
             "max_profit_giveback_points": max_profit_giveback_points,
             "open_drive_max_profit_giveback_points": open_drive_max_profit_giveback_points,
             "open_drive_tick_drawdown_limit_points": open_drive_tick_drawdown_limit_points,

@@ -489,6 +489,14 @@ class SignalRendererMixin:
                 breakout_long_momentum_strong=breakout_long_strong,
                 breakout_short_momentum_strong=breakout_short_strong,
                 breakout_switch_mode=self._selected_breakout_switch_mode(),
+                price_close=price_data,
+                price_open=np.array(self.all_price_open_data, dtype=float),
+                price_ema51=price_slow_filter,
+                price_vwap=price_vwap,
+                cvd_data=cvd_data,
+                vwap_min_distance_atr_mult=0.3,
+                divergence_lookback=5,
+                exhaustion_min_score=2,
             )
 
         adx_arr = compute_adx(
@@ -812,6 +820,17 @@ class SignalRendererMixin:
             current_atr = 0.0
 
         active_priority_list, strategy_priorities = self._active_strategy_priorities()
+        sl_extreme_high = None
+        sl_extreme_low = None
+        if strategy_type == "atr_reversal":
+            lookback_start = max(0, closed_idx - 5)
+            recent_high = self.all_price_high_data[lookback_start:closed_idx + 1]
+            recent_low = self.all_price_low_data[lookback_start:closed_idx + 1]
+            if recent_high:
+                sl_extreme_high = float(max(recent_high))
+            if recent_low:
+                sl_extreme_low = float(min(recent_low))
+
         payload = {
             "instrument_token": self.instrument_token,
             "symbol": self.symbol,
@@ -825,6 +844,8 @@ class SignalRendererMixin:
             "open_drive_tick_drawdown_limit_points": float(self.open_drive_tick_drawdown_limit_input.value()),
             "atr_trailing_step_points": float(self.atr_trailing_step_input.value()),
             "atr": current_atr,
+            "sl_extreme_high": sl_extreme_high,
+            "sl_extreme_low": sl_extreme_low,
             "route": self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL,
             "order_type": self.automation_order_type_combo.currentData() or self.ORDER_TYPE_MARKET,
             "timestamp": closed_bar_ts,
