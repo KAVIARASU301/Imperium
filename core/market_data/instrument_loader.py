@@ -2,7 +2,7 @@
 
 """Robust instrument loader for options trading with caching and retry logic.
 
-Supports filtered index and stock options from NFO exchange.
+Supports index and stock derivatives from the NFO exchange.
 """
 
 import logging
@@ -19,42 +19,15 @@ from urllib3.util.retry import Retry
 
 logger = logging.getLogger(__name__)
 
-CACHE_SCHEMA_VERSION = 4
+CACHE_SCHEMA_VERSION = 5
 
-INDEX_SYMBOLS = {"NIFTY", "BANKNIFTY", "FINNIFTY"}
+INDEX_SYMBOLS = {"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"}
 INDEX_EXPIRY_LIMIT = 4
 STOCK_EXPIRY_LIMIT = 2
 
-ALLOWED_SYMBOLS = {
-    "NIFTY",
-    "BANKNIFTY",
-    "FINNIFTY",
-    "MIDCPNIFTY",
-    # Top NFO stocks (filtered to keep load low)
-    "RELIANCE",
-    "TCS",
-    "HDFCBANK",
-    "ICICIBANK",
-    "INFY",
-    "SBIN",
-    "BHARTIARTL",
-    "LT",
-    "ITC",
-    "HINDUNILVR",
-    "KOTAKBANK",
-    "AXISBANK",
-    "BAJFINANCE",
-    "HCLTECH",
-    "MARUTI",
-    "ASIANPAINT",
-    "SUNPHARMA",
-    "TITAN",
-    "ULTRACEMCO",
-    "NTPC",
-}
 
 class InstrumentLoader(QThread):
-    """Background thread for loading filtered NFO instruments with robust retry logic and caching"""
+    """Background thread for loading NFO instruments with robust retry logic and caching"""
 
     instruments_loaded = Signal(dict)
     error_occurred = Signal(str)
@@ -159,7 +132,7 @@ class InstrumentLoader(QThread):
             logger.error(f"Error saving instruments to cache: {e}")
 
     def process_instruments(self, instruments: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Process raw exchange instruments into organized symbol data (filtered & fast)"""
+        """Process raw exchange instruments into organized symbol data."""
         self.progress_update.emit("Processing instruments...")
         self.loading_progress.emit(70)
 
@@ -173,9 +146,6 @@ class InstrumentLoader(QThread):
 
             symbol_name = inst.get("name")
 
-            # 🔥 HARD FILTER: only required index symbols
-            if symbol_name not in ALLOWED_SYMBOLS:
-                continue
 
             # 🔥 Initialize symbol FIRST (critical fix)
             if symbol_name not in symbol_data:
@@ -245,7 +215,7 @@ class InstrumentLoader(QThread):
 
         post_prune_count = sum(len(data["instruments"]) for data in symbol_data.values())
         logger.info(
-            f"Processed {len(symbol_data)} symbols from {total_instruments} instruments (filtered); "
+            f"Processed {len(symbol_data)} symbols from {total_instruments} instruments "
             f"options kept after expiry cap: {post_prune_count}/{pre_prune_count}"
         )
 
@@ -311,7 +281,7 @@ class InstrumentLoader(QThread):
         return []
 
     def run(self) -> None:
-        """Load filtered NFO instruments (fast & lightweight)."""
+        """Load full NFO instruments with caching and retry safeguards."""
         try:
             self.loading_progress.emit(0)
 

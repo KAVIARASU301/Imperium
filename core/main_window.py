@@ -176,11 +176,9 @@ class ImperiumMainWindow(QMainWindow):
         self.trade_ledger = TradeLedger(mode=self.trading_mode)
         self.execution_stack = ExecutionStack(trading_mode=self.trading_mode, base_dir=Path.home() / ".imperium_desk")
         self.execution_service = ExecutionService(self)
-        # self.cvd_automation_coordinator = CvdAutomationCoordinator(
-        #     main_window=self,
-        #     trading_mode=self.trading_mode,
-        #     base_dir=Path.home() / ".imperium_desk",
-        # )
+        # CVD automation is currently disabled, but initialize the attribute so
+        # downstream coordinators can safely no-op without raising AttributeError.
+        self.cvd_automation_coordinator = None
         self._cvd_automation_positions: Dict[int, dict] = {}
         self._cvd_automation_market_state: Dict[int, dict] = {}
         self._cvd_pending_retry_timers: Dict[int, QTimer] = {}
@@ -385,6 +383,9 @@ class ImperiumMainWindow(QMainWindow):
 
         self.position_manager.set_instrument_data(data)
         self.strike_ladder.set_instrument_data(data)
+        panel = getattr(self, "auto_trader_embed", None)
+        if panel and hasattr(panel, "set_instrument_data"):
+            panel.set_instrument_data(data)
 
         symbols = sorted(data.keys())
         self.header.set_symbols(symbols)
@@ -663,6 +664,7 @@ class ImperiumMainWindow(QMainWindow):
                 kite=self.real_kite_client,
                 parent=self,
             )
+            panel.set_instrument_data(self.instrument_data)
             self.center_stack.insertWidget(1, panel)
             self.auto_trader_embed = panel
 
@@ -1944,8 +1946,14 @@ class ImperiumMainWindow(QMainWindow):
         """Route strike chart requests to the ATR Scanner panel instead of a popup."""
         if not contract:
             return
-        cvd_token = contract.instrument_token
-        symbol = contract.tradingsymbol
+
+        # ATR scanner must use mapped futures tokens from loaded NFO instruments.
+        symbol = (contract.symbol or "").upper()
+        cvd_token = self._get_nearest_future_token(symbol)
+        if not cvd_token:
+            logger.warning("[CVD] No futures token available for %s", symbol)
+            self._publish_status(f"No active futures token found for {symbol}", 3000, level="error")
+            return
 
         self.cvd_engine.register_token(cvd_token)
         self.active_cvd_tokens.add(cvd_token)

@@ -19,7 +19,8 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Optional
+from datetime import date
+from typing import Any, Optional
 
 from PySide6.QtCore import Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QColor, QFont
@@ -29,7 +30,6 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -171,6 +171,7 @@ class AtrScannerPanel(QWidget):
 
         # Track token mapping: symbol → instrument_token
         self._symbol_tokens: dict[str, int] = {}
+        self._instrument_data: dict[str, dict[str, Any]] = {}
 
         self.setStyleSheet(BASE_STYLE)
         self._setup_ui()
@@ -192,16 +193,11 @@ class AtrScannerPanel(QWidget):
         # Header bar
         root.addWidget(self._build_header())
 
-        # Main content: splitter with watchlist left, signals right
-        splitter = QSplitter(Qt.Horizontal)
-        splitter.setHandleWidth(2)
-        splitter.setStyleSheet(f"QSplitter::handle {{ background: {C_BORDER}; }}")
+        # Dedicated setup dialog (opened from header button)
+        self._setup_dialog = self._build_setup_dialog()
 
-        splitter.addWidget(self._build_watchlist_panel())
-        splitter.addWidget(self._build_signal_panel())
-        splitter.setSizes([320, 700])
-
-        root.addWidget(splitter, 1)
+        # Main content: signal feed only (setup moved to dialog)
+        root.addWidget(self._build_signal_panel(), 1)
         root.addWidget(self._build_status_bar())
 
     def _build_header(self) -> QWidget:
@@ -228,6 +224,11 @@ class AtrScannerPanel(QWidget):
 
         lay.addStretch()
 
+        setup_btn = QPushButton("SETUP")
+        setup_btn.setFixedWidth(80)
+        setup_btn.clicked.connect(self._open_setup_dialog)
+        lay.addWidget(setup_btn)
+
         # Uptime
         self._uptime_label = QLabel("00:00:00")
         self._uptime_label.setStyleSheet(f"color: {C_MUTED}; font-size: 11px;")
@@ -240,26 +241,30 @@ class AtrScannerPanel(QWidget):
 
         return header
 
-    def _build_watchlist_panel(self) -> QWidget:
-        panel = QWidget()
-        lay = QVBoxLayout(panel)
-        lay.setContentsMargins(8, 8, 4, 8)
+    def _build_setup_dialog(self) -> QDialog:
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Auto Trader Setup")
+        dlg.resize(460, 620)
+        dlg.setModal(False)
+
+        lay = QVBoxLayout(dlg)
+        lay.setContentsMargins(8, 8, 8, 8)
         lay.setSpacing(8)
 
+        setup_grp = QGroupBox("Setup Panel")
+        setup_lay = QVBoxLayout(setup_grp)
+        setup_lay.setContentsMargins(6, 6, 6, 6)
+        setup_lay.setSpacing(8)
+
         # ── Add symbol form ───────────────────────────────────────────────
-        add_grp = QGroupBox("Add Symbol")
+        add_grp = QGroupBox("Symbol Setup")
         form_lay = QFormLayout(add_grp)
         form_lay.setLabelAlignment(Qt.AlignRight)
         form_lay.setSpacing(6)
 
-        self._symbol_input = QLineEdit()
-        self._symbol_input.setPlaceholderText("e.g. NIFTY25JANFUT")
-        self._symbol_input.returnPressed.connect(self._on_add_symbol)
-        form_lay.addRow("Symbol:", self._symbol_input)
-
-        self._token_input = QLineEdit()
-        self._token_input.setPlaceholderText("instrument token")
-        form_lay.addRow("Token:", self._token_input)
+        self._symbol_selector = QComboBox()
+        self._symbol_selector.setPlaceholderText("Select symbol")
+        form_lay.addRow("Symbol:", self._symbol_selector)
 
         # Strategy params
         self._atr_distance_spin = QDoubleSpinBox()
@@ -294,7 +299,7 @@ class AtrScannerPanel(QWidget):
         btn_row.addWidget(remove_btn)
         form_lay.addRow(btn_row)
 
-        lay.addWidget(add_grp)
+        setup_lay.addWidget(add_grp)
 
         # ── Watchlist table ───────────────────────────────────────────────
         watch_grp = QGroupBox("Watching")
@@ -312,18 +317,28 @@ class AtrScannerPanel(QWidget):
         self._watchlist_table.setShowGrid(False)
         watch_lay.addWidget(self._watchlist_table)
 
-        lay.addWidget(watch_grp, 1)
+        setup_lay.addWidget(watch_grp, 1)
 
-        # ── Params note ───────────────────────────────────────────────────
         note = QLabel(
             "ATR Dist: how many ATRs price must be\n"
             "from EMA to qualify as extended.\n"
             "CVD Z-Score: minimum CVD deviation."
         )
         note.setStyleSheet(f"color: {C_MUTED}; font-size: 10px; padding: 4px;")
-        lay.addWidget(note)
+        setup_lay.addWidget(note)
 
-        return panel
+        lay.addWidget(setup_grp, 1)
+
+        close_btn = QPushButton("CLOSE")
+        close_btn.clicked.connect(dlg.close)
+        lay.addWidget(close_btn, 0, Qt.AlignRight)
+
+        return dlg
+
+    def _open_setup_dialog(self):
+        self._setup_dialog.show()
+        self._setup_dialog.raise_()
+        self._setup_dialog.activateWindow()
 
     def _build_signal_panel(self) -> QWidget:
         panel = QWidget()
@@ -409,17 +424,16 @@ class AtrScannerPanel(QWidget):
     # ── Actions ────────────────────────────────────────────────────────────
 
     def _on_add_symbol(self):
-        symbol = self._symbol_input.text().strip().upper()
-        token_text = self._token_input.text().strip()
+        symbol = self._symbol_selector.currentText().strip().upper()
 
         if not symbol:
-            self._set_status("Enter a symbol name.")
-            return
-        if not token_text.isdigit():
-            self._set_status("Enter a valid instrument token (integer).")
+            self._set_status("Select a symbol from the loaded NFO list.")
             return
 
-        token = int(token_text)
+        token = self._resolve_futures_token(symbol)
+        if token is None:
+            self._set_status(f"No active futures token found for {symbol}.")
+            return
 
         if symbol in self._symbol_tokens:
             self._set_status(f"{symbol} is already being watched.")
@@ -434,10 +448,8 @@ class AtrScannerPanel(QWidget):
         self._symbol_tokens[symbol] = token
         self.engine.add_symbol(symbol, token, params)
         self._add_watchlist_row(symbol)
-        self._symbol_input.clear()
-        self._token_input.clear()
         self._update_counts()
-        self._set_status(f"Added {symbol} to watchlist.")
+        self._set_status(f"Added {symbol} using mapped FUT token {token}.")
 
     def _on_remove_selected(self):
         selected = self._watchlist_table.selectedItems()
@@ -564,9 +576,70 @@ class AtrScannerPanel(QWidget):
 
     def add_symbol_programmatic(self, symbol: str, token: int):
         """Called from main_window to pre-populate symbols."""
-        self._symbol_input.setText(symbol)
-        self._token_input.setText(str(token))
-        self._on_add_symbol()
+        # Backward compatibility: allow direct token push for external callers.
+        symbol = (symbol or "").strip().upper()
+        if not symbol:
+            return
+
+        mapped_token = self._resolve_futures_token(symbol)
+        if mapped_token is None and isinstance(token, int) and token > 0:
+            mapped_token = token
+
+        if mapped_token is None:
+            self._set_status(f"Cannot map token for {symbol}.")
+            return
+
+        if symbol in self._symbol_tokens:
+            return
+
+        params = {
+            "timeframe_minutes": self._tf_spin.value(),
+            "atr_distance_threshold": self._atr_distance_spin.value(),
+            "cvd_zscore_threshold": self._cvd_zscore_spin.value(),
+        }
+        self._symbol_tokens[symbol] = mapped_token
+        self.engine.add_symbol(symbol, mapped_token, params)
+        self._add_watchlist_row(symbol)
+        self._update_counts()
+
+    def set_instrument_data(self, data: dict[str, dict[str, Any]]):
+        self._instrument_data = data or {}
+        self._reload_symbol_selector()
+
+    def _reload_symbol_selector(self):
+        current = self._symbol_selector.currentText().strip().upper()
+        self._symbol_selector.blockSignals(True)
+        self._symbol_selector.clear()
+
+        symbols = [
+            symbol for symbol in sorted(self._instrument_data.keys())
+            if self._resolve_futures_token(symbol) is not None
+        ]
+        self._symbol_selector.addItems(symbols)
+
+        if current and current in symbols:
+            self._symbol_selector.setCurrentText(current)
+        self._symbol_selector.blockSignals(False)
+
+    def _resolve_futures_token(self, symbol: str) -> Optional[int]:
+        symbol_info = self._instrument_data.get(symbol.upper())
+        if not symbol_info:
+            return None
+
+        futures = symbol_info.get("futures") or []
+        if not futures:
+            return None
+
+        today = date.today()
+        valid_futures = [
+            fut for fut in futures
+            if fut.get("instrument_token") and fut.get("expiry") and fut["expiry"] >= today
+        ]
+        if not valid_futures:
+            return None
+
+        valid_futures.sort(key=lambda x: x["expiry"])
+        return int(valid_futures[0]["instrument_token"])
 
     def cleanup(self):
         """Call this on main window close."""
