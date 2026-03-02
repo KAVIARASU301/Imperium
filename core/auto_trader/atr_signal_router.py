@@ -30,9 +30,10 @@ class AtrSignalRouter(QObject):
       4. Attach ATR-based stop-loss to the position
     """
 
-    def __init__(self, main_window, parent=None):
+    def __init__(self, main_window, scanner_panel=None, parent=None):
         super().__init__(parent)
         self.w = main_window
+        self._panel = scanner_panel              # direct reference — no tree walk, no circular import
         self._cooldown_symbols: set[str] = set()   # prevent re-entry same bar
 
     @Slot(object)
@@ -154,12 +155,16 @@ class AtrSignalRouter(QObject):
         QTimer.singleShot(ms, lambda: self._cooldown_symbols.discard(symbol))
 
     def _get_scanner_panel(self):
-        """Walk up the parent tree to find AtrScannerPanel."""
+        """Return the AtrScannerPanel reference passed at construction time.
+        Falls back to parent-tree walk only if not wired directly (legacy path).
+        """
+        if self._panel is not None:
+            return self._panel
+        # Fallback: walk parent chain (no import needed — panel passed as TYPE check avoided)
         obj = self.parent()
-        from core.auto_trader.atr_scanner_panel import AtrScannerPanel
-
         while obj is not None:
-            if isinstance(obj, AtrScannerPanel):
+            # Check by class name to avoid circular import
+            if type(obj).__name__ == "AtrScannerPanel":
                 return obj
-            obj = obj.parent()
+            obj = obj.parent() if callable(getattr(obj, "parent", None)) else None
         return None

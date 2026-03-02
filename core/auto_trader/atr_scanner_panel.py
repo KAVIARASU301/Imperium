@@ -965,7 +965,7 @@ class AtrScannerPanel(QWidget):
             if main_window is None:
                 logger.error("[SCANNER] Cannot create AtrSignalRouter: no parent main window")
                 return
-            self._signal_router = AtrSignalRouter(main_window=main_window, parent=self)
+            self._signal_router = AtrSignalRouter(main_window=main_window, scanner_panel=self, parent=self)
         if self._signal_router:
             if self._automation_enabled:
                 self.engine.signal_fired.connect(self._signal_router.on_signal)

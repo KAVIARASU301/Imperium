@@ -439,6 +439,7 @@ class MultiSymbolEngine(QObject):
         self._session_reset_timer.setInterval(60_000)
         self._session_reset_timer.timeout.connect(self._maybe_reset_session)
         self._session_reset_timer.start()
+        self._session_reset_done_date: Optional[object] = None  # date guard: reset fires once per day
 
     @property
     def watched_symbols(self) -> list[str]:
@@ -547,6 +548,10 @@ class MultiSymbolEngine(QObject):
         )
         delta_secs = abs((now - session_open).total_seconds())
         if delta_secs <= 30:
+            today = now.date()
+            if self._session_reset_done_date == today:
+                return  # already reset today — timer fired twice in the ±30s window
+            self._session_reset_done_date = today
             for worker in self._workers.values():
                 worker._last_signal_ts = {"long": None, "short": None}
             logger.info("[ENGINE] Session reset — signal dedup cleared for all workers")

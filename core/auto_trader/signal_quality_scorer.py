@@ -360,7 +360,7 @@ class SignalQualityScorer:
             return 0.5
 
         adx_val = float(adx[idx])
-        if not np.isfinite(adx_val):
+        if not np.isfinite(adx_val) or adx_val < 0:
             return 0.5
 
         if strategy_type == "atr_reversal":
