@@ -10,7 +10,7 @@ import pyqtgraph as pg
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QLabel, QHBoxLayout,
     QPushButton, QWidget, QCheckBox, QSpinBox, QDoubleSpinBox, QComboBox,
-    QFormLayout, QGroupBox, QColorDialog, QFileDialog
+    QFormLayout, QGroupBox, QColorDialog, QFileDialog, QInputDialog
 )
 from PySide6.QtCore import Qt, QTimer, Signal, QEvent, QThread, QSettings
 from PySide6.QtGui import QColor, QFontMetrics
@@ -201,6 +201,9 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self._live_stacker_side: str | None = None
         self._live_stacker_strategy_type: str | None = None
         self._simulator_results: dict | None = None
+        self._allow_hidden_processing = False
+        self._secondary_symbol_workers: dict[int, "AutoTraderDialog"] = {}
+        self._secondary_symbol_labels: dict[int, str] = {}
         self._chart_line_color = "#26A69A"
         self._price_line_color = "#FFE57F"
         self._confluence_short_color = "#FF4444"
@@ -364,6 +367,26 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.simulator_run_btn.setToolTip("Run simulator (Space)")
         self.simulator_run_btn.setObjectName("simRunBtn")
         self.simulator_run_btn.clicked.connect(self._on_simulator_run_clicked)
+
+        self.add_symbol_btn = QPushButton("Add Symbol")
+        self.add_symbol_btn.setFixedHeight(24)
+        self.add_symbol_btn.setMinimumWidth(100)
+        self.add_symbol_btn.setToolTip("Add additional symbols for background auto-trading")
+        self.add_symbol_btn.setObjectName("setupBtn")
+        self.add_symbol_btn.clicked.connect(self._on_add_secondary_symbol_clicked)
+
+        self.remove_symbol_btn = QPushButton("Remove Symbol")
+        self.remove_symbol_btn.setFixedHeight(24)
+        self.remove_symbol_btn.setMinimumWidth(118)
+        self.remove_symbol_btn.setToolTip("Remove selected background symbol")
+        self.remove_symbol_btn.setObjectName("setupBtn")
+        self.remove_symbol_btn.clicked.connect(self._on_remove_secondary_symbol_clicked)
+
+        self.secondary_symbols_combo = QComboBox()
+        self.secondary_symbols_combo.setFixedHeight(24)
+        self.secondary_symbols_combo.setMinimumWidth(220)
+        self.secondary_symbols_combo.setToolTip("Symbols running in background automation")
+        self.secondary_symbols_combo.setObjectName("signalFilterCombo")
 
         self.tick_upload_btn = QPushButton("Update CSV")
         self.tick_upload_btn.setFixedHeight(24)
@@ -1097,6 +1120,9 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         status_row.addWidget(self.regime_indicator)
         status_row.addStretch()
         status_row.addWidget(self.simulator_run_btn)
+        status_row.addWidget(self.add_symbol_btn)
+        status_row.addWidget(self.remove_symbol_btn)
+        status_row.addWidget(self.secondary_symbols_combo)
         toolbar_block_layout.addLayout(status_row)
 
         # ================= ROW 4: SIMULATOR SUMMARY =================
@@ -2250,6 +2276,12 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
 
         # Rebuild hybrid exit engine from current UI settings.
         self._live_hybrid_engine = self._build_hybrid_engine_from_ui()
+
+        for worker in self._secondary_symbol_workers.values():
+            worker.automate_toggle.blockSignals(True)
+            worker.automate_toggle.setChecked(self.automate_toggle.isChecked())
+            worker.automate_toggle.blockSignals(False)
+            worker._on_automation_settings_changed()
 
     def _selected_exit_mode(self) -> str:
         """Returns 'giveback', 'trend', or 'hybrid'."""
@@ -3745,7 +3777,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
     # =========================================================================
 
     def _on_cvd_tick_update(self, token: int, cvd_value: float, last_price: float):
-        if not self.isVisible():
+        if not self.isVisible() and not self._allow_hidden_processing:
             return
 
         if token != self.instrument_token or not self.live_mode:
@@ -4080,6 +4112,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
 
     def closeEvent(self, event):
         self._is_closing = True
+        self._teardown_secondary_symbol_workers()
         self._persist_setup_values()
         try:
             if hasattr(self, "_cvd_tick_flush_timer"):
@@ -4093,6 +4126,95 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         except Exception:
             pass
         super().closeEvent(event)
+
+    def _on_add_secondary_symbol_clicked(self):
+        symbol_text, accepted = QInputDialog.getText(
+            self,
+            "Add Auto Symbol",
+            "Symbol (e.g. NIFTY, FINNIFTY, MIDCPNIFTY):",
+            text="",
+        )
+        if not accepted:
+            return
+
+        symbol = str(symbol_text or "").strip().upper()
+        if not symbol:
+            return
+        if symbol == str(self.symbol).strip().upper():
+            self._set_simulator_summary_text("Master symbol is already active", "#FFA726")
+            return
+
+        parent = self.parent()
+        token = None
+        if parent and hasattr(parent, "_get_cvd_token"):
+            resolved = parent._get_cvd_token(symbol)
+            token = resolved[0] if isinstance(resolved, tuple) else resolved
+        if not token:
+            self._set_simulator_summary_text(f"Unable to resolve token for {symbol}", "#EF5350")
+            return
+
+        token = int(token)
+        if token in self._secondary_symbol_workers:
+            self._set_simulator_summary_text(f"{symbol} already running", "#66BB6A")
+            return
+
+        worker = AutoTraderDialog(
+            kite=self.kite,
+            instrument_token=token,
+            symbol=symbol,
+            cvd_engine=self.cvd_engine,
+            parent=parent if isinstance(parent, QWidget) else self,
+        )
+        worker._allow_hidden_processing = True
+        worker.automation_signal.connect(self.automation_signal.emit)
+        worker.automation_state_signal.connect(self.automation_state_signal.emit)
+        worker.automate_toggle.setChecked(self.automate_toggle.isChecked())
+        worker.hide()
+
+        self._secondary_symbol_workers[token] = worker
+        self._secondary_symbol_labels[token] = symbol
+        self.secondary_symbols_combo.addItem(f"{symbol} ({token})", token)
+        self._set_simulator_summary_text(f"Added {symbol} for background auto-trading", "#66BB6A")
+
+        if parent is not None and hasattr(parent, "active_cvd_tokens"):
+            parent.active_cvd_tokens.add(token)
+        if parent is not None and hasattr(parent, "_update_market_subscriptions"):
+            QTimer.singleShot(0, parent._update_market_subscriptions)
+
+        worker._on_automation_settings_changed()
+
+    def _on_remove_secondary_symbol_clicked(self):
+        idx = self.secondary_symbols_combo.currentIndex()
+        if idx < 0:
+            return
+        token = self.secondary_symbols_combo.itemData(idx)
+        if token is None:
+            return
+        self._remove_secondary_symbol_worker(int(token))
+
+    def _remove_secondary_symbol_worker(self, token: int):
+        worker = self._secondary_symbol_workers.pop(token, None)
+        label = self._secondary_symbol_labels.pop(token, str(token))
+        if worker is not None:
+            worker.deleteLater()
+
+        for i in range(self.secondary_symbols_combo.count()):
+            item_token = self.secondary_symbols_combo.itemData(i)
+            if item_token is not None and int(item_token) == token:
+                self.secondary_symbols_combo.removeItem(i)
+                break
+
+        parent = self.parent()
+        if parent is not None and hasattr(parent, "active_cvd_tokens"):
+            parent.active_cvd_tokens.discard(token)
+        if parent is not None and hasattr(parent, "_update_market_subscriptions"):
+            QTimer.singleShot(0, parent._update_market_subscriptions)
+
+        self._set_simulator_summary_text(f"Removed {label} background symbol", "#FFA726")
+
+    def _teardown_secondary_symbol_workers(self):
+        for token in list(self._secondary_symbol_workers.keys()):
+            self._remove_secondary_symbol_worker(token)
 
     def _check_and_emit_stack_signals(
             self,

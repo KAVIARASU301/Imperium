@@ -117,6 +117,26 @@ class SimulatorMixin:
             strategy_masks=strategy_masks,
         )
 
+        for symbol_token, worker in getattr(self, "_secondary_symbol_workers", {}).items():
+            wx_arr = getattr(worker, "_latest_sim_x_arr", None)
+            w_short = getattr(worker, "_latest_sim_raw_short_mask", None)
+            w_long = getattr(worker, "_latest_sim_raw_long_mask", None)
+            w_strategy = getattr(worker, "_latest_sim_raw_strategy_masks", None)
+            if w_short is None:
+                w_short = getattr(worker, "_latest_sim_short_mask", None)
+            if w_long is None:
+                w_long = getattr(worker, "_latest_sim_long_mask", None)
+            if w_strategy is None:
+                w_strategy = getattr(worker, "_latest_sim_strategy_masks", None)
+            if wx_arr is None or w_short is None or w_long is None:
+                continue
+            worker._update_simulator_overlay(
+                x_arr=wx_arr,
+                short_mask=w_short,
+                long_mask=w_long,
+                strategy_masks=w_strategy,
+            )
+
 
 
     def _clear_simulation_markers(self):
