@@ -150,8 +150,8 @@ class ImperiumMainWindow(QMainWindow):
             update_performance=self._update_performance,
             update_market_subscriptions=self._update_market_subscriptions,
             publish_status=lambda message, timeout_ms, level: self._publish_status(message, timeout_ms, level=level),
+            reconcile_cvd_automation_positions=lambda *args, **kwargs: None,  # CVD automation disabled
         )
-
         self.active_quick_order_dialog: Optional[QuickOrderDialog] = None
         self.active_order_confirmation_dialog: Optional[OrderConfirmationDialog] = None
         self._auto_confirm_next_panel_order = False
