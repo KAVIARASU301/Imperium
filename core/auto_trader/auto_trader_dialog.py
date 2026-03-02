@@ -96,13 +96,17 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         "atr_reversal",
         "atr_divergence",
         "ema_cross",
+        "cvd_range_breakout",
         "range_breakout",
+        "open_drive",
     )
     STRATEGY_PRIORITY_LABELS = {
         "atr_reversal": "ATR Reversal",
         "atr_divergence": "ATR Divergence",
         "ema_cross": "EMA Cross",
+        "cvd_range_breakout": "CVD Range Breakout",
         "range_breakout": "Range Breakout",
+        "open_drive": "Open Drive",
     }
     CPR_PRIORITY_LIST_LABELS = {
         "narrow": "Narrow CPR",
@@ -2174,37 +2178,53 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self._load_and_plot(force=True)
 
     def _on_automation_settings_changed(self, *_):
+        def _num(attr: str, default, cast=float):
+            widget = getattr(self, attr, None)
+            if widget is None:
+                return default
+            with suppress(Exception):
+                return cast(widget.value())
+            return default
+
+        def _chk(attr: str, default: bool = False) -> bool:
+            widget = getattr(self, attr, None)
+            if widget is None:
+                return default
+            with suppress(Exception):
+                return bool(widget.isChecked())
+            return default
+
         self._persist_setup_values()
         active_priority_list, strategy_priorities = self._active_strategy_priorities()
         self.automation_state_signal.emit({
             "instrument_token": self.instrument_token,
             "symbol": self.symbol,
-            "enabled": self.automate_toggle.isChecked(),
-            "stoploss_points": float(self.automation_stoploss_input.value()),
-            "max_profit_giveback_points": float(self.max_profit_giveback_input.value()),
-            "giveback_promotion_points": float(self.giveback_promotion_points_input.value()),
+            "enabled": _chk("automate_toggle"),
+            "stoploss_points": _num("automation_stoploss_input", 20.0, float),
+            "max_profit_giveback_points": _num("max_profit_giveback_input", 60.0, float),
+            "giveback_promotion_points": _num("giveback_promotion_points_input", 120.0, float),
             "exit_mode": self._selected_exit_mode(),
             "max_profit_giveback_strategies": self._selected_max_giveback_strategies(),
             "dynamic_exit_trend_following_strategies": self._selected_dynamic_exit_strategies(),
-            "trend_exit_adx_min": float(self.trend_exit_adx_min_input.value()),
-            "trend_exit_atr_ratio_min": float(self.trend_exit_atr_ratio_min_input.value()),
-            "trend_exit_confirm_bars": int(self.trend_exit_confirm_bars_input.value()),
-            "trend_exit_min_profit": float(self.trend_exit_min_profit_input.value()),
-            "trend_exit_vol_drop_pct": float(self.trend_exit_vol_drop_pct_input.value()),
-            "trend_exit_breakdown_bars": int(self.trend_exit_breakdown_bars_input.value()),
-            "trend_exit_breakdown_lookback": int(self.trend_exit_breakdown_lookback_input.value()),
-            "trend_entry_consecutive_bars": int(self.trend_entry_consecutive_bars_input.value()),
-            "trend_entry_require_adx_slope": self.trend_entry_require_adx_slope_check.isChecked(),
-            "trend_entry_require_vol_slope": self.trend_entry_require_vol_slope_check.isChecked(),
-            "open_drive_max_profit_giveback_points": float(self.open_drive_max_profit_giveback_input.value()),
-            "open_drive_tick_drawdown_limit_points": float(self.open_drive_tick_drawdown_limit_input.value()),
-            "atr_trailing_step_points": float(self.atr_trailing_step_input.value()),
+            "trend_exit_adx_min": _num("trend_exit_adx_min_input", 28.0, float),
+            "trend_exit_atr_ratio_min": _num("trend_exit_atr_ratio_min_input", 1.15, float),
+            "trend_exit_confirm_bars": _num("trend_exit_confirm_bars_input", 2, int),
+            "trend_exit_min_profit": _num("trend_exit_min_profit_input", 25.0, float),
+            "trend_exit_vol_drop_pct": _num("trend_exit_vol_drop_pct_input", 35.0, float),
+            "trend_exit_breakdown_bars": _num("trend_exit_breakdown_bars_input", 2, int),
+            "trend_exit_breakdown_lookback": _num("trend_exit_breakdown_lookback_input", 5, int),
+            "trend_entry_consecutive_bars": _num("trend_entry_consecutive_bars_input", 2, int),
+            "trend_entry_require_adx_slope": _chk("trend_entry_require_adx_slope_check", True),
+            "trend_entry_require_vol_slope": _chk("trend_entry_require_vol_slope_check", True),
+            "open_drive_max_profit_giveback_points": _num("open_drive_max_profit_giveback_input", 80.0, float),
+            "open_drive_tick_drawdown_limit_points": _num("open_drive_tick_drawdown_limit_input", 80.0, float),
+            "atr_trailing_step_points": _num("atr_trailing_step_input", 10.0, float),
             "route": self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL,
             "order_type": self.automation_order_type_combo.currentData() or self.ORDER_TYPE_MARKET,
-            "automation_start_hour": int(self.automation_start_time_hour_input.value()),
-            "automation_start_minute": int(self.automation_start_time_minute_input.value()),
-            "automation_cutoff_hour": int(self.automation_cutoff_time_hour_input.value()),
-            "automation_cutoff_minute": int(self.automation_cutoff_time_minute_input.value()),
+            "automation_start_hour": _num("automation_start_time_hour_input", 9, int),
+            "automation_start_minute": _num("automation_start_time_minute_input", 15, int),
+            "automation_cutoff_hour": _num("automation_cutoff_time_hour_input", 15, int),
+            "automation_cutoff_minute": _num("automation_cutoff_time_minute_input", 15, int),
             "signal_filter": self._selected_signal_filter(),
             "signal_filters": self._selected_signal_filters(),
             "priority_list": active_priority_list,
@@ -3336,7 +3356,9 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
             "atr_reversal": 1,
             "atr_divergence": 2,
             "ema_cross": 3,
-            "range_breakout": 4,
+            "cvd_range_breakout": 4,
+            "range_breakout": 5,
+            "open_drive": 6,
         }
         return {
             "narrow": dict(base_priorities),
@@ -4029,8 +4051,10 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self.plot.update()
-        self.price_plot.update()
+        if hasattr(self, "plot"):
+            self.plot.update()
+        if hasattr(self, "price_plot"):
+            self.price_plot.update()
 
     def changeEvent(self, event):
         # Intentionally NOT stopping/starting the refresh_timer on activation changes.
