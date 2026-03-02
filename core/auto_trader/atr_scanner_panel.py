@@ -50,6 +50,7 @@ from PySide6.QtWidgets import (
     QSplitter,
     QGroupBox,
     QFormLayout,
+    QGridLayout,
     QCheckBox,
 )
 from PySide6.QtCore import QSettings
@@ -273,7 +274,7 @@ class AtrScannerPanel(QWidget):
     def _build_setup_dialog(self) -> QDialog:
         dlg = QDialog(self)
         dlg.setWindowTitle("SIGNAL ENGINE — STRATEGY PARAMETERS")
-        dlg.resize(460, 620)
+        dlg.resize(1100, 620)
         dlg.setModal(False)
         dlg.finished.connect(lambda _: self._clear_signals())
 
@@ -285,6 +286,11 @@ class AtrScannerPanel(QWidget):
         setup_lay = QVBoxLayout(setup_grp)
         setup_lay.setContentsMargins(6, 6, 6, 6)
         setup_lay.setSpacing(8)
+
+        setup_cols = QGridLayout()
+        setup_cols.setContentsMargins(0, 0, 0, 0)
+        setup_cols.setHorizontalSpacing(8)
+        setup_cols.setVerticalSpacing(8)
 
         # ── Add symbol form ───────────────────────────────────────────────
         add_grp = QGroupBox("Symbol Setup")
@@ -391,7 +397,10 @@ class AtrScannerPanel(QWidget):
         btn_row.addWidget(remove_btn)
         form_lay.addRow(btn_row)
 
-        setup_lay.addWidget(add_grp)
+        symbol_col = QVBoxLayout()
+        symbol_col.setContentsMargins(0, 0, 0, 0)
+        symbol_col.setSpacing(8)
+        symbol_col.addWidget(add_grp)
 
         # ── Watchlist table ───────────────────────────────────────────────
         watch_grp = QGroupBox("Watching")
@@ -410,7 +419,7 @@ class AtrScannerPanel(QWidget):
         self._watchlist_table.setShowGrid(False)
         watch_lay.addWidget(self._watchlist_table)
 
-        setup_lay.addWidget(watch_grp, 1)
+        setup_cols.addWidget(watch_grp, 0, 1)
 
         note = QLabel(
             "ATR Dist: how many ATRs price must be\n"
@@ -418,7 +427,7 @@ class AtrScannerPanel(QWidget):
             "CVD Z-Score: minimum CVD deviation."
         )
         note.setStyleSheet(f"color: {C_MUTED}; font-size: 10px; padding: 4px;")
-        setup_lay.addWidget(note)
+        symbol_col.addWidget(note)
 
         actions_row = QHBoxLayout()
         save_btn = QPushButton("SAVE SETUP")
@@ -428,7 +437,7 @@ class AtrScannerPanel(QWidget):
         load_btn = QPushButton("LOAD SETUP")
         load_btn.clicked.connect(self._load_setup_from_button)
         actions_row.addWidget(load_btn)
-        setup_lay.addLayout(actions_row)
+        symbol_col.addLayout(actions_row)
 
         simulator_grp = QGroupBox("Simulator Backtester")
         simulator_form = QFormLayout(simulator_grp)
@@ -448,7 +457,12 @@ class AtrScannerPanel(QWidget):
         self._sim_result_label.setStyleSheet(f"color: {C_MUTED}; font-size: 11px;")
         simulator_form.addRow("Result:", self._sim_result_label)
 
-        setup_lay.addWidget(simulator_grp)
+        setup_cols.addLayout(symbol_col, 0, 0)
+        setup_cols.addWidget(simulator_grp, 0, 2)
+        setup_cols.setColumnStretch(0, 1)
+        setup_cols.setColumnStretch(1, 1)
+        setup_cols.setColumnStretch(2, 1)
+        setup_lay.addLayout(setup_cols)
 
         lay.addWidget(setup_grp, 1)
 
