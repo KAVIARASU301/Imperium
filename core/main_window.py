@@ -717,8 +717,6 @@ class ImperiumMainWindow(QMainWindow):
         if selected_mode == "auto":
             if self._ensure_center_auto_trader_widget():
                 self.center_stack.setCurrentIndex(1)
-            else:
-                self.center_stack.setCurrentIndex(0)
         else:
             self.center_stack.setCurrentIndex(0)
 

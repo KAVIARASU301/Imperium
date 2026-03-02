@@ -2898,7 +2898,12 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         return self.SIGNAL_FILTER_ALL
 
     def _selected_signal_filters(self) -> list[str]:
-        return self._checked_signal_filters(self.signal_filter_combo)
+        combo = getattr(self, "signal_filter_combo", None)
+        if combo is None:
+            combo = getattr(self, "setup_signal_filter_combo", None)
+        if combo is None:
+            return self._strategy_filter_values()
+        return self._checked_signal_filters(combo)
 
     def _selected_breakout_switch_mode(self) -> str:
         return self.breakout_switch_mode_combo.currentData() or self.BREAKOUT_SWITCH_ADAPTIVE
