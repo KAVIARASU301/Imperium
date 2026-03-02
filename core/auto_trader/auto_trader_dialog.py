@@ -1658,12 +1658,12 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.trend_entry_require_vol_slope_check.setChecked(_read_setting("trend_entry_require_vol_slope", True, bool))
         _apply_combo_value(
             self.automation_route_combo,
-            _read_setting("route", self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL),
+            _read_setting("route", self._combo_data("automation_route_combo", self.ROUTE_BUY_EXIT_PANEL)),
             fallback_index=0,
         )
         _apply_combo_value(
             self.automation_order_type_combo,
-            _read_setting("order_type", self.automation_order_type_combo.currentData() or self.ORDER_TYPE_MARKET),
+            _read_setting("order_type", self._combo_data("automation_order_type_combo", self.ORDER_TYPE_MARKET)),
             fallback_index=0,
         )
         self.automation_start_time_hour_input.setValue(_read_setting("automation_start_hour", 9, int))
@@ -2027,6 +2027,16 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self._on_automation_settings_changed()
         self._log_active_priority_list_if_needed()
 
+    def _combo_data(self, attr: str, default):
+        combo = getattr(self, attr, None)
+        if combo is None:
+            return default
+        with suppress(Exception):
+            value = combo.currentData()
+            if value is not None:
+                return value
+        return default
+
     def _persist_setup_values(self):
         if not getattr(self, "_setup_values_ready", False):
             return
@@ -2064,8 +2074,8 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
             "trend_entry_consecutive_bars": int(self.trend_entry_consecutive_bars_input.value()),
             "trend_entry_require_adx_slope": self.trend_entry_require_adx_slope_check.isChecked(),
             "trend_entry_require_vol_slope": self.trend_entry_require_vol_slope_check.isChecked(),
-            "route": self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL,
-            "order_type": self.automation_order_type_combo.currentData() or self.ORDER_TYPE_MARKET,
+            "route": self._combo_data("automation_route_combo", self.ROUTE_BUY_EXIT_PANEL),
+            "order_type": self._combo_data("automation_order_type_combo", self.ORDER_TYPE_MARKET),
             "automation_start_hour": int(self.automation_start_time_hour_input.value()),
             "automation_start_minute": int(self.automation_start_time_minute_input.value()),
             "automation_cutoff_hour": int(self.automation_cutoff_time_hour_input.value()),
@@ -2219,8 +2229,8 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
             "open_drive_max_profit_giveback_points": _num("open_drive_max_profit_giveback_input", 80.0, float),
             "open_drive_tick_drawdown_limit_points": _num("open_drive_tick_drawdown_limit_input", 80.0, float),
             "atr_trailing_step_points": _num("atr_trailing_step_input", 10.0, float),
-            "route": self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL,
-            "order_type": self.automation_order_type_combo.currentData() or self.ORDER_TYPE_MARKET,
+            "route": self._combo_data("automation_route_combo", self.ROUTE_BUY_EXIT_PANEL),
+            "order_type": self._combo_data("automation_order_type_combo", self.ORDER_TYPE_MARKET),
             "automation_start_hour": _num("automation_start_time_hour_input", 9, int),
             "automation_start_minute": _num("automation_start_time_minute_input", 15, int),
             "automation_cutoff_hour": _num("automation_cutoff_time_hour_input", 15, int),
@@ -2385,8 +2395,8 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
                 "signal_x": 0.0,
                 "price_close": current_price,
                 "stoploss_points": float(self.automation_stoploss_input.value()),
-                "route": self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL,
-                "order_type": self.automation_order_type_combo.currentData() or self.ORDER_TYPE_MARKET,
+                "route": self._combo_data("automation_route_combo", self.ROUTE_BUY_EXIT_PANEL),
+                "order_type": self._combo_data("automation_order_type_combo", self.ORDER_TYPE_MARKET),
                 "timestamp": f"hybrid_exit_{decision.exit_reason}",
                 "is_exit": True,
                 "exit_reason": decision.exit_reason,
@@ -4135,8 +4145,8 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
                     "signal_x": x_arr_val,
                     "price_close": current_price,
                     "stoploss_points": float(self.automation_stoploss_input.value()),
-                    "route": self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL,
-                    "order_type": self.automation_order_type_combo.currentData() or self.ORDER_TYPE_MARKET,
+                    "route": self._combo_data("automation_route_combo", self.ROUTE_BUY_EXIT_PANEL),
+                    "order_type": self._combo_data("automation_order_type_combo", self.ORDER_TYPE_MARKET),
                     "timestamp": unwind_ts,
                     "is_stack_unwind": True,          # ← coordinator routes this as EXIT
                     "stack_number": entry.stack_number,
@@ -4194,8 +4204,8 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
                     "signal_x": x_arr_val,
                     "price_close": current_price,
                     "stoploss_points": float(self.automation_stoploss_input.value()),
-                    "route": self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL,
-                    "order_type": self.automation_order_type_combo.currentData() or self.ORDER_TYPE_MARKET,
+                    "route": self._combo_data("automation_route_combo", self.ROUTE_BUY_EXIT_PANEL),
+                    "order_type": self._combo_data("automation_order_type_combo", self.ORDER_TYPE_MARKET),
                     "timestamp": harvest_ts,
                     "is_stack_unwind": True,
                     "is_profit_harvest": True,
@@ -4242,8 +4252,8 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
                 "signal_x": x_arr_val,
                 "price_close": current_price,
                 "stoploss_points": float(self.automation_stoploss_input.value()),
-                "route": self.automation_route_combo.currentData() or self.ROUTE_BUY_EXIT_PANEL,
-                "order_type": self.automation_order_type_combo.currentData() or self.ORDER_TYPE_MARKET,
+                "route": self._combo_data("automation_route_combo", self.ROUTE_BUY_EXIT_PANEL),
+                "order_type": self._combo_data("automation_order_type_combo", self.ORDER_TYPE_MARKET),
                 "timestamp": stack_ts,
                 "is_stack": True,
                 "stack_number": stack_num,
