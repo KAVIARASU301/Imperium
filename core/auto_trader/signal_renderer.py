@@ -390,23 +390,6 @@ class SignalRendererMixin:
         short_open_drive = np.zeros_like(price_above_mask, dtype=bool)
         long_open_drive = np.zeros_like(price_above_mask, dtype=bool)
 
-        breakout_long_context, breakout_short_context = self.strategy_detector.build_breakout_context_masks(
-            long_breakout=long_breakout,
-            short_breakout=short_breakout,
-            hold_bars=max(2, int(round(6 / max(self.timeframe_minutes, 1))))
-        )
-
-        breakout_long_strong, breakout_short_strong = self.strategy_detector.evaluate_breakout_momentum_strength(
-            price_close=price_data,
-            price_ema10=price_fast_filter,
-            cvd_data=cvd_data,
-            cvd_ema10=cvd_fast_filter,
-            volume=volume_data,
-            long_context=breakout_long_context,
-            short_context=breakout_short_context,
-            slope_lookback_bars=max(1, int(round(3 / max(self.timeframe_minutes, 1))))
-        )
-
         self.strategy_detector.ATR_EXTENSION_THRESHOLD = float(self.atr_extension_threshold_input.value())
         self.strategy_detector.ATR_FLAT_VELOCITY_PCT = float(self.atr_flat_velocity_pct_input.value())
 
@@ -418,11 +401,6 @@ class SignalRendererMixin:
                 cvd_atr_below=cvd_below_mask,
                 atr_values=atr_values,
                 timestamps=self.all_timestamps,
-                active_breakout_long=breakout_long_context,
-                active_breakout_short=breakout_short_context,
-                breakout_long_momentum_strong=breakout_long_strong,
-                breakout_short_momentum_strong=breakout_short_strong,
-                breakout_switch_mode=self._selected_breakout_switch_mode(),
                 price_close=price_data,
                 price_open=np.array(self.all_price_open_data, dtype=float),
                 price_ema51=price_slow_filter,

@@ -31,31 +31,11 @@ def _rolling_confirmation_vectorized(mask: np.ndarray, window: int) -> np.ndarra
 # =============================================================================
 
 class StrategySignalDetector:
-    """
-    Encapsulates all three trading strategies with clear naming:
-
-    1. ATR REVERSAL STRATEGY (atr_reversal)
-       - Price ATR reversal signal
-       - CVD must be on same side of both EMA10 and EMA51
-       - Wait 5 minutes for CVD to cross its EMA10 in favor
-
-    2. EMA & CVD CROSS STRATEGY (ema_cvd_cross)
-       - Price already above/below both EMA10 and EMA51
-       - CVD already above/below its EMA10
-       - CVD crosses above/below its EMA51
-
-    3. ATR & CVD STRATEGY (atr_cvd_divergence)
-       - ATR reversal in price only
-       - CVD already above (for green/long) or below (for red/short) both EMA10 and EMA51
-       - CVD continues its trend (no reversal expected)
-    """
+    """Detector for ATR reversal strategy signals."""
 
     CONFIRMATION_WAIT_MINUTES = 5
     ATR_EXTENSION_THRESHOLD = 1.10
     ATR_FLAT_VELOCITY_PCT = 0.02
-    BREAKOUT_SWITCH_KEEP = "keep_breakout"
-    BREAKOUT_SWITCH_PREFER_ATR = "prefer_atr_reversal"
-    BREAKOUT_SWITCH_ADAPTIVE = "adaptive"
 
     def __init__(self, timeframe_minutes: int = 1):
         self.timeframe_minutes = timeframe_minutes
@@ -94,11 +74,6 @@ class StrategySignalDetector:
             cvd_atr_below: np.ndarray,
             atr_values: np.ndarray | None = None,
             timestamps: list | None = None,
-            active_breakout_long: np.ndarray | None = None,
-            active_breakout_short: np.ndarray | None = None,
-            breakout_long_momentum_strong: np.ndarray | None = None,
-            breakout_short_momentum_strong: np.ndarray | None = None,
-            breakout_switch_mode: str = BREAKOUT_SWITCH_ADAPTIVE,
             price_close: np.ndarray | None = None,
             price_open: np.ndarray | None = None,
             price_ema51: np.ndarray | None = None,
@@ -230,46 +205,11 @@ class StrategySignalDetector:
         short_atr_reversal_raw = short_atr_reversal.copy()
         long_atr_reversal_raw = long_atr_reversal.copy()
 
-        if (
-                active_breakout_long is not None and
-                active_breakout_short is not None and
-                len(active_breakout_long) == signal_length and
-                len(active_breakout_short) == signal_length
-        ):
-            long_context = active_breakout_long.astype(bool)
-            short_context = active_breakout_short.astype(bool)
-
-            if breakout_switch_mode == self.BREAKOUT_SWITCH_KEEP:
-                suppress_short_mask = long_context
-                suppress_long_mask = short_context
-            elif breakout_switch_mode == self.BREAKOUT_SWITCH_PREFER_ATR:
-                suppress_short_mask = np.zeros_like(short_atr_reversal)
-                suppress_long_mask = np.zeros_like(long_atr_reversal)
-            else:
-                long_momentum = (
-                    breakout_long_momentum_strong.astype(bool)
-                    if breakout_long_momentum_strong is not None and
-                       len(breakout_long_momentum_strong) == len(short_atr_reversal)
-                    else long_context
-                )
-                short_momentum = (
-                    breakout_short_momentum_strong.astype(bool)
-                    if breakout_short_momentum_strong is not None and
-                       len(breakout_short_momentum_strong) == len(short_atr_reversal)
-                    else short_context
-                )
-                suppress_short_mask = long_context & long_momentum
-                suppress_long_mask = short_context & short_momentum
-
-            short_atr_reversal = short_atr_reversal & (~suppress_short_mask)
-            long_atr_reversal = long_atr_reversal & (~suppress_long_mask)
-        else:
-            # Backward-compatible behavior for any caller that still uses stateful suppression.
-            suppress_short, suppress_long = self.should_suppress_atr_reversal()
-            if suppress_short:
-                short_atr_reversal = np.zeros_like(short_atr_reversal)
-            if suppress_long:
-                long_atr_reversal = np.zeros_like(long_atr_reversal)
+        suppress_short, suppress_long = self.should_suppress_atr_reversal()
+        if suppress_short:
+            short_atr_reversal = np.zeros_like(short_atr_reversal)
+        if suppress_long:
+            long_atr_reversal = np.zeros_like(long_atr_reversal)
 
         return short_atr_reversal, long_atr_reversal, short_atr_reversal_raw, long_atr_reversal_raw
 

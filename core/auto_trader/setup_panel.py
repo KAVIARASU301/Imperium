@@ -1444,52 +1444,6 @@ class SetupPanelMixin:
             self.STRATEGY_PRIORITY_LABELS["atr_reversal"],
         )
 
-        # ATR Divergence — no dedicated knobs yet, info panel full-width
-        atr_div_tab = QWidget()
-        atr_div_lay_root = QHBoxLayout(atr_div_tab)
-        atr_div_lay_root.setContentsMargins(6, 12, 6, 6)
-        atr_div_lay_root.setSpacing(0)
-        atr_div_lay_root.addWidget(atr_div_panel)
-        tabs.addTab(atr_div_tab, self.STRATEGY_PRIORITY_LABELS["atr_divergence"])
-
-        # EMA Cross — knobs left, info panel right
-        ema_cross_grp, ema_cross_frm = _group("EMA & CVD Cross")
-        _w(self.cvd_ema_gap_input)
-        ema_cross_frm.addRow(_note("Configure EMA+CVD cross confluence behavior."))
-        ema_cross_frm.addRow("CVD EMA Gap", self.cvd_ema_gap_input)
-        ema_cross_frm.addRow("Parent Trend", self.ema_cross_use_parent_mask_check)
-        tabs.addTab(
-            _two_col_tab([ema_cross_grp], ema_cross_panel),
-            self.STRATEGY_PRIORITY_LABELS["ema_cross"],
-        )
-
-        # CVD Range Breakout — consol_grp removed; it belongs to Range Breakout tab
-        cvd_tab = QWidget()
-        cvd_tab_lay = QHBoxLayout(cvd_tab)
-        cvd_tab_lay.setContentsMargins(6, 12, 6, 6)
-        cvd_tab_lay.setSpacing(10)
-        cvd_left = QVBoxLayout()
-        cvd_left.setSpacing(_GRP_SPACING)
-        cvd_left.addWidget(cvdbk_grp)
-        cvd_left.addStretch()
-        cvd_right = QVBoxLayout()
-        cvd_right.setSpacing(0)
-        cvd_right.addWidget(cvd_info_panel)
-        cvd_tab_lay.addLayout(cvd_left, 0)
-        cvd_tab_lay.addLayout(cvd_right, 1)
-        tabs.addTab(cvd_tab, self.STRATEGY_PRIORITY_LABELS["cvd_range_breakout"])
-
-        # Range Breakout — brk_grp + consol_grp (pre-squeeze gate) left, info panel right
-        tabs.addTab(
-            _two_col_tab([brk_grp, consol_grp], brk_panel),
-            self.STRATEGY_PRIORITY_LABELS["range_breakout"],
-        )
-
-        # Open Drive — knobs left, info panel right
-        tabs.addTab(
-            _two_col_tab([od_grp], od_panel),
-            self.STRATEGY_PRIORITY_LABELS["open_drive"],
-        )
         self._build_regime_tab(tabs, compact_spinbox_style, compact_combo_style)
 
         # ── Hybrid Exit Tab ───────────────────────────────────────────────

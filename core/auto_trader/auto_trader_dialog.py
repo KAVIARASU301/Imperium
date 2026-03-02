@@ -94,24 +94,11 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
 
     STRATEGY_PRIORITY_KEYS = (
         "atr_reversal",
-        "atr_divergence",
-        "ema_cross",
-        "cvd_range_breakout",
-        "range_breakout",
-        "open_drive",
     )
     STRATEGY_PRIORITY_LABELS = {
         "atr_reversal": "ATR Reversal",
-        "atr_divergence": "ATR Divergence",
-        "ema_cross": "EMA Cross",
-        "cvd_range_breakout": "CVD Range Breakout",
-        "range_breakout": "Range Breakout",
-        "open_drive": "Open Drive",
     }
     CPR_PRIORITY_LIST_LABELS = {
-        "narrow": "Narrow CPR",
-        "neutral": "Neutral CPR",
-        "wide": "Wide CPR",
         "fallback": "Fallback",
     }
 
@@ -3399,156 +3386,29 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self._cpr_labels = []
 
     def _default_cpr_strategy_priorities(self) -> dict[str, dict[str, int]]:
-        base_priorities = {
-            "atr_reversal": 1,
-            "atr_divergence": 2,
-            "ema_cross": 3,
-            "cvd_range_breakout": 4,
-            "range_breakout": 5,
-            "open_drive": 6,
-        }
-        return {
-            "narrow": dict(base_priorities),
-            "neutral": dict(base_priorities),
-            "wide": dict(base_priorities),
-            "fallback": dict(base_priorities),
-        }
+        return {"fallback": {"atr_reversal": 1}}
 
     def _active_cpr_priority_list_key(self) -> str:
-        cpr = self._latest_previous_day_cpr or {}
-        width = cpr.get("range_width")
-        if width is None:
-            return "fallback"
-        classification, _ = self._classify_cpr_width(float(width))
-        return {
-            "Narrow CPR": "narrow",
-            "Neutral CPR": "neutral",
-            "Wide CPR": "wide",
-        }.get(classification, "fallback")
+        return "fallback"
 
     def _active_strategy_priorities(self) -> tuple[str, dict[str, int]]:
-        key = self._active_cpr_priority_list_key()
-        priorities = self._cpr_strategy_priorities.get(key) or self._cpr_strategy_priorities.get("fallback", {})
-        return key, dict(priorities)
+        return "fallback", {"atr_reversal": 1}
 
     def _log_active_priority_list_if_needed(self):
-        key, priorities = self._active_strategy_priorities()
-        self._active_priority_list_key = key
-        self._update_cpr_status_bar(key=key, priorities=priorities)
-        if self._last_logged_priority_list_key == key:
-            return
-        self._last_logged_priority_list_key = key
-        logger.info(
-            "[AUTO] CPR priority list for %s (%s): %s",
-            self.symbol,
-            self.CPR_PRIORITY_LIST_LABELS.get(key, key.title()),
-            priorities,
-        )
+        self._active_priority_list_key = "fallback"
+        self._update_cpr_status_bar(key="fallback", priorities={"atr_reversal": 1})
 
     def _update_cpr_status_bar(self, key: str | None = None, priorities: dict[str, int] | None = None):
-        if key is None or priorities is None:
-            key, priorities = self._active_strategy_priorities()
-
-        cpr_text = {
-            "narrow": "Narrow",
-            "wide": "Wide",
-            "neutral": "Neutral",
-            "fallback": "--",
-        }.get(key, key.title())
-
         if hasattr(self, "cpr_status_label"):
-            self.cpr_status_label.setText(f"CPR: {cpr_text}")
-
-        ranked = sorted(
-            priorities.items(),
-            key=lambda item: (int(item[1]), self.STRATEGY_PRIORITY_KEYS.index(item[0])),
-        )
-        priority_text = ", ".join(
-            f"{rank}. {self.STRATEGY_PRIORITY_LABELS.get(strategy_key, strategy_key)}"
-            for strategy_key, rank in ranked
-        ) if ranked else "--"
-
+            self.cpr_status_label.setText("CPR: --")
         if hasattr(self, "priority_order_label"):
-            self.priority_order_label.setText(f"Priority order: {priority_text}")
+            self.priority_order_label.setText("Priority order: 1. ATR Reversal")
 
     def _classify_cpr_width(self, width: float) -> tuple[str, str]:
-        narrow = max(0.0, self._cpr_narrow_threshold)
-        wide_cutoff = max(0.0, self._cpr_wide_threshold)
-        if width < narrow:
-            return "Narrow CPR", "#00E676"
-        if width > wide_cutoff:
-            return "Wide CPR", "#FF5252"
-        return "Neutral CPR", "#FFD54F"
+        return "--", "#8A9BA8"
 
     def _render_cpr_levels(self):
         self._clear_cpr_levels()
-        if (
-            (not self._show_cpr_lines and not self._show_cpr_labels)
-            or not self.all_timestamps
-            or not self.all_price_data
-        ):
-            return
-
-        data = pd.DataFrame({
-            "timestamp": self.all_timestamps,
-            "close": self.all_price_data,
-            "high": self.all_price_high_data,
-            "low": self.all_price_low_data,
-        })
-        data["session"] = pd.to_datetime(data["timestamp"]).dt.date
-
-        focus_mode = not self.btn_focus.isChecked()
-        sessions = list(dict.fromkeys(data["session"].tolist()))
-
-        # 1D mode loads only the latest session for chart clarity. In that case,
-        # use CPR computed from the previous trading day in the fetch worker.
-        if len(sessions) == 1 and self._latest_previous_day_cpr:
-            session_rows = data[data["session"] == sessions[0]]
-            if session_rows.empty:
-                return
-
-            session_start_pos = int(session_rows.index[0])
-            session_end_pos = int(session_rows.index[-1])
-            if focus_mode:
-                x_start = float(self._time_to_session_index(session_rows.iloc[0]["timestamp"]))
-                x_end = float(self._time_to_session_index(session_rows.iloc[-1]["timestamp"]))
-            else:
-                x_start = float(session_start_pos)
-                x_end = float(session_end_pos)
-
-            if x_end <= x_start:
-                x_end = x_start + 0.5
-
-            self._draw_cpr_band(self._latest_previous_day_cpr, x_start, x_end)
-            return
-
-        for idx, session in enumerate(sessions):
-            if idx == 0:
-                continue
-            prev_session = sessions[idx - 1]
-            prev_day = data[data["session"] == prev_session]
-            cpr = CPRCalculator.get_previous_day_cpr(prev_day)
-            if not cpr:
-                continue
-
-            session_rows = data[data["session"] == session]
-            if session_rows.empty:
-                continue
-
-            session_start_pos = int(session_rows.index[0])
-            session_end_pos = int(session_rows.index[-1])
-            if focus_mode:
-                x_start = float(self._time_to_session_index(session_rows.iloc[0]["timestamp"]))
-                x_end = float(self._time_to_session_index(session_rows.iloc[-1]["timestamp"]))
-            else:
-                x_start = float(session_start_pos)
-                x_end = float(session_end_pos)
-
-            # Ensure short sessions still render at least a tiny visible segment.
-            if x_end <= x_start:
-                x_end = x_start + 0.5
-
-            self._draw_cpr_band(cpr, x_start, x_end)
 
     def _draw_cpr_band(self, cpr: dict, x_start: float, x_end: float):
         x_anchor = x_start
