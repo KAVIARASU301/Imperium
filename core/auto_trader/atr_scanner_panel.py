@@ -21,6 +21,7 @@ import logging
 from datetime import datetime
 from datetime import date
 from typing import Any, Optional
+import json
 
 from PySide6.QtCore import Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QColor, QFont
@@ -44,7 +45,9 @@ from PySide6.QtWidgets import (
     QSplitter,
     QGroupBox,
     QFormLayout,
+    QCheckBox,
 )
+from PySide6.QtCore import QSettings
 
 from core.auto_trader.multi_symbol_engine import AtrSignalEvent, MultiSymbolEngine
 
@@ -64,6 +67,7 @@ C_CHOP      = "#FF6B35"   # orange = chop-filtered signal
 
 STATUS_COLORS = {
     "watching":   C_LONG,
+    "queued": C_MUTED,
     "data_connected": C_ACCENT,
     "fetching":   C_ACCENT,
     "warming_up": C_WARN,
@@ -163,6 +167,9 @@ class AtrScannerPanel(QWidget):
     def __init__(self, kite, parent=None):
         super().__init__(parent)
         self.kite = kite
+        self._settings = QSettings("ImperiumDesk", "AtrScannerPanel")
+        self._automation_enabled = False
+        self._pending_watchlist: dict[str, dict[str, float | int]] = {}
 
         # Engine
         self.engine = MultiSymbolEngine(kite=kite, parent=self)
@@ -183,6 +190,8 @@ class AtrScannerPanel(QWidget):
         self._uptime_timer.timeout.connect(self._tick_uptime)
         self._start_time = datetime.now()
         self._uptime_timer.start()
+        self._load_setup_state()
+        self._apply_automation_state(initial=True)
 
     # ── UI Construction ────────────────────────────────────────────────────
 
@@ -214,13 +223,13 @@ class AtrScannerPanel(QWidget):
         lay.setContentsMargins(16, 0, 16, 0)
 
         # Title
-        title = QLabel("ATR REVERSAL  SCANNER")
+        title = QLabel("ATR Scanner Panel")
         title.setStyleSheet(f"color: {C_TEXT}; font-size: 13px; font-weight: 600; letter-spacing: 2px;")
         lay.addWidget(title)
 
         # Live dot
         self._live_dot = QLabel("●")
-        self._live_dot.setStyleSheet(f"color: {C_LONG}; font-size: 16px;")
+        self._live_dot.setStyleSheet(f"color: {C_LONG}; font-size: 12px;")
         lay.addWidget(self._live_dot)
 
         lay.addStretch()
@@ -229,6 +238,12 @@ class AtrScannerPanel(QWidget):
         setup_btn.setFixedWidth(80)
         setup_btn.clicked.connect(self._open_setup_dialog)
         lay.addWidget(setup_btn)
+
+        self._automation_toggle = QCheckBox("AUTOMATE")
+        self._automation_toggle.setChecked(False)
+        self._automation_toggle.setToolTip("Enable to run scanner engine on saved watchlist")
+        self._automation_toggle.toggled.connect(self._on_automation_toggled)
+        lay.addWidget(self._automation_toggle)
 
         # Uptime
         self._uptime_label = QLabel("00:00:00")
@@ -327,6 +342,16 @@ class AtrScannerPanel(QWidget):
         )
         note.setStyleSheet(f"color: {C_MUTED}; font-size: 10px; padding: 4px;")
         setup_lay.addWidget(note)
+
+        actions_row = QHBoxLayout()
+        save_btn = QPushButton("SAVE SETUP")
+        save_btn.clicked.connect(self._save_setup_state)
+        actions_row.addWidget(save_btn)
+
+        load_btn = QPushButton("LOAD SETUP")
+        load_btn.clicked.connect(self._load_setup_from_button)
+        actions_row.addWidget(load_btn)
+        setup_lay.addLayout(actions_row)
 
         lay.addWidget(setup_grp, 1)
 
@@ -446,11 +471,16 @@ class AtrScannerPanel(QWidget):
             "cvd_zscore_threshold": self._cvd_zscore_spin.value(),
         }
 
-        self._symbol_tokens[symbol] = token
-        self.engine.add_symbol(symbol, token, params)
-        self._add_watchlist_row(symbol)
+        self._pending_watchlist[symbol] = params
+        self._add_watchlist_row(symbol, "queued")
+        if self._automation_enabled:
+            self._start_symbol_engine(symbol)
         self._update_counts()
-        self._set_status(f"Added {symbol} using mapped FUT token {token}.")
+        self._save_setup_state()
+        if self._automation_enabled:
+            self._set_status(f"Added {symbol} using mapped FUT token {token}.")
+        else:
+            self._set_status(f"Added {symbol} to setup queue. Enable AUTOMATE to start.")
 
     def _on_remove_selected(self):
         selected = self._watchlist_table.selectedItems()
@@ -464,8 +494,10 @@ class AtrScannerPanel(QWidget):
 
         self.engine.remove_symbol(symbol)
         self._symbol_tokens.pop(symbol, None)
+        self._pending_watchlist.pop(symbol, None)
         self._watchlist_table.removeRow(row)
         self._update_counts()
+        self._save_setup_state()
         self._set_status(f"Removed {symbol} from watchlist.")
 
     def _clear_signals(self):
@@ -533,7 +565,9 @@ class AtrScannerPanel(QWidget):
 
     # ── Watchlist helpers ──────────────────────────────────────────────────
 
-    def _add_watchlist_row(self, symbol: str):
+    def _add_watchlist_row(self, symbol: str, initial_status: str = "starting…"):
+        if self._find_watchlist_row(symbol) >= 0:
+            return
         row = self._watchlist_table.rowCount()
         self._watchlist_table.insertRow(row)
 
@@ -541,9 +575,17 @@ class AtrScannerPanel(QWidget):
         sym_item.setForeground(QColor(C_TEXT))
         self._watchlist_table.setItem(row, 0, sym_item)
 
-        status_item = QTableWidgetItem("starting…")
-        status_item.setForeground(QColor(C_MUTED))
+        status_item = QTableWidgetItem(initial_status)
+        status_color = STATUS_COLORS.get(initial_status, C_MUTED)
+        status_item.setForeground(QColor(status_color))
         self._watchlist_table.setItem(row, 1, status_item)
+
+    def _find_watchlist_row(self, symbol: str) -> int:
+        for row in range(self._watchlist_table.rowCount()):
+            item = self._watchlist_table.item(row, 0)
+            if item and item.text() == symbol:
+                return row
+        return -1
 
     def _update_watchlist_status(self, symbol: str, status: str):
         for row in range(self._watchlist_table.rowCount()):
@@ -573,6 +615,103 @@ class AtrScannerPanel(QWidget):
     def _set_status(self, msg: str):
         self._status_label.setText(msg)
 
+    def _on_automation_toggled(self, checked: bool):
+        self._automation_enabled = bool(checked)
+        self._apply_automation_state(initial=False)
+        self._save_setup_state()
+
+    def _apply_automation_state(self, initial: bool):
+        if self._automation_enabled:
+            if not self._instrument_data:
+                if not initial:
+                    self._set_status("Automation enabled. Waiting for instrument data to start.")
+                return
+            for symbol in list(self._pending_watchlist.keys()):
+                self._start_symbol_engine(symbol)
+            if not initial:
+                self._set_status("Automation enabled. Scanner started for queued symbols.")
+        else:
+            self.engine.remove_all()
+            self._symbol_tokens.clear()
+            for symbol in self._pending_watchlist.keys():
+                self._update_watchlist_status(symbol, "queued")
+            if not initial:
+                self._set_status("Automation paused. Click AUTOMATE to run scanner.")
+
+    def _start_symbol_engine(self, symbol: str):
+        if symbol in self._symbol_tokens:
+            return
+        token = self._resolve_futures_token(symbol)
+        if token is None:
+            self._update_watchlist_status(symbol, "error")
+            return
+        params = self._pending_watchlist.get(symbol, {})
+        self._symbol_tokens[symbol] = token
+        self.engine.add_symbol(symbol, token, params)
+
+    def _save_setup_state(self):
+        payload = {
+            "automation_enabled": self._automation_enabled,
+            "defaults": {
+                "atr_distance_threshold": self._atr_distance_spin.value(),
+                "cvd_zscore_threshold": self._cvd_zscore_spin.value(),
+                "timeframe_minutes": self._tf_spin.value(),
+            },
+            "symbols": [
+                {
+                    "symbol": symbol,
+                    "params": params,
+                }
+                for symbol, params in sorted(self._pending_watchlist.items())
+            ],
+        }
+        self._settings.setValue("setup_state", json.dumps(payload))
+        self._settings.sync()
+
+    def _load_setup_from_button(self):
+        self._load_setup_state()
+        self._set_status("Loaded setup and symbols from saved state.")
+
+    def _load_setup_state(self):
+        raw = self._settings.value("setup_state", "")
+        if not raw:
+            return
+        try:
+            payload = json.loads(raw)
+        except Exception:
+            logger.warning("Failed parsing saved setup_state payload")
+            return
+
+        defaults = payload.get("defaults", {}) if isinstance(payload, dict) else {}
+        self._atr_distance_spin.setValue(float(defaults.get("atr_distance_threshold", 1.5)))
+        self._cvd_zscore_spin.setValue(float(defaults.get("cvd_zscore_threshold", 1.5)))
+        self._tf_spin.setValue(int(defaults.get("timeframe_minutes", 1)))
+
+        self._pending_watchlist.clear()
+        self._watchlist_table.setRowCount(0)
+
+        for item in payload.get("symbols", []):
+            if not isinstance(item, dict):
+                continue
+            symbol = str(item.get("symbol", "")).strip().upper()
+            if not symbol:
+                continue
+            params = item.get("params", {}) if isinstance(item.get("params", {}), dict) else {}
+            merged_params = {
+                "timeframe_minutes": int(params.get("timeframe_minutes", self._tf_spin.value())),
+                "atr_distance_threshold": float(params.get("atr_distance_threshold", self._atr_distance_spin.value())),
+                "cvd_zscore_threshold": float(params.get("cvd_zscore_threshold", self._cvd_zscore_spin.value())),
+            }
+            self._pending_watchlist[symbol] = merged_params
+            self._add_watchlist_row(symbol, "queued")
+
+        enabled = bool(payload.get("automation_enabled", False)) if isinstance(payload, dict) else False
+        self._automation_toggle.blockSignals(True)
+        self._automation_toggle.setChecked(enabled)
+        self._automation_toggle.blockSignals(False)
+        self._automation_enabled = enabled
+        self._update_counts()
+
     # ── Public API — called by main_window ────────────────────────────────
 
     def add_symbol_programmatic(self, symbol: str, token: int):
@@ -598,14 +737,18 @@ class AtrScannerPanel(QWidget):
             "atr_distance_threshold": self._atr_distance_spin.value(),
             "cvd_zscore_threshold": self._cvd_zscore_spin.value(),
         }
-        self._symbol_tokens[symbol] = mapped_token
-        self.engine.add_symbol(symbol, mapped_token, params)
-        self._add_watchlist_row(symbol)
+        self._pending_watchlist[symbol] = params
+        self._add_watchlist_row(symbol, "queued")
+        if self._automation_enabled:
+            self._start_symbol_engine(symbol)
         self._update_counts()
+        self._save_setup_state()
 
     def set_instrument_data(self, data: dict[str, dict[str, Any]]):
         self._instrument_data = data or {}
         self._reload_symbol_selector()
+        if self._automation_enabled:
+            self._apply_automation_state(initial=True)
 
     def _reload_symbol_selector(self):
         current = self._symbol_selector.currentText().strip().upper()
@@ -644,5 +787,6 @@ class AtrScannerPanel(QWidget):
 
     def cleanup(self):
         """Call this on main window close."""
+        self._save_setup_state()
         self.engine.remove_all()
         self._uptime_timer.stop()
