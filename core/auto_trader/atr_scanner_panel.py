@@ -20,10 +20,14 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 from datetime import date
+from datetime import timedelta
 from typing import Any, Optional
 import json
 
-from PySide6.QtCore import Qt, QTimer, Signal, Slot
+import numpy as np
+import pandas as pd
+
+from PySide6.QtCore import Qt, QTimer, Signal, Slot, QDate
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QComboBox,
@@ -36,6 +40,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSpinBox,
     QDoubleSpinBox,
+    QDateEdit,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -50,6 +55,9 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import QSettings
 
 from core.auto_trader.multi_symbol_engine import AtrSignalEvent, MultiSymbolEngine
+from core.auto_trader.indicators import calculate_atr, calculate_ema, calculate_vwap, calculate_cvd_zscore
+from core.auto_trader.strategy_signal_detector import StrategySignalDetector
+from core.cvd.cvd_historical import CVDHistoricalBuilder
 
 logger = logging.getLogger(__name__)
 
@@ -353,6 +361,26 @@ class AtrScannerPanel(QWidget):
         actions_row.addWidget(load_btn)
         setup_lay.addLayout(actions_row)
 
+        simulator_grp = QGroupBox("Simulator Backtester")
+        simulator_form = QFormLayout(simulator_grp)
+        simulator_form.setLabelAlignment(Qt.AlignRight)
+
+        self._sim_date_edit = QDateEdit()
+        self._sim_date_edit.setCalendarPopup(True)
+        self._sim_date_edit.setDate(QDate.currentDate())
+        self._sim_date_edit.setDisplayFormat("dd-MMM-yyyy")
+        simulator_form.addRow("Trade Date:", self._sim_date_edit)
+
+        sim_run_btn = QPushButton("SIMULATOR RUN")
+        sim_run_btn.clicked.connect(self._run_simulator_backtest)
+        simulator_form.addRow(sim_run_btn)
+
+        self._sim_result_label = QLabel("Net pts captured: --")
+        self._sim_result_label.setStyleSheet(f"color: {C_MUTED}; font-size: 11px;")
+        simulator_form.addRow("Result:", self._sim_result_label)
+
+        setup_lay.addWidget(simulator_grp)
+
         lay.addWidget(setup_grp, 1)
 
         close_btn = QPushButton("CLOSE")
@@ -614,6 +642,139 @@ class AtrScannerPanel(QWidget):
 
     def _set_status(self, msg: str):
         self._status_label.setText(msg)
+
+    def _run_simulator_backtest(self):
+        if not self._pending_watchlist:
+            self._set_status("No symbols in watchlist for simulator run.")
+            return
+
+        selected_qdate = self._sim_date_edit.date()
+        run_day = date(selected_qdate.year(), selected_qdate.month(), selected_qdate.day())
+        from_dt = datetime.combine(run_day, datetime.min.time())
+        to_dt = datetime.combine(run_day + timedelta(days=1), datetime.min.time())
+
+        total_points = 0.0
+        symbols_processed = 0
+        total_signals = 0
+
+        for symbol, params in sorted(self._pending_watchlist.items()):
+            token = self._resolve_futures_token(symbol)
+            if token is None:
+                logger.warning("[SIM] Skipping %s due to missing futures token", symbol)
+                continue
+
+            try:
+                candles = self.kite.historical_data(token, from_dt, to_dt, interval="minute")
+            except Exception as exc:
+                logger.warning("[SIM] Historical fetch failed for %s: %s", symbol, exc)
+                continue
+
+            if not candles:
+                continue
+
+            df = pd.DataFrame(candles)
+            if df.empty or "date" not in df.columns:
+                continue
+
+            df["date"] = pd.to_datetime(df["date"])
+            df.set_index("date", inplace=True)
+            df = df.sort_index()
+
+            timeframe_minutes = int(params.get("timeframe_minutes", self._tf_spin.value()))
+            if timeframe_minutes > 1:
+                rule = f"{timeframe_minutes}min"
+                df = df.resample(rule).agg({
+                    "open": "first",
+                    "high": "max",
+                    "low": "min",
+                    "close": "last",
+                    "volume": "sum",
+                }).dropna(subset=["open", "high", "low", "close"])
+
+            if len(df) < 30:
+                continue
+
+            cvd_df = CVDHistoricalBuilder.build_cvd_ohlc(df)
+
+            price_close = df["close"].to_numpy(dtype=float)
+            price_high = df["high"].to_numpy(dtype=float)
+            price_low = df["low"].to_numpy(dtype=float)
+            price_open = df["open"].to_numpy(dtype=float)
+            volume = df.get("volume", pd.Series(np.ones(len(df)), index=df.index)).to_numpy(dtype=float)
+
+            atr = calculate_atr(price_high, price_low, price_close, period=14)
+            ema51 = calculate_ema(price_close, 21)
+            session_keys = df.index.date if hasattr(df.index, "date") else None
+            vwap = calculate_vwap(price_close, volume, session_keys=session_keys)
+
+            cvd_close = (
+                cvd_df["close"].to_numpy(dtype=float)
+                if cvd_df is not None and not cvd_df.empty
+                else np.zeros_like(price_close)
+            )
+            cvd_zscore, _ = calculate_cvd_zscore(cvd_close, ema_period=51, zscore_window=50)
+
+            safe_atr = np.where(atr <= 0, np.nan, atr)
+            distance = np.abs(price_close - ema51) / safe_atr
+
+            atr_distance_threshold = float(params.get("atr_distance_threshold", self._atr_distance_spin.value()))
+            cvd_zscore_threshold = float(params.get("cvd_zscore_threshold", self._cvd_zscore_spin.value()))
+
+            price_atr_above = (distance >= atr_distance_threshold) & (price_close > ema51)
+            price_atr_below = (distance >= atr_distance_threshold) & (price_close < ema51)
+            cvd_atr_above = cvd_zscore >= cvd_zscore_threshold
+            cvd_atr_below = cvd_zscore <= -cvd_zscore_threshold
+
+            detector = StrategySignalDetector(timeframe_minutes=timeframe_minutes)
+            short_confirmed, long_confirmed, _, _ = detector.detect_atr_reversal_strategy(
+                price_atr_above=price_atr_above,
+                price_atr_below=price_atr_below,
+                cvd_atr_above=cvd_atr_above,
+                cvd_atr_below=cvd_atr_below,
+                atr_values=atr,
+                timestamps=list(df.index),
+                price_close=price_close,
+                price_open=price_open,
+                price_ema51=ema51,
+                price_vwap=vwap,
+                cvd_data=cvd_close,
+                vwap_min_distance_atr_mult=0.3,
+                exhaustion_min_score=2,
+            )
+
+            signals = np.zeros(len(df), dtype=int)
+            signals[long_confirmed] = 1
+            signals[short_confirmed] = -1
+
+            symbol_points = 0.0
+            position = 0
+            entry_price = 0.0
+
+            for idx, signal in enumerate(signals):
+                px = price_close[idx]
+                if position == 0 and signal != 0:
+                    position = int(signal)
+                    entry_price = px
+                    total_signals += 1
+                    continue
+
+                if position != 0 and signal == -position:
+                    symbol_points += (px - entry_price) * position
+                    position = int(signal)
+                    entry_price = px
+                    total_signals += 1
+
+            if position != 0:
+                symbol_points += (price_close[-1] - entry_price) * position
+
+            total_points += symbol_points
+            symbols_processed += 1
+
+        self._sim_result_label.setText(f"Net pts captured: {total_points:.2f}")
+        self._set_status(
+            f"Simulator completed for {run_day.isoformat()}: "
+            f"{symbols_processed} symbols, {total_signals} entries, net {total_points:.2f} pts"
+        )
 
     def _on_automation_toggled(self, checked: bool):
         self._automation_enabled = bool(checked)
