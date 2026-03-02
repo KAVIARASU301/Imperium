@@ -674,6 +674,39 @@ class ImperiumMainWindow(QMainWindow):
             logger.error("Failed to create embedded Auto Trader panel: %s", exc)
             return False
 
+    def _sync_center_auto_trader_symbol(self, symbol: str) -> None:
+        """Retarget the embedded Auto Trader panel to the latest header symbol."""
+        if not getattr(self, "auto_trader_embed", None) or not hasattr(self, "center_stack"):
+            return
+
+        cvd_token, _, _ = self._get_cvd_token(symbol)
+        if not cvd_token:
+            logger.warning("Unable to update Auto Trader center panel for %s: no CVD token available", symbol)
+            return
+
+        if self.auto_trader_embed.symbol == symbol and self.auto_trader_embed.instrument_token == cvd_token:
+            return
+
+        try:
+            old_dialog = self.auto_trader_embed
+            new_dialog = AutoTraderDialog(
+                kite=self.real_kite_client,
+                instrument_token=cvd_token,
+                symbol=symbol,
+                cvd_engine=self.cvd_engine,
+                parent=self,
+            )
+            new_dialog.setWindowFlags(Qt.Widget)
+            new_dialog.setModal(False)
+
+            self.center_stack.removeWidget(old_dialog)
+            self.center_stack.insertWidget(1, new_dialog)
+            self.auto_trader_embed = new_dialog
+
+            old_dialog.deleteLater()
+        except Exception as exc:
+            logger.error("Failed to retarget embedded Auto Trader panel: %s", exc)
+
     def _apply_layout_mode(self, mode: str):
         selected_mode = "auto" if str(mode).lower() == "auto" else "manual"
         self.settings["layout_mode"] = selected_mode
@@ -779,6 +812,7 @@ class ImperiumMainWindow(QMainWindow):
                 cvd_token, _, suffix = self._get_cvd_token(symbol)
                 if cvd_token:
                     self._update_cvd_chart_symbol(symbol, cvd_token, suffix)
+                self._sync_center_auto_trader_symbol(symbol)
 
             today = datetime.now().date()
 
