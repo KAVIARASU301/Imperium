@@ -253,16 +253,6 @@ class AtrScannerPanel(QWidget):
         self._automation_toggle.toggled.connect(self._on_automation_toggled)
         lay.addWidget(self._automation_toggle)
 
-        # Uptime
-        self._uptime_label = QLabel("00:00:00")
-        self._uptime_label.setStyleSheet(f"color: {C_MUTED}; font-size: 11px;")
-        lay.addWidget(self._uptime_label)
-
-        # Signal count badge
-        self._signal_count_label = QLabel("0 signals")
-        self._signal_count_label.setStyleSheet(f"color: {C_MUTED}; font-size: 11px; margin-left: 16px;")
-        lay.addWidget(self._signal_count_label)
-
         return header
 
     def _build_setup_dialog(self) -> QDialog:
@@ -442,14 +432,29 @@ class AtrScannerPanel(QWidget):
 
         lay.addWidget(self._signal_table, 1)
 
-        # Legend
+        # Footer legend + telemetry
+        footer_row = QHBoxLayout()
+        footer_row.setContentsMargins(0, 0, 0, 0)
+        footer_row.setSpacing(8)
+
         legend = QLabel(
             f"  <span style='color:{C_LONG}'>▲ LONG</span>"
             f"  <span style='color:{C_SHORT}'>▼ SHORT</span>"
             f"  <span style='color:{C_CHOP}'>◆ CHOP-FILTERED (alert only)</span>"
         )
         legend.setStyleSheet(f"color: {C_MUTED}; font-size: 10px; padding: 2px 4px;")
-        lay.addWidget(legend)
+        footer_row.addWidget(legend)
+        footer_row.addStretch()
+
+        self._uptime_label = QLabel("00:00:00")
+        self._uptime_label.setStyleSheet(f"color: {C_MUTED}; font-size: 10px;")
+        footer_row.addWidget(self._uptime_label)
+
+        self._signal_count_label = QLabel("0 signals")
+        self._signal_count_label.setStyleSheet(f"color: {C_MUTED}; font-size: 10px;")
+        footer_row.addWidget(self._signal_count_label)
+
+        lay.addLayout(footer_row)
 
         return panel
 
