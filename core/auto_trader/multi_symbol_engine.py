@@ -173,8 +173,10 @@ class SymbolWorker(QObject):
         if not self._active:
             return
         self._last_heartbeat = datetime.now()
-        # Skip if previous fetch is still running (backpressure guard)
-        if self._fetch_thread and self._fetch_thread.isRunning():
+        # Skip if previous fetch is still running (backpressure guard).
+        # self._fetch_thread is set to None by the finished callback so this
+        # is safe even after deleteLater has run on the C++ object.
+        if self._fetch_thread is not None and self._fetch_thread.isRunning():
             logger.warning("[SCANNER] %s skipping scan — previous fetch still running", self.symbol)
             return
 
@@ -190,12 +192,20 @@ class SymbolWorker(QObject):
             timeframe_minutes=self.timeframe_minutes,
             focus_mode=True,
         )
-        thread = QThread(self)  # parent = self → auto-destroyed with worker
+        thread = QThread()  # NO parent — see note below
+        # Why no parent: _run_scan() runs inside SymbolWorker's own QThread.
+        # QThread(self) would try to parent the new thread to a QObject that
+        # lives in a different thread → Qt logs "Cannot create children for a
+        # parent that is in a different thread" and the parent is silently ignored.
+        # Lifetime is managed explicitly via the finished callbacks instead.
         worker.moveToThread(thread)
         worker.result_ready.connect(self._on_data_ready)
         worker.error.connect(self._on_fetch_error)
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
+        # Null our reference BEFORE deleteLater fires so the next _run_scan()
+        # never calls .isRunning() on an already-deleted C++ QThread object.
+        thread.finished.connect(lambda: setattr(self, "_fetch_thread", None))
         thread.finished.connect(thread.deleteLater)
         thread.started.connect(worker.run)
         self._fetch_thread = thread
@@ -468,7 +478,13 @@ class MultiSymbolEngine(QObject):
 
         symbol_index = len(self._workers)
         startup_delay_ms = symbol_index * 350
-        thread.started.connect(lambda w=worker, delay=startup_delay_ms: QTimer.singleShot(delay, w.start))
+        # Use a singleShot from the MAIN thread (before thread.start()) so the
+        # timer fires in the main thread's event loop and then invokes w.start()
+        # via a queued connection into the worker's thread. This avoids the
+        # "Cannot create children for parent in different thread" warning that
+        # occurs when QTimer.singleShot is called from inside thread.started
+        # (which runs in the new worker thread before its event loop is running).
+        QTimer.singleShot(startup_delay_ms, lambda w=worker: QMetaObject.invokeMethod(w, "start", Qt.QueuedConnection))
         thread.start()
 
         self._workers[symbol] = worker
@@ -493,12 +509,17 @@ class MultiSymbolEngine(QObject):
             if worker_thread is current_thread:
                 worker.stop()
             else:
-                QMetaObject.invokeMethod(worker, "stop", Qt.BlockingQueuedConnection)
+                # QueuedConnection (non-blocking): the stop() slot runs in the
+                # worker's event loop. thread.quit() + thread.wait() below
+                # ensures we don't proceed until the thread has actually exited.
+                # BlockingQueuedConnection was causing "killTimer from another
+                # thread" when the worker thread's event loop hadn't started yet.
+                QMetaObject.invokeMethod(worker, "stop", Qt.QueuedConnection)
 
             worker.deleteLater()
         if thread:
             thread.quit()
-            thread.wait(2000)
+            thread.wait(3000)  # give the thread time to process the queued stop()
             thread.deleteLater()
 
         logger.info("[ENGINE] Stopped watching %s", symbol)
