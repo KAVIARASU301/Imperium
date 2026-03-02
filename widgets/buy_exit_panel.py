@@ -74,6 +74,7 @@ class BuyExitPanel(QWidget):
     """
     buy_clicked = Signal(dict)
     exit_clicked = Signal(OptionType)
+    subscription_scope_changed = Signal()
 
     def __init__(self, kite_client: KiteConnect):
         super().__init__()
@@ -560,6 +561,7 @@ class BuyExitPanel(QWidget):
 
         self._last_margin_value = total_premium
         self._persist_settings()
+        self.subscription_scope_changed.emit()
 
     def update_parameters(self, symbol: str, lot_size: int, lot_quantity: int, expiry: str):
         self.current_symbol = symbol
@@ -657,6 +659,36 @@ class BuyExitPanel(QWidget):
         if selected == {1, 2}: return 1, 0
         if selected == {1, 3}: return 1, 1
         return list(selected)[0], 0
+
+    def get_subscription_strikes(self) -> set[float]:
+        """Return strike prices required by Buy/Exit selection (ATM +/- configured range with skip logic)."""
+        if not self.strike_ladder_data:
+            return set()
+
+        atm_offset, skip_count = self._get_skip_strategy()
+        try:
+            atm_index = next((i for i, d in enumerate(self.strike_ladder_data) if d.get('strike') == self.atm_strike), -1)
+        except (ValueError, TypeError):
+            atm_index = -1
+
+        if atm_index < 0:
+            return set()
+
+        adj_atm_idx = atm_index + atm_offset
+        indices = {adj_atm_idx}
+        step = skip_count + 1
+        for i in range(1, self.contracts_above + 1):
+            indices.add(adj_atm_idx + (i * step))
+        for i in range(1, self.contracts_below + 1):
+            indices.add(adj_atm_idx - (i * step))
+
+        strikes: set[float] = set()
+        for idx in sorted(indices):
+            if 0 <= idx < len(self.strike_ladder_data):
+                strike_value = self.strike_ladder_data[idx].get('strike')
+                if strike_value is not None:
+                    strikes.add(float(strike_value))
+        return strikes
 
     def _generate_strikes_with_skip_logic(self) -> List[Dict]:
         if not self.strike_ladder_data: return []

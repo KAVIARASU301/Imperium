@@ -329,6 +329,7 @@ class ImperiumMainWindow(QMainWindow):
         self.header.settings_button.clicked.connect(self._show_settings)
         self.header.journal_clicked.connect(self._show_journal_dialog)
         self.buy_exit_panel.buy_clicked.connect(self._place_order)
+        self.buy_exit_panel.subscription_scope_changed.connect(self._update_market_subscriptions)
         self.buy_exit_panel.exit_clicked.connect(self._exit_option_positions)
         self.strike_ladder.strike_selected.connect(self._on_single_strike_selected)
         self.inline_positions_table.exit_requested.connect(self._exit_position)

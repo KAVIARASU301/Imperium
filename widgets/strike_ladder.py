@@ -815,6 +815,16 @@ class StrikeLadderWidget(QWidget):
     def _emit_visible_tokens_changed(self):
         self.visible_tokens_changed.emit()
 
+    def get_contract_tokens_for_strikes(self, strikes: set[float]) -> set[int]:
+        if not strikes:
+            return set()
+        tokens: set[int] = set()
+        for strike in strikes:
+            for contract in self.contracts.get(strike, {}).values():
+                if contract and contract.instrument_token:
+                    tokens.add(contract.instrument_token)
+        return tokens
+
     def get_visible_contract_tokens(self) -> set[int]:
         if not hasattr(self, "table") or self.table.rowCount() == 0:
             return set()

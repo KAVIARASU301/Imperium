@@ -17,8 +17,16 @@ class MarketSubscriptionPolicy:
         w = self.main_window
         required_tokens = set()
 
-        if hasattr(w.strike_ladder, "get_visible_contract_tokens"):
+        buy_exit_strikes = set()
+        if hasattr(w, "buy_exit_panel") and hasattr(w.buy_exit_panel, "get_subscription_strikes"):
+            buy_exit_strikes = w.buy_exit_panel.get_subscription_strikes()
+
+        if buy_exit_strikes and hasattr(w.strike_ladder, "get_contract_tokens_for_strikes"):
+            required_tokens.update(w.strike_ladder.get_contract_tokens_for_strikes(buy_exit_strikes))
+        elif hasattr(w.strike_ladder, "get_visible_contract_tokens"):
+            # Fallback while Buy/Exit strike scope is not available yet
             required_tokens.update(w.strike_ladder.get_visible_contract_tokens())
+
         required_tokens.update(w.active_cvd_tokens)
 
         if required_tokens == w._last_subscription_set:
