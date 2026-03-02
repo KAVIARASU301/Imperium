@@ -31,8 +31,7 @@ from dialogs.option_chain_dialog import OptionChainDialog
 from dialogs.strategy_builder_dialog import StrategyBuilderDialog
 from dialogs.order_confirmation_dialog import OrderConfirmationDialog
 from core.cvd.cvd_engine import CVDEngine
-from core.auto_trader import AutoTraderDialog
-from core.auto_trader.cvd_automation_coordinator import CvdAutomationCoordinator
+from core.auto_trader.atr_scanner_panel import AtrScannerPanel
 from core.cvd.cvd_symbol_sets import CVDSymbolSetManager
 from dialogs.cvd_symbol_set_multi_chart_dialog import CVDSetMultiChartDialog
 from core.execution.trade_ledger import TradeLedger
@@ -150,7 +149,6 @@ class ImperiumMainWindow(QMainWindow):
             position_to_dict=self._position_to_dict,
             update_performance=self._update_performance,
             update_market_subscriptions=self._update_market_subscriptions,
-            reconcile_cvd_automation_positions=self._reconcile_cvd_automation_positions,
             publish_status=lambda message, timeout_ms, level: self._publish_status(message, timeout_ms, level=level),
         )
 
@@ -175,21 +173,17 @@ class ImperiumMainWindow(QMainWindow):
         self.network_status = "Initializing..."
         self.cvd_engine = CVDEngine()
         self.cvd_monitor_dialog = None
-        self.cvd_single_chart_dialogs = {}  # Dict[int, AutoTraderDialog] - token -> dialog
-        self.header_linked_cvd_token: Optional[int] = None
         self.trade_ledger = TradeLedger(mode=self.trading_mode)
         self.execution_stack = ExecutionStack(trading_mode=self.trading_mode, base_dir=Path.home() / ".imperium_desk")
         self.execution_service = ExecutionService(self)
-        self.cvd_automation_coordinator = CvdAutomationCoordinator(
-            main_window=self,
-            trading_mode=self.trading_mode,
-            base_dir=Path.home() / ".imperium_desk",
-        )
-        self._cvd_automation_positions: Dict[int, dict] = self.cvd_automation_coordinator.positions
-        self._cvd_automation_market_state: Dict[int, dict] = self.cvd_automation_coordinator.market_state
+        # self.cvd_automation_coordinator = CvdAutomationCoordinator(
+        #     main_window=self,
+        #     trading_mode=self.trading_mode,
+        #     base_dir=Path.home() / ".imperium_desk",
+        # )
+        self._cvd_automation_positions: Dict[int, dict] = {}
+        self._cvd_automation_market_state: Dict[int, dict] = {}
         self._cvd_pending_retry_timers: Dict[int, QTimer] = {}
-        self._cvd_automation_state_file = self.cvd_automation_coordinator.state_file
-        self._load_cvd_automation_state()
 
         # -----------------------------
         # Risk-first hardening controls
@@ -647,88 +641,43 @@ class ImperiumMainWindow(QMainWindow):
     # =========================================================================
 
     def _ensure_center_auto_trader_widget(self) -> bool:
-        """
-        Safely create or recreate embedded AutoTrader panel
-        without triggering Qt ownership deletion issues.
-        """
-
-        # If valid widget already exists → reuse
         existing = getattr(self, "auto_trader_embed", None)
-        if existing is not None and isValid(existing):
-            return True
-
-        symbol = (
-            self.header.symbol_button.text()
-            if hasattr(self, "header")
-            else self.settings.get("default_symbol", "NIFTY")
-        )
-
-        cvd_token, _, _ = self._get_cvd_token(symbol)
-        if not cvd_token:
-            logger.warning(
-                "Unable to create Auto Trader center panel for %s: no CVD token available",
-                symbol,
-            )
-            return False
+        # Use shiboken2/PySide6 isValid if available
+        try:
+            from shiboken6 import isValid
+            if existing is not None and isValid(existing):
+                return True
+        except Exception:
+            if existing is not None:
+                return True
 
         try:
-            # --- Cleanly detach old widget if exists ---
             old_widget = None
             if hasattr(self, "center_stack") and self.center_stack.count() > 1:
                 old_widget = self.center_stack.widget(1)
                 if old_widget:
                     self.center_stack.removeWidget(old_widget)
 
-            # --- Create fresh dialog ---
-            dialog = AutoTraderDialog(
+            # ── NEW: Use AtrScannerPanel instead of AutoTraderDialog ──────────
+            panel = AtrScannerPanel(
                 kite=self.real_kite_client,
-                instrument_token=cvd_token,
-                symbol=symbol,
-                cvd_engine=self.cvd_engine,
-                parent=self,  # important: keep parent ownership
+                parent=self,
             )
+            self.center_stack.insertWidget(1, panel)
+            self.auto_trader_embed = panel
 
-            dialog.setWindowFlags(Qt.Widget)
-            dialog.setModal(False)
-
-            # --- Insert safely ---
-            self.center_stack.insertWidget(1, dialog)
-            self.auto_trader_embed = dialog
-
-            # --- Delete old widget AFTER new one mounted ---
             if old_widget:
                 old_widget.deleteLater()
 
-            logger.info("Embedded Auto Trader panel created successfully.")
             return True
 
         except Exception as exc:
-            logger.error("Failed to create embedded Auto Trader panel: %s", exc)
+            import logging
+            logging.getLogger(__name__).error("Failed to create ATR Scanner panel: %s", exc)
             return False
 
     def _sync_center_auto_trader_symbol(self, symbol: str) -> None:
-        """
-        Institutional retargeting.
-        Never destroy the widget.
-        Just retarget internal engine.
-        """
-
-        existing = getattr(self, "auto_trader_embed", None)
-        if existing is None or not isValid(existing):
-            return
-
-        cvd_token, _, _ = self._get_cvd_token(symbol)
-        if not cvd_token:
-            logger.warning(
-                "Unable to retarget Auto Trader center panel for %s: no CVD token available",
-                symbol
-            )
-            return
-
-        try:
-            existing.retarget(symbol, cvd_token)
-        except Exception as exc:
-            logger.error("Failed to retarget embedded Auto Trader panel: %s", exc)
+        pass  # AtrScannerPanel manages its own watchlist
     def _apply_layout_mode(self, mode: str):
         selected_mode = "auto" if str(mode).lower() == "auto" else "manual"
         self.settings["layout_mode"] = selected_mode
@@ -829,9 +778,6 @@ class ImperiumMainWindow(QMainWindow):
             self.current_symbol = symbol
 
             if symbol_has_changed:
-                cvd_token, _, suffix = self._get_cvd_token(symbol)
-                if cvd_token:
-                    self._update_cvd_chart_symbol(symbol, cvd_token, suffix)
                 self._sync_center_auto_trader_symbol(symbol)
 
             today = datetime.now().date()
@@ -1706,66 +1652,56 @@ class ImperiumMainWindow(QMainWindow):
         return round(limit_price / tick_size) * tick_size
 
     # =========================================================================
-    # SECTION 13: CVD ENGINE & AUTOMATION
+    # SECTION 13: CVD ENGINE (automation coordinator removed — using AtrScannerPanel)
     # =========================================================================
 
     def _on_cvd_automation_signal(self, payload: dict):
-        self.cvd_automation_coordinator.handle_signal(payload)
+        pass  # AutoTraderDialog automation removed
 
     def _on_cvd_automation_market_state(self, payload: dict):
-        self.cvd_automation_coordinator.handle_market_state(payload)
+        pass
 
     def _is_cvd_auto_cutoff_reached(self) -> bool:
-        return self.cvd_automation_coordinator.is_cutoff_reached()
+        return False
 
     def _enforce_cvd_auto_cutoff_exit(self, reason: str = "AUTO_3PM_CUTOFF"):
-        self.cvd_automation_coordinator.enforce_cutoff_exit(reason=reason)
+        pass
 
     def _persist_cvd_automation_state(self):
-        self.cvd_automation_coordinator.persist_state()
+        pass
 
     def _load_cvd_automation_state(self):
-        self.cvd_automation_coordinator.load_state()
+        pass
 
     def _reconcile_failed_auto_entry(self, token: int, tradingsymbol: str, signal_timestamp: str | None):
-        self.cvd_automation_coordinator.reconcile_failed_entry(token, tradingsymbol, signal_timestamp)
+        pass
 
     def _reconcile_cvd_automation_positions(self):
-        self.cvd_automation_coordinator.reconcile_positions()
+        pass
 
     def _get_atm_contract_for_signal(self, signal_side: str) -> Optional[Contract]:
-        return self.cvd_automation_coordinator.get_atm_contract_for_signal(signal_side)
+        return None
 
     def _exit_position_automated(self, position: Position, reason: str = "AUTO"):
-        self.cvd_automation_coordinator.exit_position_automated(position, reason=reason)
+        pass
 
     def _update_cvd_chart_symbol(self, symbol: str, cvd_token: int, suffix: str = ""):
-        self.subscription_policy.update_cvd_chart_symbol(symbol, cvd_token, suffix)
+        pass  # No longer needed — AtrScannerPanel manages its own subscriptions
 
     def _start_cvd_pending_retry(self, token: int):
-        self.execution_service.start_cvd_pending_retry(token)
+        pass
 
     def _stop_cvd_pending_retry(self, token: int):
-        self.execution_service.stop_cvd_pending_retry(token)
+        pass
 
     def _retry_cvd_pending_order(self, token: int):
-        self.execution_service.retry_cvd_pending_order(token)
+        pass
 
     def _on_cvd_dialog_closed(self, token):
         QTimer.singleShot(0, self._update_market_subscriptions)
 
     def _on_cvd_single_chart_closed(self, token):
-        """Handle CVD single chart dialog close."""
-        if token in self.cvd_single_chart_dialogs:
-            del self.cvd_single_chart_dialogs[token]
-        self._stop_cvd_pending_retry(token)
-        if self._cvd_automation_positions.pop(token, None) is not None:
-            self._persist_cvd_automation_state()
-        self._cvd_automation_market_state.pop(token, None)
-        if self.header_linked_cvd_token == token:
-            self.header_linked_cvd_token = None
-        QTimer.singleShot(0, self._update_market_subscriptions)
-
+        pass
     def _on_cvd_market_monitor_closed(self):
         self.market_data_orchestrator.on_cvd_market_monitor_closed()
 
@@ -1844,15 +1780,6 @@ class ImperiumMainWindow(QMainWindow):
     def _show_cvd_chart_dialog(self):
         self.monitor_dialog_service.show_cvd_chart_dialog()
 
-    def _open_cvd_chart_after_subscription(
-            self,
-            cvd_token: int,
-            symbol: str,
-            suffix: str = "",
-            link_to_header: bool = False
-    ):
-        self.monitor_dialog_service.open_cvd_chart_after_subscription(cvd_token, symbol, suffix, link_to_header)
-
     def _show_cvd_market_monitor_dialog(self):
         self.monitor_dialog_service.show_cvd_market_monitor_dialog()
 
@@ -1879,15 +1806,6 @@ class ImperiumMainWindow(QMainWindow):
         )
         dlg.show()
 
-    def _retarget_cvd_dialog(
-            self,
-            dialog: AutoTraderDialog,
-            old_token: int,
-            new_token: int,
-            symbol: str,
-            suffix: str = ""
-    ):
-        self.monitor_dialog_service.retarget_cvd_dialog(dialog, old_token, new_token, symbol, suffix)
 
     def _on_market_monitor_closed(self, dialog: QDialog):
         self.dialog_coordinator.on_market_monitor_closed(dialog)
@@ -2023,73 +1941,23 @@ class ImperiumMainWindow(QMainWindow):
         )
 
     def _on_strike_chart_requested(self, contract: Contract):
-        """Open CVD Single Chart Dialog for the selected strike"""
+        """Route strike chart requests to the ATR Scanner panel instead of a popup."""
         if not contract:
-            logger.warning("Chart requested but contract data is missing.")
             return
+        cvd_token = contract.instrument_token
+        symbol = contract.tradingsymbol
 
-        try:
-            cvd_token = contract.instrument_token
-            symbol = contract.tradingsymbol
+        self.cvd_engine.register_token(cvd_token)
+        self.active_cvd_tokens.add(cvd_token)
+        self._update_market_subscriptions()
 
-            # If dialog already exists for this token, just raise it
-            if cvd_token in self.cvd_single_chart_dialogs:
-                existing_dialog = self.cvd_single_chart_dialogs[cvd_token]
-                try:
-                    if existing_dialog and not existing_dialog.isHidden():
-                        existing_dialog.raise_()
-                        existing_dialog.activateWindow()
-                        return
-                except RuntimeError:
-                    # Dialog was already destroyed
-                    del self.cvd_single_chart_dialogs[cvd_token]
-
-            # Ensure CVD engine + websocket are both tracking this token.
-            if self.cvd_engine:
-                try:
-                    self.cvd_engine.set_mode(CVDMode.SINGLE_CHART)
-                    self.cvd_engine.register_token(cvd_token)
-                    self.active_cvd_tokens.add(cvd_token)
-                    self._update_market_subscriptions()
-
-                    if hasattr(self.market_data_worker, 'subscribed_tokens') and (
-                            cvd_token not in self.market_data_worker.subscribed_tokens
-                    ):
-                        QMessageBox.warning(
-                            self,
-                            "Subscription Failed",
-                            f"Failed to subscribe to market data for {symbol}.\n"
-                            "The chart may not update in real-time."
-                        )
-                except Exception as e:
-                    logger.error(f"Failed to subscribe to CVD data: {e}")
-
-            # Create new CVD Single Chart Dialog
-            dialog = AutoTraderDialog(
-                kite=self.real_kite_client,
-                instrument_token=cvd_token,
-                symbol=symbol,
-                cvd_engine=self.cvd_engine,
-                parent=self
-            )
-            dialog.destroyed.connect(
-                lambda: self._on_cvd_single_chart_closed(cvd_token)
-            )
-            self.cvd_single_chart_dialogs[cvd_token] = dialog
-            dialog.show()
-            dialog.raise_()
-            dialog.activateWindow()
-
-            logger.info(f"[CVD] Chart opened for strike {symbol} (token: {cvd_token})")
-
-        except Exception as e:
-            logger.error(f"Failed to open chart for strike: {e}")
-            QMessageBox.critical(
-                self,
-                "Chart Error",
-                f"Failed to open chart for {contract.tradingsymbol}:\n{str(e)}"
-            )
-
+        panel = getattr(self, "auto_trader_embed", None)
+        if panel and hasattr(panel, "add_symbol_programmatic"):
+            panel.add_symbol_programmatic(symbol, cvd_token)
+            if hasattr(self, "center_stack"):
+                self.center_stack.setCurrentIndex(1)
+        else:
+            logger.warning("[CVD] Strike chart requested but ATR Scanner panel not available: %s", symbol)
     # =========================================================================
     # SECTION 15: QUICK ORDER & SINGLE STRIKE
     # =========================================================================
@@ -2452,6 +2320,9 @@ class ImperiumMainWindow(QMainWindow):
             self.setWindowState(Qt.WindowMaximized)
 
     def closeEvent(self, event):
+        panel = getattr(self, "auto_trader_embed", None)
+        if panel and hasattr(panel, "cleanup"):
+            panel.cleanup()
         if getattr(self, '_close_in_progress', False):
             event.ignore()
             return
