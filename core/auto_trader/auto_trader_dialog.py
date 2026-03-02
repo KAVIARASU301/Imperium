@@ -247,7 +247,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
 
         self.setWindowTitle(f"Auto Trader — {self._display_symbol_for_title(symbol)}")
         self.setObjectName("autoTraderWindow")
-        self.setMinimumSize(1100, 680)
+        self.setMinimumSize(760, 680)
         self.setWindowFlags(
             Qt.Window |
             Qt.WindowMinimizeButtonHint |
