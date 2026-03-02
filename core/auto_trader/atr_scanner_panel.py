@@ -270,6 +270,7 @@ class AtrScannerPanel(QWidget):
         dlg.setWindowTitle("Auto Trader Setup")
         dlg.resize(460, 620)
         dlg.setModal(False)
+        dlg.finished.connect(lambda _: self._clear_signals())
 
         lay = QVBoxLayout(dlg)
         lay.setContentsMargins(8, 8, 8, 8)
@@ -648,6 +649,10 @@ class AtrScannerPanel(QWidget):
             self._set_status("No symbols in watchlist for simulator run.")
             return
 
+        # Every simulator run starts with a clean feed so output mirrors
+        # only the currently simulated session.
+        self._clear_signals()
+
         selected_qdate = self._sim_date_edit.date()
         run_day = date(selected_qdate.year(), selected_qdate.month(), selected_qdate.day())
         from_dt = datetime.combine(run_day, datetime.min.time())
@@ -756,6 +761,14 @@ class AtrScannerPanel(QWidget):
                     position = int(signal)
                     entry_price = px
                     total_signals += 1
+                    self._emit_simulated_signal(
+                        symbol=symbol,
+                        token=token,
+                        signal=signal,
+                        signal_time=df.index[idx].to_pydatetime(),
+                        price=px,
+                        atr=float(atr[idx]) if np.isfinite(atr[idx]) else 0.0,
+                    )
                     continue
 
                 if position != 0 and signal == -position:
@@ -763,6 +776,14 @@ class AtrScannerPanel(QWidget):
                     position = int(signal)
                     entry_price = px
                     total_signals += 1
+                    self._emit_simulated_signal(
+                        symbol=symbol,
+                        token=token,
+                        signal=signal,
+                        signal_time=df.index[idx].to_pydatetime(),
+                        price=px,
+                        atr=float(atr[idx]) if np.isfinite(atr[idx]) else 0.0,
+                    )
 
             if position != 0:
                 symbol_points += (price_close[-1] - entry_price) * position
@@ -775,6 +796,32 @@ class AtrScannerPanel(QWidget):
             f"Simulator completed for {run_day.isoformat()}: "
             f"{symbols_processed} symbols, {total_signals} entries, net {total_points:.2f} pts"
         )
+
+    def _emit_simulated_signal(
+        self,
+        *,
+        symbol: str,
+        token: int,
+        signal: int,
+        signal_time: datetime,
+        price: float,
+        atr: float,
+    ):
+        """Render a simulator signal in the same feed format as live signals."""
+        side = "long" if signal > 0 else "short"
+        event = AtrSignalEvent(
+            symbol=symbol,
+            instrument_token=int(token),
+            side=side,
+            price=float(price),
+            atr=max(float(atr), 0.0),
+            adx=0.0,
+            confidence=0.0,
+            quality_score=0.0,
+            chop_filtered=False,
+            timestamp=signal_time,
+        )
+        self._on_signal(event)
 
     def _on_automation_toggled(self, checked: bool):
         self._automation_enabled = bool(checked)
