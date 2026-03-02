@@ -2064,9 +2064,18 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
             "Detected deleted setup control(s) during initialization for %s; rebuilding setup panel.",
             self.symbol,
         )
+        # NOTE:
+        # Do not delete the stale setup dialog here.
+        #
+        # The setup panel reuses a number of controls created in __init__
+        # (e.g. automation_stoploss_input, max_profit_giveback_input), and
+        # those controls may still be parented to the current dialog. Calling
+        # deleteLater() on the dialog can therefore destroy those shared
+        # widgets before _build_setup_dialog() has a chance to re-layout them,
+        # causing "Internal C++ object ... already deleted" during startup.
         stale_dialog = getattr(self, "setup_dialog", None)
         if stale_dialog is not None and isValid(stale_dialog):
-            stale_dialog.deleteLater()
+            stale_dialog.hide()
         self._build_setup_dialog(COMPACT_COMBO_STYLE, COMPACT_SPINBOX_STYLE)
 
     def _combo_data(self, attr: str, default):
