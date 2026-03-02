@@ -354,30 +354,27 @@ class SignalQualityScorer:
         strategy_type: str,
         notes: list[str],
     ) -> float:
-        """
-        ADX-based trend strength score.
-        - Range-bound strategies (atr_reversal) prefer LOWER ADX (weak trend = good mean reversion)
-        - Trend strategies (ema_cross, breakout) prefer HIGHER ADX
-
-        This inverts the score for mean-reversion strategies.
-        """
+        """ADX score with strategy-aware shaping."""
         if adx is None or idx >= len(adx):
             notes.append("adx_missing")
-            return 0.5  # neutral
-
-        adx_val = float(adx[idx])
-        if not np.isfinite(adx_val) or adx_val < 0:
             return 0.5
 
-        # Normalize ADX: 0 at ADX=0, 1.0 at ADX=35+
-        raw_score = float(np.clip(
-            (adx_val - self.ADX_MIN_TREND) / (self.ADX_STRONG_TREND - self.ADX_MIN_TREND),
-            0.0, 1.0
-        ))
+        adx_val = float(adx[idx])
+        if not np.isfinite(adx_val):
+            return 0.5
 
-        # Mean-reversion strategies work best in weak trends (low ADX)
-        is_reversal = strategy_type in ("atr_reversal",)
-        score = (1.0 - raw_score) if is_reversal else raw_score
+        if strategy_type == "atr_reversal":
+            if adx_val < 18:
+                score = float(np.clip(adx_val / 18.0, 0.0, 1.0)) * 0.3
+            elif adx_val <= 32:
+                score = float(np.interp(adx_val, [18, 25, 32], [0.5, 1.0, 0.85]))
+            else:
+                score = float(np.clip(1.0 - (adx_val - 32) / 20.0, 0.2, 0.85))
+        else:
+            score = float(np.clip(
+                (adx_val - self.ADX_MIN_TREND) / (self.ADX_STRONG_TREND - self.ADX_MIN_TREND),
+                0.0, 1.0,
+            ))
 
         notes.append(f"adx={adx_val:.1f} score={score:.2f}")
         return score

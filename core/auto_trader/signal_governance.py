@@ -37,6 +37,9 @@ class SignalGovernance:
         self._feature_history: deque[np.ndarray] = deque(maxlen=self.feature_baseline_window)
         self._health_by_strategy = {name: deque(maxlen=80) for name in self.STRATEGIES}
         self._bar_counter = 0
+        self._stability_cache: dict[str, float] = {}
+        self._stability_last_computed = -1
+        self._stability_recompute_interval = 30
 
         self._base_strategy_weights = {
             "atr_reversal": 1.0,
@@ -245,7 +248,11 @@ class SignalGovernance:
         if drift_score > 0.7:
             reasons.append("feature_drift_high")
 
-        stability = self._walk_forward_stability(realized_edge).get(strategy_type, 0.5)
+        if (self._bar_counter - self._stability_last_computed) >= self._stability_recompute_interval:
+            self._stability_cache = self._walk_forward_stability(realized_edge)
+            self._stability_last_computed = self._bar_counter
+
+        stability = self._stability_cache.get(strategy_type, 0.5)
         if stability < 0.35:
             reasons.append("parameter_stability_low")
 

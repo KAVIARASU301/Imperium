@@ -7,18 +7,9 @@ _chop_filter_instance = ChopFilter(period=14, threshold=61.8)
 
 def calculate_ema(data: np.ndarray, period: int) -> np.ndarray:
     """Calculate Exponential Moving Average"""
-    ema = np.zeros_like(data, dtype=float)
     if len(data) == 0:
-        return ema
-
-    # Start with SMA for first value
-    ema[0] = data[0]
-    multiplier = 2 / (period + 1)
-
-    for i in range(1, len(data)):
-        ema[i] = (data[i] * multiplier) + (ema[i - 1] * (1 - multiplier))
-
-    return ema
+        return np.zeros(0, dtype=float)
+    return pd.Series(data).ewm(span=period, adjust=False, min_periods=1).mean().to_numpy(dtype=float)
 
 
 def calculate_vwap(

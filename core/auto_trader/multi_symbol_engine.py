@@ -236,6 +236,7 @@ class SymbolWorker(QObject):
           4. Gate through SignalGovernance (confidence scoring)
           5. Emit only NEW signals (dedup by bar index)
         """
+        self._consecutive_errors = 0
         try:
             if price_df is None or price_df.empty:
                 self.status_update.emit(self.symbol, "no_data")
@@ -334,8 +335,6 @@ class SymbolWorker(QObject):
                 vwap_min_distance_atr_mult=0.3,
                 exhaustion_min_score=2,
             )
-
-            self._consecutive_errors = 0
 
             # ── Check current bar for new signal ─────────────────────────
             signal_ts = price_df.index[-1] if hasattr(price_df.index, "__getitem__") else None
@@ -459,7 +458,8 @@ class MultiSymbolEngine(QObject):
             symbol=symbol,
             **p,
         )
-        thread = QThread(self)  # ← parent = engine, so it's owned        worker.moveToThread(thread)
+        thread = QThread(self)  # parent = engine, so it is owned
+        worker.moveToThread(thread)
 
         worker.signal_fired.connect(self.signal_fired)
         worker.status_update.connect(self.symbol_status)
@@ -532,13 +532,21 @@ class MultiSymbolEngine(QObject):
                 self.symbol_error.emit(symbol, "watchdog_restart")
                 stale_workers.append((symbol, worker.instrument_token))
 
-        for symbol, token in stale_workers:
+        for i, (symbol, token) in enumerate(stale_workers):
             self.remove_symbol(symbol)
-            QTimer.singleShot(500, lambda s=symbol, t=token: self.add_symbol(s, t))
+            restart_delay = 500 + (i * 400)
+            QTimer.singleShot(restart_delay, lambda s=symbol, t=token: self.add_symbol(s, t))
 
     def _maybe_reset_session(self):
-        now = datetime.now().time()
-        if now.hour == TRADING_START.hour and now.minute == TRADING_START.minute:
+        now = datetime.now()
+        session_open = now.replace(
+            hour=TRADING_START.hour,
+            minute=TRADING_START.minute,
+            second=0,
+            microsecond=0,
+        )
+        delta_secs = abs((now - session_open).total_seconds())
+        if delta_secs <= 30:
             for worker in self._workers.values():
                 worker._last_signal_ts = {"long": None, "short": None}
             logger.info("[ENGINE] Session reset — signal dedup cleared for all workers")

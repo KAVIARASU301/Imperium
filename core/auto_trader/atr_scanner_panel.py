@@ -74,17 +74,6 @@ C_WARN      = "#FFB800"
 C_ACCENT    = "#4A9EFF"
 C_CHOP      = "#FF6B35"   # orange = chop-filtered signal
 
-STATUS_COLORS = {
-    "MONITORING": C_LONG,
-    "queued": C_MUTED,
-    "DATA LIVE": C_ACCENT,
-    "FETCHING DATA": C_ACCENT,
-    "WARMING UP": C_WARN,
-    "⚠ ERROR": C_SHORT,
-    "started":    C_MUTED,
-    "NO DATA": C_MUTED,
-}
-
 STATUS_LABELS = {
     "watching": "MONITORING",
     "fetching": "FETCHING DATA",
@@ -92,6 +81,21 @@ STATUS_LABELS = {
     "data_connected": "DATA LIVE",
     "error": "⚠ ERROR",
     "no_data": "NO DATA",
+    "started": "STARTING",
+    "queued": "QUEUED",
+    "watchdog_restart": "RESTARTING",
+}
+
+STATUS_COLORS = {
+    "MONITORING": C_LONG,
+    "DATA LIVE": C_ACCENT,
+    "FETCHING DATA": C_ACCENT,
+    "WARMING UP": C_WARN,
+    "⚠ ERROR": C_SHORT,
+    "NO DATA": C_MUTED,
+    "STARTING": C_MUTED,
+    "QUEUED": C_MUTED,
+    "RESTARTING": C_WARN,
 }
 
 BASE_STYLE = f"""
@@ -333,6 +337,14 @@ class AtrScannerPanel(QWidget):
         self._sl_atr_mult_spin.setDecimals(2)
         form_lay.addRow("SL Multiplier (ATR ×):", self._sl_atr_mult_spin)
 
+        self._tp_atr_mult_spin = QDoubleSpinBox()
+        self._tp_atr_mult_spin.setRange(1.0, 10.0)
+        self._tp_atr_mult_spin.setValue(2.0)
+        self._tp_atr_mult_spin.setSingleStep(0.5)
+        self._tp_atr_mult_spin.setDecimals(1)
+        self._tp_atr_mult_spin.setToolTip("Take-profit = Entry ± (ATR × multiplier). 2.0 = 1:2 R:R")
+        form_lay.addRow("TP Multiplier (ATR ×):", self._tp_atr_mult_spin)
+
         self._strikes_above_spin = QSpinBox()
         self._strikes_above_spin.setRange(0, 5)
         self._strikes_above_spin.setValue(1)
@@ -491,6 +503,8 @@ class AtrScannerPanel(QWidget):
         self._signal_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self._signal_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self._signal_table.verticalHeader().setVisible(False)
+        self._signal_table.verticalHeader().setDefaultSectionSize(28)
+        self._signal_table.setWordWrap(False)
         self._signal_table.setShowGrid(False)
         self._signal_table.setAlternatingRowColors(True)
         self._signal_table.setStyleSheet(f"""
@@ -577,7 +591,7 @@ class AtrScannerPanel(QWidget):
         }
 
         self._pending_watchlist[symbol] = params
-        self._add_watchlist_row(symbol, "queued")
+        self._add_watchlist_row(symbol, STATUS_LABELS["queued"])
         if self._automation_enabled:
             self._start_symbol_engine(symbol)
         self._update_counts()
@@ -640,11 +654,19 @@ class AtrScannerPanel(QWidget):
         bold_font = QFont()
         bold_font.setBold(True)
 
+        row_bg = None
+        if event.confidence >= 0.75:
+            row_bg = QColor("#0D1F0D")
+        elif event.confidence >= 0.60:
+            row_bg = QColor("#0D1520")
+
         for col, (text, fg) in enumerate(cells):
             item = QTableWidgetItem(text)
             item.setForeground(QColor(fg))
             if col == 2:  # direction column gets bold
                 item.setFont(bold_font)
+            if row_bg is not None:
+                item.setBackground(row_bg)
             self._signal_table.setItem(0, col, item)
         self._signal_table.setUpdatesEnabled(True)
 
@@ -759,6 +781,8 @@ class AtrScannerPanel(QWidget):
         total_points = 0.0
         symbols_processed = 0
         total_signals = 0
+        wins = 0
+        closed_trades = 0
 
         for symbol, params in sorted(self._pending_watchlist.items()):
             token = self._resolve_futures_token(symbol)
@@ -806,7 +830,8 @@ class AtrScannerPanel(QWidget):
             volume = df.get("volume", pd.Series(np.ones(len(df)), index=df.index)).to_numpy(dtype=float)
 
             atr = calculate_atr(price_high, price_low, price_close, period=14)
-            ema51 = calculate_ema(price_close, 21)
+            base_ema = int(params.get("atr_base_ema", self._base_ema_spin.value()))
+            ema51 = calculate_ema(price_close, base_ema)
             session_keys = df.index.date if hasattr(df.index, "date") else None
             vwap = calculate_vwap(price_close, volume, session_keys=session_keys)
 
@@ -870,7 +895,11 @@ class AtrScannerPanel(QWidget):
                     continue
 
                 if position != 0 and signal == -position:
-                    symbol_points += (px - entry_price) * position
+                    trade_points = (px - entry_price) * position
+                    symbol_points += trade_points
+                    closed_trades += 1
+                    if trade_points > 0:
+                        wins += 1
                     position = int(signal)
                     entry_price = px
                     total_signals += 1
@@ -884,12 +913,20 @@ class AtrScannerPanel(QWidget):
                     )
 
             if position != 0:
-                symbol_points += (price_close[-1] - entry_price) * position
+                trade_points = (price_close[-1] - entry_price) * position
+                symbol_points += trade_points
+                closed_trades += 1
+                if trade_points > 0:
+                    wins += 1
 
             total_points += symbol_points
             symbols_processed += 1
 
-        self._sim_result_label.setText(f"Net pts captured: {total_points:.2f}")
+        win_rate = (wins / closed_trades * 100.0) if closed_trades else 0.0
+        self._sim_result_label.setText(
+            f"Underlying pts: {total_points:.2f} (≈ option premium: {total_points * 0.45:.2f} @ 0.45Δ) | "
+            f"Signals: {total_signals} | Win rate: {win_rate:.1f}%"
+        )
         self._set_status(
             f"Simulator completed for {run_day.isoformat()}: "
             f"{symbols_processed} symbols, {total_signals} entries, net {total_points:.2f} pts"
@@ -924,7 +961,11 @@ class AtrScannerPanel(QWidget):
     def _on_automation_toggled(self, checked: bool):
         self._automation_enabled = bool(checked)
         if self._automation_enabled and self._signal_router is None:
-            self._signal_router = AtrSignalRouter(main_window=self.window(), parent=self)
+            main_window = self.window()
+            if main_window is None:
+                logger.error("[SCANNER] Cannot create AtrSignalRouter: no parent main window")
+                return
+            self._signal_router = AtrSignalRouter(main_window=main_window, parent=self)
         if self._signal_router:
             if self._automation_enabled:
                 self.engine.signal_fired.connect(self._signal_router.on_signal)
@@ -950,7 +991,7 @@ class AtrScannerPanel(QWidget):
             self.engine.remove_all()
             self._symbol_tokens.clear()
             for symbol in self._pending_watchlist.keys():
-                self._update_watchlist_status(symbol, "queued")
+                self._update_watchlist_status(symbol, STATUS_LABELS["queued"])
             if not initial:
                 self._set_status("Automation paused. Click AUTOMATE to run scanner.")
 
@@ -975,6 +1016,7 @@ class AtrScannerPanel(QWidget):
                 "atr_base_ema": self._base_ema_spin.value(),
                 "atr_extension_min": self._atr_extension_spin.value(),
                 "sl_atr_multiplier": self._sl_atr_mult_spin.value(),
+                "tp_atr_multiplier": self._tp_atr_mult_spin.value(),
                 "strikes_above": self._strikes_above_spin.value(),
                 "strikes_below": self._strikes_below_spin.value(),
                 "min_confidence": self._min_confidence_spin.value(),
@@ -1014,6 +1056,7 @@ class AtrScannerPanel(QWidget):
         self._base_ema_spin.setValue(int(defaults.get("atr_base_ema", 21)))
         self._atr_extension_spin.setValue(float(defaults.get("atr_extension_min", 1.1)))
         self._sl_atr_mult_spin.setValue(float(defaults.get("sl_atr_multiplier", 1.5)))
+        self._tp_atr_mult_spin.setValue(float(defaults.get("tp_atr_multiplier", 2.0)))
         self._strikes_above_spin.setValue(int(defaults.get("strikes_above", 1)))
         self._strikes_below_spin.setValue(int(defaults.get("strikes_below", 1)))
         self._min_confidence_spin.setValue(float(defaults.get("min_confidence", 0.6)))
@@ -1039,7 +1082,7 @@ class AtrScannerPanel(QWidget):
                 "atr_extension_min": float(params.get("atr_extension_min", self._atr_extension_spin.value())),
             }
             self._pending_watchlist[symbol] = merged_params
-            self._add_watchlist_row(symbol, "queued")
+            self._add_watchlist_row(symbol, STATUS_LABELS["queued"])
 
         enabled = bool(payload.get("automation_enabled", False)) if isinstance(payload, dict) else False
         self._automation_toggle.blockSignals(True)
@@ -1072,9 +1115,11 @@ class AtrScannerPanel(QWidget):
             "timeframe_minutes": self._tf_spin.value(),
             "atr_distance_threshold": self._atr_distance_spin.value(),
             "cvd_zscore_threshold": self._cvd_zscore_spin.value(),
+            "atr_base_ema": self._base_ema_spin.value(),
+            "atr_extension_min": self._atr_extension_spin.value(),
         }
         self._pending_watchlist[symbol] = params
-        self._add_watchlist_row(symbol, "queued")
+        self._add_watchlist_row(symbol, STATUS_LABELS["queued"])
         if self._automation_enabled:
             self._start_symbol_engine(symbol)
         self._update_counts()
@@ -1084,6 +1129,10 @@ class AtrScannerPanel(QWidget):
         self._instrument_data = data or {}
         self._reload_symbol_selector()
         if self._automation_enabled:
+            logger.info(
+                "[SCANNER] Instrument data arrived — resuming automation for %d queued symbols",
+                len(self._pending_watchlist),
+            )
             self._apply_automation_state(initial=True)
 
     def _reload_symbol_selector(self):

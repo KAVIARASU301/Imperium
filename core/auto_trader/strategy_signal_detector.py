@@ -187,22 +187,31 @@ class StrategySignalDetector:
     ) -> tuple[np.ndarray, np.ndarray]:
         """Detect CVD-price divergence around local extremes."""
         n = len(price_close)
-        bearish_div = np.zeros(n, dtype=bool)
-        bullish_div = np.zeros(n, dtype=bool)
+        if n < lookback + 1:
+            return np.zeros(n, dtype=bool), np.zeros(n, dtype=bool)
 
-        for i in range(lookback, n):
-            start = i - lookback
-            price_window = price_close[start : i + 1]
-            cvd_window = cvd_data[start : i + 1]
+        series_price = pd.Series(price_close)
+        series_cvd = pd.Series(cvd_data)
 
-            price_high_of_window = np.max(price_window)
-            price_low_of_window = np.min(price_window)
-            cvd_high_of_window = np.max(cvd_window)
-            cvd_low_of_window = np.min(cvd_window)
+        roll_price_high = series_price.rolling(window=lookback + 1, min_periods=lookback).max().to_numpy()
+        roll_price_low = series_price.rolling(window=lookback + 1, min_periods=lookback).min().to_numpy()
+        roll_cvd_high = series_cvd.rolling(window=lookback + 1, min_periods=lookback).max().to_numpy()
+        roll_cvd_low = series_cvd.rolling(window=lookback + 1, min_periods=lookback).min().to_numpy()
 
-            bearish_div[i] = (price_close[i] >= price_high_of_window * 0.9995) and (cvd_data[i] < cvd_high_of_window * 0.9995)
-            bullish_div[i] = (price_close[i] <= price_low_of_window * 1.0005) and (cvd_data[i] > cvd_low_of_window * 1.0005)
+        with np.errstate(invalid="ignore"):
+            bearish_div = (
+                (price_close >= roll_price_high * 0.9995)
+                & (cvd_data < roll_cvd_high * 0.9995)
+                & np.isfinite(roll_price_high)
+            )
+            bullish_div = (
+                (price_close <= roll_price_low * 1.0005)
+                & (cvd_data > roll_cvd_low * 1.0005)
+                & np.isfinite(roll_price_low)
+            )
 
+        bearish_div[:lookback] = False
+        bullish_div[:lookback] = False
         return bearish_div, bullish_div
 
     def _cvd_deceleration_mask(

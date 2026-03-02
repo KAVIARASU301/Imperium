@@ -11,6 +11,7 @@ buy_exit_panel execution path.
 """
 from __future__ import annotations
 import logging
+from datetime import datetime
 from typing import Optional
 from PySide6.QtCore import QObject, QTimer, Slot
 
@@ -43,6 +44,26 @@ class AtrSignalRouter(QObject):
         if event.symbol in self._cooldown_symbols:
             logger.info("[ROUTER] %s in cooldown, skipping", event.symbol)
             return
+
+        panel = self._get_scanner_panel()
+        if panel:
+            min_conf = panel._min_confidence_spin.value()
+            min_adx = panel._min_adx_spin.value()
+            session_start = panel._session_start_spin.value()
+            session_end = panel._session_end_spin.value()
+
+            if event.confidence < min_conf:
+                logger.info("[ROUTER] %s conf=%.2f below gate %.2f, skipping", event.symbol, event.confidence, min_conf)
+                return
+
+            if event.adx < min_adx:
+                logger.info("[ROUTER] %s adx=%.1f below gate %.1f, skipping", event.symbol, event.adx, min_adx)
+                return
+
+            now_hhmm = int(datetime.now().strftime("%H%M"))
+            if not (session_start <= now_hhmm <= session_end):
+                logger.info("[ROUTER] %s outside session window %d-%d", event.symbol, session_start, session_end)
+                return
 
         option_type = OptionType.CALL if event.side == "long" else OptionType.PUT
         self._subscribe_strikes_and_execute(event, option_type)
@@ -89,17 +110,56 @@ class AtrSignalRouter(QObject):
         QTimer.singleShot(1500, lambda: self._attach_atr_stoploss(event))
 
     def _attach_atr_stoploss(self, event: AtrSignalEvent):
-        """
-        ATR Stop-Loss: SL = entry_price ± (ATR × multiplier)
-        This is standard at prop desks — dynamic SL that respects current volatility.
-        """
-        multiplier = getattr(self.w, "_scanner_sl_atr_mult", 1.5)
-        sl_distance = event.atr * multiplier
-        logger.info("[ROUTER] ATR SL attached | %s | dist=%.2f pts", event.symbol, sl_distance)
-        # Hook into position manager to set SL on the just-filled leg
-        # (connects to existing confirm_and_finalize_order flow)
+        """Find the just-filled position and apply ATR-based SL/TP."""
+        panel = self._get_scanner_panel()
+        sl_multiplier = panel._sl_atr_mult_spin.value() if panel else 1.5
+        tp_multiplier = panel._tp_atr_mult_spin.value() if panel else 2.0
+        sl_distance = event.atr * sl_multiplier
+
+        positions = self.w.position_manager.get_all_positions()
+        for pos in positions:
+            symbol_match = event.symbol.upper() in (getattr(pos, "tradingsymbol", "") or "").upper()
+            entry_time = getattr(pos, "entry_time", None)
+            fresh = (datetime.now() - entry_time).total_seconds() < 30 if entry_time else True
+            if not symbol_match or not fresh:
+                continue
+
+            if event.side == "long":
+                sl_price = pos.average_price - sl_distance
+                tp_price = pos.average_price + (sl_distance * tp_multiplier)
+            else:
+                sl_price = pos.average_price + sl_distance
+                tp_price = pos.average_price - (sl_distance * tp_multiplier)
+
+            try:
+                self.w.position_manager.update_position_risk(
+                    tradingsymbol=pos.tradingsymbol,
+                    stop_loss=round(sl_price, 2),
+                    target=round(tp_price, 2),
+                )
+                logger.info(
+                    "[ROUTER] SL/TP set | %s | SL=%.2f TP=%.2f | dist=%.2f pts",
+                    pos.tradingsymbol,
+                    sl_price,
+                    tp_price,
+                    sl_distance,
+                )
+            except Exception as exc:
+                logger.error("[ROUTER] Failed to attach SL/TP for %s: %s", pos.tradingsymbol, exc)
+            break
 
     def _set_cooldown(self, symbol: str, ms: int = 65_000):
         """One bar cooldown — prevents double-entry on same signal bar."""
         self._cooldown_symbols.add(symbol)
         QTimer.singleShot(ms, lambda: self._cooldown_symbols.discard(symbol))
+
+    def _get_scanner_panel(self):
+        """Walk up the parent tree to find AtrScannerPanel."""
+        obj = self.parent()
+        from core.auto_trader.atr_scanner_panel import AtrScannerPanel
+
+        while obj is not None:
+            if isinstance(obj, AtrScannerPanel):
+                return obj
+            obj = obj.parent()
+        return None
