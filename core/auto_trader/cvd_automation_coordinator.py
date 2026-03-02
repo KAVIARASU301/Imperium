@@ -36,34 +36,6 @@ class CvdAutomationCoordinator:
         # Stacker: one StackerState per token while an anchor trade is active
         self._stacker_states: dict[int, StackerState] = {}
 
-    @staticmethod
-    def _is_regime_breakdown(active_trade: dict) -> bool:
-        adx_hist = active_trade.get("regime_adx_hist") or []
-        vol_hist = active_trade.get("regime_vol_hist") or []
-
-        # ── All knobs independently tunable ───────────────────────────────
-        breakdown_bars = max(2, int(_to_finite_float(active_trade.get("trend_exit_breakdown_bars"), 3)))
-        # breakdown_lookback: independent "are we below N bars ago" window.
-        # Previously hardcoded as breakdown_bars + 2 (= 5 when breakdown_bars=3).
-        breakdown_lookback = max(breakdown_bars + 1, int(_to_finite_float(
-            active_trade.get("trend_exit_breakdown_lookback"), breakdown_bars + 2
-        )))
-        vol_drop_pct = float(_to_finite_float(active_trade.get("trend_exit_vol_drop_pct"), 0.85))
-
-        if len(adx_hist) < breakdown_lookback or len(vol_hist) < breakdown_lookback:
-            return False
-
-        # Condition 1: ADX falling for `breakdown_bars` consecutive bars
-        adx_falling = all(adx_hist[-i] < adx_hist[-i - 1] for i in range(1, breakdown_bars + 1))
-        # Condition 2: ADX below where it was `breakdown_lookback` bars ago
-        adx_below_lookback = adx_hist[-1] < adx_hist[-breakdown_lookback]
-        # Condition 3: Vol below where it was `breakdown_lookback` bars ago
-        vol_below_lookback = vol_hist[-1] < vol_hist[-breakdown_lookback]
-        # Condition 4: Vol dropped below % of its high-water mark since trend-ride started
-        peak_vol = float(active_trade.get("trend_mode_peak_vol") or 0.0)
-        vol_contracting = vol_hist[-1] < (vol_drop_pct * peak_vol) if peak_vol > 0 else False
-
-        return adx_falling and adx_below_lookback and vol_below_lookback and vol_contracting
 
     @staticmethod
     def _to_int(value, default: int) -> int:
@@ -717,10 +689,6 @@ class CvdAutomationCoordinator:
             active_trade["trend_mode_peak_vol"] = atr_normalized
             logger.info("[AUTO] Exit mode switched to trend_unlock token=%s strategy=%s", token, strategy_type)
 
-        if active_trade.get("exit_mode") == "trend_unlock":
-            active_trade["trend_mode_peak_vol"] = max(float(active_trade.get("trend_mode_peak_vol") or 0.0), atr_normalized)
-            if self._is_regime_breakdown(active_trade):
-                exit_reason = "AUTO_REGIME_BREAKDOWN"
 
         use_default_ema_exits = active_trade.get("exit_mode") != "trend_unlock"
 

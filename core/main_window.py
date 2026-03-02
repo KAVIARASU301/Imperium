@@ -647,72 +647,88 @@ class ImperiumMainWindow(QMainWindow):
     # =========================================================================
 
     def _ensure_center_auto_trader_widget(self) -> bool:
+        """
+        Safely create or recreate embedded AutoTrader panel
+        without triggering Qt ownership deletion issues.
+        """
+
+        # If valid widget already exists → reuse
         existing = getattr(self, "auto_trader_embed", None)
         if existing is not None and isValid(existing):
             return True
 
-        self.auto_trader_embed = None
+        symbol = (
+            self.header.symbol_button.text()
+            if hasattr(self, "header")
+            else self.settings.get("default_symbol", "NIFTY")
+        )
 
-        symbol = self.header.symbol_button.text() if hasattr(self, "header") else self.settings.get("default_symbol", "NIFTY")
         cvd_token, _, _ = self._get_cvd_token(symbol)
         if not cvd_token:
-            logger.warning("Unable to create Auto Trader center panel for %s: no CVD token available", symbol)
+            logger.warning(
+                "Unable to create Auto Trader center panel for %s: no CVD token available",
+                symbol,
+            )
             return False
 
         try:
+            # --- Cleanly detach old widget if exists ---
+            old_widget = None
+            if hasattr(self, "center_stack") and self.center_stack.count() > 1:
+                old_widget = self.center_stack.widget(1)
+                if old_widget:
+                    self.center_stack.removeWidget(old_widget)
+
+            # --- Create fresh dialog ---
             dialog = AutoTraderDialog(
                 kite=self.real_kite_client,
                 instrument_token=cvd_token,
                 symbol=symbol,
                 cvd_engine=self.cvd_engine,
-                parent=self,
+                parent=self,  # important: keep parent ownership
             )
+
             dialog.setWindowFlags(Qt.Widget)
             dialog.setModal(False)
+
+            # --- Insert safely ---
+            self.center_stack.insertWidget(1, dialog)
             self.auto_trader_embed = dialog
-            if hasattr(self, "center_stack"):
-                self.center_stack.removeWidget(self.center_stack.widget(1))
-                self.center_stack.insertWidget(1, dialog)
+
+            # --- Delete old widget AFTER new one mounted ---
+            if old_widget:
+                old_widget.deleteLater()
+
+            logger.info("Embedded Auto Trader panel created successfully.")
             return True
+
         except Exception as exc:
             logger.error("Failed to create embedded Auto Trader panel: %s", exc)
             return False
 
     def _sync_center_auto_trader_symbol(self, symbol: str) -> None:
-        """Retarget the embedded Auto Trader panel to the latest header symbol."""
+        """
+        Institutional retargeting.
+        Never destroy the widget.
+        Just retarget internal engine.
+        """
+
         existing = getattr(self, "auto_trader_embed", None)
-        if existing is None or not isValid(existing) or not hasattr(self, "center_stack"):
+        if existing is None or not isValid(existing):
             return
 
         cvd_token, _, _ = self._get_cvd_token(symbol)
         if not cvd_token:
-            logger.warning("Unable to update Auto Trader center panel for %s: no CVD token available", symbol)
-            return
-
-        if self.auto_trader_embed.symbol == symbol and self.auto_trader_embed.instrument_token == cvd_token:
+            logger.warning(
+                "Unable to retarget Auto Trader center panel for %s: no CVD token available",
+                symbol
+            )
             return
 
         try:
-            old_dialog = self.auto_trader_embed
-            new_dialog = AutoTraderDialog(
-                kite=self.real_kite_client,
-                instrument_token=cvd_token,
-                symbol=symbol,
-                cvd_engine=self.cvd_engine,
-                parent=self,
-            )
-            new_dialog.setWindowFlags(Qt.Widget)
-            new_dialog.setModal(False)
-
-            self.center_stack.removeWidget(old_dialog)
-            self.center_stack.insertWidget(1, new_dialog)
-            self.auto_trader_embed = new_dialog
-
-            old_dialog.hide()
-            QTimer.singleShot(200, old_dialog.deleteLater)
+            existing.retarget(symbol, cvd_token)
         except Exception as exc:
             logger.error("Failed to retarget embedded Auto Trader panel: %s", exc)
-
     def _apply_layout_mode(self, mode: str):
         selected_mode = "auto" if str(mode).lower() == "auto" else "manual"
         self.settings["layout_mode"] = selected_mode

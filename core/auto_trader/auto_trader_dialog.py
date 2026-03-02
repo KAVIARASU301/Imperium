@@ -37,10 +37,6 @@ from core.auto_trader.hybrid_exit_engine import (
 from core.auto_trader.signal_governance import SignalGovernance
 from core.auto_trader.stacker import StackerState
 from utils.cpr_calculator import CPRCalculator
-from core.auto_trader.regime_engine import RegimeEngine, RegimeConfig
-from core.auto_trader.regime_tab_mixin import RegimeTabMixin
-from core.auto_trader.regime_indicator import RegimeIndicator
-from core.auto_trader.trend_change_markers import TrendChangeMarkersMixin
 from core.auto_trader.auto_trader_theme import (
     apply_dialog_theme,
     COMPACT_COMBO_STYLE,
@@ -60,7 +56,7 @@ logger = logging.getLogger(__name__)
 # Auto Trader DIalog
 # =============================================================================
 
-class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin, SetupSettingsMigrationMixin, SignalRendererMixin, SimulatorMixin, QDialog):
+class AutoTraderDialog( SetupPanelMixin, SetupSettingsMigrationMixin, SignalRendererMixin, SimulatorMixin, QDialog):
     REFRESH_INTERVAL_MS = 3000
     LIVE_TICK_MAX_POINTS = 6000
     LIVE_TICK_REPAINT_MS = 80
@@ -131,8 +127,7 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.timeframe_minutes = 1  # default = 1 minute
         self.strategy_detector = StrategySignalDetector(timeframe_minutes=self.timeframe_minutes)
         self.signal_governance = SignalGovernance()
-        self.regime_engine = RegimeEngine()
-        self._current_regime = None
+
 
         self.live_mode = True
         self.current_date = None
@@ -241,7 +236,6 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.setAttribute(Qt.WA_NoSystemBackground, False)
 
         self._setup_ui()
-        self._init_trend_change_markers()
         self._load_persisted_setup_values()
         self._connect_signals()
 
@@ -4312,3 +4306,47 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
             return sum(pos.pnl for pos in positions)
         except Exception:
             return 0.0
+
+    def retarget(self, symbol: str, instrument_token: int):
+        """
+        Institutional-grade retargeting.
+        No widget destruction.
+        No recreation.
+        Just state reload.
+        """
+
+        if self.symbol == symbol and self.instrument_token == instrument_token:
+            return
+
+        logger.info(f"[AutoTrader] Retargeting from {self.symbol} → {symbol}")
+
+        # ---- Pause live timers safely ----
+        if hasattr(self, "refresh_timer") and self.refresh_timer:
+            self.refresh_timer.stop()
+
+        self.live_mode = False
+        self._pending_tick_buffer.clear()
+        self._live_tick_points.clear()
+        self._live_price_points.clear()
+
+        # ---- Reset engine state ----
+        self.symbol = symbol
+        self.instrument_token = instrument_token
+
+        self._live_trade_info = None
+        self._live_hybrid_engine = None
+        self._live_stacker_state = None
+        self._last_emitted_signal_key = None
+        self._last_emitted_closed_bar_ts = None
+
+        # ---- Update window title ----
+        self.setWindowTitle(f"Auto Trader — {self._display_symbol_for_title(symbol)}")
+
+        # ---- Reload full dataset ----
+        self._load_and_plot(force=True)
+
+        # ---- Resume live mode ----
+        self.live_mode = True
+        self._start_refresh_timer()
+
+        logger.info(f"[AutoTrader] Retarget complete for {symbol}")
