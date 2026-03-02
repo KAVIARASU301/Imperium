@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QGraphicsOpacityEffect,
     QSplitter,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -161,6 +162,7 @@ class MainWindowShell:
         window.account_summary.setMinimumHeight(200)
         window.account_summary.setContentsMargins(3, 0, 3, 0)
         window.strike_ladder = StrikeLadderWidget(window.real_kite_client)
+        window.auto_trader_embed = None
         window.strike_ladder.setMinimumWidth(500)
         if hasattr(window.strike_ladder, "setMaximumWidth"):
             window.strike_ladder.setMaximumWidth(800)
@@ -184,7 +186,18 @@ class MainWindowShell:
         layout = QVBoxLayout()
         layout.setSpacing(0)
         layout.setContentsMargins(3, 3, 3, 3)
-        layout.addWidget(window.strike_ladder, 1)
+
+        window.center_stack = QStackedWidget()
+        window.center_stack.setContentsMargins(0, 0, 0, 0)
+        window.center_stack.addWidget(window.strike_ladder)
+
+        placeholder = QWidget()
+        placeholder_layout = QVBoxLayout(placeholder)
+        placeholder_layout.setContentsMargins(0, 0, 0, 0)
+        placeholder_layout.setSpacing(0)
+        window.center_stack.addWidget(placeholder)
+
+        layout.addWidget(window.center_stack, 1)
         return layout
 
     @staticmethod

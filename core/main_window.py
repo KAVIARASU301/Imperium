@@ -249,6 +249,7 @@ class ImperiumMainWindow(QMainWindow):
 
         self._apply_dark_theme()
         self._setup_ui()
+        self._apply_layout_mode(str(self.settings.get("layout_mode", "manual")))
         self._setup_position_manager()
         self._connect_signals()
         self._setup_keyboard_shortcuts()
@@ -406,6 +407,7 @@ class ImperiumMainWindow(QMainWindow):
             self.header.set_lot_size(default_lots)
             logger.info(f"Applied startup settings. Symbol: {default_symbol}, Lots: {default_lots}")
             self._on_settings_changed(self.header.get_current_settings())
+            self._apply_layout_mode(str(self.settings.get("layout_mode", "manual")))
         else:
             logger.error("No valid symbols found in instrument data. Cannot initialize UI.")
 
@@ -642,6 +644,50 @@ class ImperiumMainWindow(QMainWindow):
     # SECTION 6: SETTINGS & CONFIGURATION
     # =========================================================================
 
+    def _ensure_center_auto_trader_widget(self) -> bool:
+        if getattr(self, "auto_trader_embed", None):
+            return True
+
+        symbol = self.header.symbol_button.text() if hasattr(self, "header") else self.settings.get("default_symbol", "NIFTY")
+        cvd_token, _, _ = self._get_cvd_token(symbol)
+        if not cvd_token:
+            logger.warning("Unable to create Auto Trader center panel for %s: no CVD token available", symbol)
+            return False
+
+        try:
+            dialog = AutoTraderDialog(
+                kite=self.real_kite_client,
+                instrument_token=cvd_token,
+                symbol=symbol,
+                cvd_engine=self.cvd_engine,
+                parent=self,
+            )
+            dialog.setWindowFlags(Qt.Widget)
+            dialog.setModal(False)
+            self.auto_trader_embed = dialog
+            if hasattr(self, "center_stack"):
+                self.center_stack.removeWidget(self.center_stack.widget(1))
+                self.center_stack.insertWidget(1, dialog)
+            return True
+        except Exception as exc:
+            logger.error("Failed to create embedded Auto Trader panel: %s", exc)
+            return False
+
+    def _apply_layout_mode(self, mode: str):
+        selected_mode = "auto" if str(mode).lower() == "auto" else "manual"
+        self.settings["layout_mode"] = selected_mode
+
+        if not hasattr(self, "center_stack"):
+            return
+
+        if selected_mode == "auto":
+            if self._ensure_center_auto_trader_widget():
+                self.center_stack.setCurrentIndex(1)
+            else:
+                self.center_stack.setCurrentIndex(0)
+        else:
+            self.center_stack.setCurrentIndex(0)
+
     def _show_settings(self):
         """
         Correctly instantiates the SettingsDialog with only the parent.
@@ -677,6 +723,7 @@ class ImperiumMainWindow(QMainWindow):
             auto_adjust = self.settings.get('auto_adjust_ladder', True)
             self.strike_ladder.set_auto_adjust(auto_adjust)
 
+        self._apply_layout_mode(str(self.settings.get("layout_mode", "manual")))
         self._on_settings_changed(self.header.get_current_settings())
         self._reload_risk_limits_from_settings()
 

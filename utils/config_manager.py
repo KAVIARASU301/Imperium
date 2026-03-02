@@ -28,6 +28,7 @@ class ConfigManager:
 
         self.default_settings = {
             'trading_mode': 'live',
+            'layout_mode': 'manual',
             'default_symbol': 'NIFTY',
             'default_product': 'MIS',
             'default_lots': 1,
