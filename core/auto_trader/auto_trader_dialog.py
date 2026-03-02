@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QTimer, Signal, QEvent, QThread, QSettings
 from PySide6.QtGui import QColor, QFontMetrics
 from pyqtgraph import AxisItem, TextItem
+from shiboken6 import isValid
 
 from kiteconnect import KiteConnect
 from core.cvd.cvd_historical import CVDHistoricalBuilder
@@ -1459,6 +1460,8 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
     # =========================================================================
 
     def _load_persisted_setup_values(self):
+        self._ensure_setup_controls_alive()
+
         key_prefix = self._settings_key_prefix()
         global_key_prefix = self._global_settings_key_prefix()
         migration_settings = self._read_setup_json_for_migration()
@@ -2033,12 +2036,38 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
             self._regime_settings_from_dict(regime_dict)
         self._apply_regime_config()
 
-        self._setup_values_ready = True
         if migrated_values:
             self._persist_setup_values()
             self._mark_setup_json_migrated()
         self._on_automation_settings_changed()
         self._log_active_priority_list_if_needed()
+
+        self._setup_values_ready = True
+
+    def _ensure_setup_controls_alive(self):
+        """Rebuild setup controls if Qt has already deleted one of the critical widgets."""
+        critical_controls = (
+            "range_lookback_input",
+            "breakout_switch_mode_combo",
+            "atr_skip_limit_input",
+            "atr_trailing_step_input",
+        )
+
+        def _alive(name: str) -> bool:
+            control = getattr(self, name, None)
+            return control is not None and isValid(control)
+
+        if all(_alive(name) for name in critical_controls):
+            return
+
+        logger.warning(
+            "Detected deleted setup control(s) during initialization for %s; rebuilding setup panel.",
+            self.symbol,
+        )
+        stale_dialog = getattr(self, "setup_dialog", None)
+        if stale_dialog is not None and isValid(stale_dialog):
+            stale_dialog.deleteLater()
+        self._build_setup_dialog(COMPACT_COMBO_STYLE, COMPACT_SPINBOX_STYLE)
 
     def _combo_data(self, attr: str, default):
         combo = getattr(self, attr, None)
