@@ -94,9 +94,15 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
 
     STRATEGY_PRIORITY_KEYS = (
         "atr_reversal",
+        "atr_divergence",
+        "ema_cross",
+        "range_breakout",
     )
     STRATEGY_PRIORITY_LABELS = {
         "atr_reversal": "ATR Reversal",
+        "atr_divergence": "ATR Divergence",
+        "ema_cross": "EMA Cross",
+        "range_breakout": "Range Breakout",
     }
     CPR_PRIORITY_LIST_LABELS = {
         "narrow": "Narrow CPR",
@@ -3326,11 +3332,17 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self._cpr_labels = []
 
     def _default_cpr_strategy_priorities(self) -> dict[str, dict[str, int]]:
+        base_priorities = {
+            "atr_reversal": 1,
+            "atr_divergence": 2,
+            "ema_cross": 3,
+            "range_breakout": 4,
+        }
         return {
-            "narrow": {"atr_reversal": 1},
-            "neutral": {"atr_reversal": 1},
-            "wide": {"atr_reversal": 1},
-            "fallback": {"atr_reversal": 1},
+            "narrow": dict(base_priorities),
+            "neutral": dict(base_priorities),
+            "wide": dict(base_priorities),
+            "fallback": dict(base_priorities),
         }
 
     def _active_cpr_priority_list_key(self) -> str:
