@@ -23,7 +23,7 @@ from datetime import datetime
 from typing import Optional
 
 import numpy as np
-from PySide6.QtCore import QObject, QThread, QTimer, Signal
+from PySide6.QtCore import QObject, QMetaObject, QThread, QTimer, Qt, Signal, Slot
 
 from core.auto_trader.chop_filter import ChopFilter
 from core.auto_trader.constants import TRADING_START, TRADING_END
@@ -129,21 +129,25 @@ class SymbolWorker(QObject):
         self._fetch_thread: Optional[QThread] = None
         self._fetch_worker: Optional[_DataFetchWorker] = None
 
+    @Slot()
     def start(self):
         """Start periodic scanning."""
         self._active = True
-        self._refresh_timer = QTimer()
+        self._refresh_timer = QTimer(self)
         self._refresh_timer.setInterval(self.REFRESH_INTERVAL_MS)
         self._refresh_timer.timeout.connect(self._run_scan)
         self._refresh_timer.start()
         # Run immediately on start
         QTimer.singleShot(0, self._run_scan)
 
+    @Slot()
     def stop(self):
         """Cleanly stop this worker."""
         self._active = False
         if self._refresh_timer:
             self._refresh_timer.stop()
+            self._refresh_timer.deleteLater()
+            self._refresh_timer = None
         if self._fetch_worker:
             self._fetch_worker.cancel()
 
@@ -401,10 +405,19 @@ class MultiSymbolEngine(QObject):
         thread = self._threads.pop(symbol, None)
 
         if worker:
-            worker.stop()
+            worker_thread = worker.thread()
+            current_thread = QThread.currentThread()
+
+            if worker_thread is current_thread:
+                worker.stop()
+            else:
+                QMetaObject.invokeMethod(worker, "stop", Qt.BlockingQueuedConnection)
+
+            worker.deleteLater()
         if thread:
             thread.quit()
             thread.wait(2000)
+            thread.deleteLater()
 
         logger.info("[ENGINE] Stopped watching %s", symbol)
 
