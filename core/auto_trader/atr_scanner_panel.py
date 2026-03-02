@@ -64,6 +64,7 @@ C_CHOP      = "#FF6B35"   # orange = chop-filtered signal
 
 STATUS_COLORS = {
     "watching":   C_LONG,
+    "data_connected": C_ACCENT,
     "fetching":   C_ACCENT,
     "warming_up": C_WARN,
     "error":      C_SHORT,

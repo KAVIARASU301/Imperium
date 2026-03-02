@@ -128,11 +128,19 @@ class SymbolWorker(QObject):
         self._refresh_timer: Optional[QTimer] = None
         self._fetch_thread: Optional[QThread] = None
         self._fetch_worker: Optional[_DataFetchWorker] = None
+        self._market_data_confirmed = False
 
     @Slot()
     def start(self):
         """Start periodic scanning."""
         self._active = True
+        self._market_data_confirmed = False
+        logger.info(
+            "[SCANNER] %s starting historical market-data polling (token=%d, tf=%sm)",
+            self.symbol,
+            self.instrument_token,
+            self.timeframe_minutes,
+        )
         self._refresh_timer = QTimer(self)
         self._refresh_timer.setInterval(self.REFRESH_INTERVAL_MS)
         self._refresh_timer.timeout.connect(self._run_scan)
@@ -160,6 +168,13 @@ class SymbolWorker(QObject):
         from_dt = now - timedelta(days=5)
 
         self.status_update.emit(self.symbol, "fetching")
+        logger.debug(
+            "[SCANNER] %s requesting candles for token=%d (%s -> %s)",
+            self.symbol,
+            self.instrument_token,
+            from_dt.isoformat(timespec="seconds"),
+            now.isoformat(timespec="seconds"),
+        )
 
         # Spin up a data fetch worker in its own thread
         self._fetch_worker = _DataFetchWorker(
@@ -179,6 +194,12 @@ class SymbolWorker(QObject):
         self._fetch_thread.start()
 
     def _on_fetch_error(self, msg: str):
+        logger.error(
+            "[SCANNER] %s market-data fetch failed for token=%d: %s",
+            self.symbol,
+            self.instrument_token,
+            msg,
+        )
         self.error_occurred.emit(self.symbol, f"fetch_error:{msg}")
         self.status_update.emit(self.symbol, "error")
 
@@ -207,6 +228,19 @@ class SymbolWorker(QObject):
             if len(price_close) < 30:
                 self.status_update.emit(self.symbol, "warming_up")
                 return
+
+            if not self._market_data_confirmed:
+                bars = len(price_close)
+                last_ts = price_df.index[-1] if hasattr(price_df.index, "__getitem__") else "n/a"
+                logger.info(
+                    "[SCANNER] %s market-data feed confirmed (token=%d, bars=%d, last_bar=%s)",
+                    self.symbol,
+                    self.instrument_token,
+                    bars,
+                    last_ts,
+                )
+                self._market_data_confirmed = True
+                self.status_update.emit(self.symbol, "data_connected")
 
             # ── Indicators ──────────────────────────────────────────────
             atr         = calculate_atr(price_high, price_low, price_close, period=14)
@@ -397,6 +431,10 @@ class MultiSymbolEngine(QObject):
         self._threads[symbol] = thread
 
         logger.info("[ENGINE] Started watching %s (token=%d)", symbol, instrument_token)
+        logger.info(
+            "[ENGINE] %s uses historical polling mode; websocket token subscriptions are not required",
+            symbol,
+        )
         self.symbol_status.emit(symbol, "started")
 
     def remove_symbol(self, symbol: str):
