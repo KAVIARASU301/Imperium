@@ -12,6 +12,7 @@ from utils.time_utils import TRADING_DAY_START
 from uuid import uuid4
 from PySide6.QtWidgets import (QMainWindow, QMessageBox, QDialog, QSplitter, QLabel, QFrame, QVBoxLayout)
 from PySide6.QtCore import Qt, QTimer, QByteArray
+from shiboken6 import isValid
 from kiteconnect import KiteConnect
 
 # Internal imports
@@ -646,8 +647,11 @@ class ImperiumMainWindow(QMainWindow):
     # =========================================================================
 
     def _ensure_center_auto_trader_widget(self) -> bool:
-        if getattr(self, "auto_trader_embed", None):
+        existing = getattr(self, "auto_trader_embed", None)
+        if existing is not None and isValid(existing):
             return True
+
+        self.auto_trader_embed = None
 
         symbol = self.header.symbol_button.text() if hasattr(self, "header") else self.settings.get("default_symbol", "NIFTY")
         cvd_token, _, _ = self._get_cvd_token(symbol)
@@ -676,7 +680,8 @@ class ImperiumMainWindow(QMainWindow):
 
     def _sync_center_auto_trader_symbol(self, symbol: str) -> None:
         """Retarget the embedded Auto Trader panel to the latest header symbol."""
-        if not getattr(self, "auto_trader_embed", None) or not hasattr(self, "center_stack"):
+        existing = getattr(self, "auto_trader_embed", None)
+        if existing is None or not isValid(existing) or not hasattr(self, "center_stack"):
             return
 
         cvd_token, _, _ = self._get_cvd_token(symbol)
@@ -703,7 +708,8 @@ class ImperiumMainWindow(QMainWindow):
             self.center_stack.insertWidget(1, new_dialog)
             self.auto_trader_embed = new_dialog
 
-            old_dialog.deleteLater()
+            old_dialog.hide()
+            QTimer.singleShot(200, old_dialog.deleteLater)
         except Exception as exc:
             logger.error("Failed to retarget embedded Auto Trader panel: %s", exc)
 
