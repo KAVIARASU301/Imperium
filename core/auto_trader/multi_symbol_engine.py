@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 import numpy as np
@@ -162,22 +162,16 @@ class SymbolWorker(QObject):
     def _run_scan(self):
         if not self._active:
             return
+        # Skip if previous fetch is still running (backpressure guard)
+        if self._fetch_thread and self._fetch_thread.isRunning():
+            logger.warning("[SCANNER] %s skipping scan — previous fetch still running", self.symbol)
+            return
 
-        from datetime import datetime, timedelta
         now = datetime.now()
         from_dt = now - timedelta(days=5)
 
         self.status_update.emit(self.symbol, "fetching")
-        logger.debug(
-            "[SCANNER] %s requesting candles for token=%d (%s -> %s)",
-            self.symbol,
-            self.instrument_token,
-            from_dt.isoformat(timespec="seconds"),
-            now.isoformat(timespec="seconds"),
-        )
-
-        # Spin up a data fetch worker in its own thread
-        self._fetch_worker = _DataFetchWorker(
+        worker = _DataFetchWorker(
             kite=self.kite,
             instrument_token=self.instrument_token,
             from_dt=from_dt,
@@ -185,13 +179,17 @@ class SymbolWorker(QObject):
             timeframe_minutes=self.timeframe_minutes,
             focus_mode=True,
         )
-        self._fetch_thread = QThread()
-        self._fetch_worker.moveToThread(self._fetch_thread)
-        self._fetch_worker.result_ready.connect(self._on_data_ready)
-        self._fetch_worker.error.connect(self._on_fetch_error)
-        self._fetch_worker.finished.connect(self._fetch_thread.quit)
-        self._fetch_thread.started.connect(self._fetch_worker.run)
-        self._fetch_thread.start()
+        thread = QThread(self)  # parent = self → auto-destroyed with worker
+        worker.moveToThread(thread)
+        worker.result_ready.connect(self._on_data_ready)
+        worker.error.connect(self._on_fetch_error)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.started.connect(worker.run)
+        self._fetch_thread = thread
+        self._fetch_worker = worker
+        thread.start()
 
     def _on_fetch_error(self, msg: str):
         logger.error(
