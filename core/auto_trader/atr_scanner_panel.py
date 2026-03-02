@@ -55,6 +55,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import QSettings
 
 from core.auto_trader.multi_symbol_engine import AtrSignalEvent, MultiSymbolEngine
+from core.auto_trader.atr_signal_router import AtrSignalRouter
 from core.auto_trader.indicators import calculate_atr, calculate_ema, calculate_vwap, calculate_cvd_zscore
 from core.auto_trader.strategy_signal_detector import StrategySignalDetector
 from core.cvd.cvd_historical import CVDHistoricalBuilder
@@ -74,14 +75,23 @@ C_ACCENT    = "#4A9EFF"
 C_CHOP      = "#FF6B35"   # orange = chop-filtered signal
 
 STATUS_COLORS = {
-    "watching":   C_LONG,
+    "MONITORING": C_LONG,
     "queued": C_MUTED,
-    "data_connected": C_ACCENT,
-    "fetching":   C_ACCENT,
-    "warming_up": C_WARN,
-    "error":      C_SHORT,
+    "DATA LIVE": C_ACCENT,
+    "FETCHING DATA": C_ACCENT,
+    "WARMING UP": C_WARN,
+    "⚠ ERROR": C_SHORT,
     "started":    C_MUTED,
-    "no_data":    C_MUTED,
+    "NO DATA": C_MUTED,
+}
+
+STATUS_LABELS = {
+    "watching": "MONITORING",
+    "fetching": "FETCHING DATA",
+    "warming_up": "WARMING UP",
+    "data_connected": "DATA LIVE",
+    "error": "⚠ ERROR",
+    "no_data": "NO DATA",
 }
 
 BASE_STYLE = f"""
@@ -188,6 +198,7 @@ class AtrScannerPanel(QWidget):
         # Track token mapping: symbol → instrument_token
         self._symbol_tokens: dict[str, int] = {}
         self._instrument_data: dict[str, dict[str, Any]] = {}
+        self._signal_router: Optional[AtrSignalRouter] = None
 
         self.setStyleSheet(BASE_STYLE)
         self._setup_ui()
@@ -231,7 +242,7 @@ class AtrScannerPanel(QWidget):
         lay.setContentsMargins(16, 0, 16, 0)
 
         # Title
-        title = QLabel("ATR Scanner Panel")
+        title = QLabel("SIGNAL ENGINE — ATR REVERSAL")
         title.setStyleSheet(f"color: {C_TEXT}; font-size: 13px; font-weight: 600; letter-spacing: 2px;")
         lay.addWidget(title)
 
@@ -257,7 +268,7 @@ class AtrScannerPanel(QWidget):
 
     def _build_setup_dialog(self) -> QDialog:
         dlg = QDialog(self)
-        dlg.setWindowTitle("Auto Trader Setup")
+        dlg.setWindowTitle("SIGNAL ENGINE — STRATEGY PARAMETERS")
         dlg.resize(460, 620)
         dlg.setModal(False)
         dlg.finished.connect(lambda _: self._clear_signals())
@@ -302,6 +313,60 @@ class AtrScannerPanel(QWidget):
         self._tf_spin.setSuffix(" min")
         form_lay.addRow("Timeframe:", self._tf_spin)
 
+        self._base_ema_spin = QSpinBox()
+        self._base_ema_spin.setRange(9, 200)
+        self._base_ema_spin.setValue(21)
+        self._base_ema_spin.setSuffix(" periods")
+        form_lay.addRow("Base EMA:", self._base_ema_spin)
+
+        self._atr_extension_spin = QDoubleSpinBox()
+        self._atr_extension_spin.setRange(1.0, 3.0)
+        self._atr_extension_spin.setValue(1.10)
+        self._atr_extension_spin.setSingleStep(0.05)
+        self._atr_extension_spin.setDecimals(2)
+        form_lay.addRow("ATR Extension Min:", self._atr_extension_spin)
+
+        self._sl_atr_mult_spin = QDoubleSpinBox()
+        self._sl_atr_mult_spin.setRange(0.5, 5.0)
+        self._sl_atr_mult_spin.setValue(1.5)
+        self._sl_atr_mult_spin.setSingleStep(0.25)
+        self._sl_atr_mult_spin.setDecimals(2)
+        form_lay.addRow("SL Multiplier (ATR ×):", self._sl_atr_mult_spin)
+
+        self._strikes_above_spin = QSpinBox()
+        self._strikes_above_spin.setRange(0, 5)
+        self._strikes_above_spin.setValue(1)
+        form_lay.addRow("Strikes Above ATM:", self._strikes_above_spin)
+
+        self._strikes_below_spin = QSpinBox()
+        self._strikes_below_spin.setRange(0, 5)
+        self._strikes_below_spin.setValue(1)
+        form_lay.addRow("Strikes Below ATM:", self._strikes_below_spin)
+
+        self._min_confidence_spin = QDoubleSpinBox()
+        self._min_confidence_spin.setRange(0.0, 1.0)
+        self._min_confidence_spin.setValue(0.6)
+        self._min_confidence_spin.setSingleStep(0.05)
+        self._min_confidence_spin.setDecimals(2)
+        form_lay.addRow("Min Confidence Gate:", self._min_confidence_spin)
+
+        self._min_adx_spin = QDoubleSpinBox()
+        self._min_adx_spin.setRange(0.0, 50.0)
+        self._min_adx_spin.setValue(20.0)
+        self._min_adx_spin.setSingleStep(1.0)
+        self._min_adx_spin.setDecimals(1)
+        form_lay.addRow("Min ADX Gate:", self._min_adx_spin)
+
+        self._session_start_spin = QSpinBox()
+        self._session_start_spin.setRange(900, 1530)
+        self._session_start_spin.setValue(915)
+        form_lay.addRow("Session Start (HHMM):", self._session_start_spin)
+
+        self._session_end_spin = QSpinBox()
+        self._session_end_spin.setRange(900, 1530)
+        self._session_end_spin.setValue(1500)
+        form_lay.addRow("Session End (HHMM):", self._session_end_spin)
+
         btn_row = QHBoxLayout()
         add_btn = QPushButton("+ ADD")
         add_btn.setObjectName("add_btn")
@@ -321,10 +386,11 @@ class AtrScannerPanel(QWidget):
         watch_lay = QVBoxLayout(watch_grp)
         watch_lay.setContentsMargins(4, 4, 4, 4)
 
-        self._watchlist_table = QTableWidget(0, 2)
-        self._watchlist_table.setHorizontalHeaderLabels(["Symbol", "Status"])
+        self._watchlist_table = QTableWidget(0, 3)
+        self._watchlist_table.setHorizontalHeaderLabels(["Symbol", "Status", "Last Signal"])
         self._watchlist_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self._watchlist_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self._watchlist_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
         self._watchlist_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self._watchlist_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self._watchlist_table.setAlternatingRowColors(False)
@@ -406,9 +472,9 @@ class AtrScannerPanel(QWidget):
         lay.addLayout(hdr)
 
         # Signal table
-        self._signal_table = QTableWidget(0, 7)
+        self._signal_table = QTableWidget(0, 10)
         self._signal_table.setHorizontalHeaderLabels([
-            "Time", "Symbol", "Direction", "Price", "ATR", "ADX", "Conf%"
+            "TIME", "SYMBOL", "SIGNAL", "SPOT", "ATR", "ADX", "CVD-Z", "CONFIDENCE", "SL PTS", "STATUS"
         ])
         hdr_view = self._signal_table.horizontalHeader()
         hdr_view.setSectionResizeMode(0, QHeaderView.ResizeToContents)
@@ -417,7 +483,10 @@ class AtrScannerPanel(QWidget):
         hdr_view.setSectionResizeMode(3, QHeaderView.ResizeToContents)
         hdr_view.setSectionResizeMode(4, QHeaderView.ResizeToContents)
         hdr_view.setSectionResizeMode(5, QHeaderView.ResizeToContents)
-        hdr_view.setSectionResizeMode(6, QHeaderView.Stretch)
+        hdr_view.setSectionResizeMode(6, QHeaderView.ResizeToContents)
+        hdr_view.setSectionResizeMode(7, QHeaderView.ResizeToContents)
+        hdr_view.setSectionResizeMode(8, QHeaderView.ResizeToContents)
+        hdr_view.setSectionResizeMode(9, QHeaderView.Stretch)
 
         self._signal_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self._signal_table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -503,6 +572,8 @@ class AtrScannerPanel(QWidget):
             "timeframe_minutes": self._tf_spin.value(),
             "atr_distance_threshold": self._atr_distance_spin.value(),
             "cvd_zscore_threshold": self._cvd_zscore_spin.value(),
+            "atr_base_ema": self._base_ema_spin.value(),
+            "atr_extension_min": self._atr_extension_spin.value(),
         }
 
         self._pending_watchlist[symbol] = params
@@ -543,6 +614,7 @@ class AtrScannerPanel(QWidget):
     @Slot(object)
     def _on_signal(self, event: AtrSignalEvent):
         """Insert a new signal row at the top of the signal feed."""
+        self._signal_table.setUpdatesEnabled(False)
         self._signal_table.insertRow(0)
 
         time_str = event.timestamp.strftime("%H:%M:%S")
@@ -550,6 +622,8 @@ class AtrScannerPanel(QWidget):
         if event.chop_filtered:
             color = C_CHOP
 
+        cvd_z = getattr(event, "cvd_zscore", 0.0)
+        sl_pts = event.atr * self._sl_atr_mult_spin.value()
         cells = [
             (time_str, C_MUTED),
             (event.symbol, C_TEXT),
@@ -557,7 +631,10 @@ class AtrScannerPanel(QWidget):
             (f"{event.price:.2f}", C_TEXT),
             (f"{event.atr:.2f}", C_MUTED),
             (f"{event.adx:.1f}", C_MUTED),
+            (f"{cvd_z:.2f}", C_MUTED),
             (event.confidence_pct, color),
+            (f"{sl_pts:.2f}", C_WARN),
+            ("SCANNING", C_ACCENT),
         ]
 
         bold_font = QFont()
@@ -569,6 +646,9 @@ class AtrScannerPanel(QWidget):
             if col == 2:  # direction column gets bold
                 item.setFont(bold_font)
             self._signal_table.setItem(0, col, item)
+        self._signal_table.setUpdatesEnabled(True)
+
+        self._update_last_signal_time(event.symbol, time_str)
 
         # Keep table lean
         if self._signal_table.rowCount() > self.MAX_SIGNAL_ROWS:
@@ -590,11 +670,11 @@ class AtrScannerPanel(QWidget):
 
     @Slot(str, str)
     def _on_status_update(self, symbol: str, status: str):
-        self._update_watchlist_status(symbol, status)
+        self._update_watchlist_status(symbol, STATUS_LABELS.get(status, status))
 
     @Slot(str, str)
     def _on_symbol_error(self, symbol: str, error: str):
-        self._update_watchlist_status(symbol, "error")
+        self._update_watchlist_status(symbol, "⚠ ERROR")
         self._set_status(f"Error on {symbol}: {error}")
 
     # ── Watchlist helpers ──────────────────────────────────────────────────
@@ -614,6 +694,10 @@ class AtrScannerPanel(QWidget):
         status_item.setForeground(QColor(status_color))
         self._watchlist_table.setItem(row, 1, status_item)
 
+        signal_item = QTableWidgetItem("—")
+        signal_item.setForeground(QColor(C_MUTED))
+        self._watchlist_table.setItem(row, 2, signal_item)
+
     def _find_watchlist_row(self, symbol: str) -> int:
         for row in range(self._watchlist_table.rowCount()):
             item = self._watchlist_table.item(row, 0)
@@ -630,6 +714,15 @@ class AtrScannerPanel(QWidget):
                     status_item.setText(status)
                     color = STATUS_COLORS.get(status, C_MUTED)
                     status_item.setForeground(QColor(color))
+                break
+
+    def _update_last_signal_time(self, symbol: str, time_str: str):
+        for row in range(self._watchlist_table.rowCount()):
+            item = self._watchlist_table.item(row, 0)
+            if item and item.text() == symbol:
+                signal_item = self._watchlist_table.item(row, 2)
+                if signal_item:
+                    signal_item.setText(time_str)
                 break
 
     # ── Misc helpers ───────────────────────────────────────────────────────
@@ -830,6 +923,16 @@ class AtrScannerPanel(QWidget):
 
     def _on_automation_toggled(self, checked: bool):
         self._automation_enabled = bool(checked)
+        if self._automation_enabled and self._signal_router is None:
+            self._signal_router = AtrSignalRouter(main_window=self.window(), parent=self)
+        if self._signal_router:
+            if self._automation_enabled:
+                self.engine.signal_fired.connect(self._signal_router.on_signal)
+            else:
+                try:
+                    self.engine.signal_fired.disconnect(self._signal_router.on_signal)
+                except RuntimeError:
+                    pass
         self._apply_automation_state(initial=False)
         self._save_setup_state()
 
@@ -869,6 +972,15 @@ class AtrScannerPanel(QWidget):
                 "atr_distance_threshold": self._atr_distance_spin.value(),
                 "cvd_zscore_threshold": self._cvd_zscore_spin.value(),
                 "timeframe_minutes": self._tf_spin.value(),
+                "atr_base_ema": self._base_ema_spin.value(),
+                "atr_extension_min": self._atr_extension_spin.value(),
+                "sl_atr_multiplier": self._sl_atr_mult_spin.value(),
+                "strikes_above": self._strikes_above_spin.value(),
+                "strikes_below": self._strikes_below_spin.value(),
+                "min_confidence": self._min_confidence_spin.value(),
+                "min_adx": self._min_adx_spin.value(),
+                "session_start": self._session_start_spin.value(),
+                "session_end": self._session_end_spin.value(),
             },
             "symbols": [
                 {
@@ -899,6 +1011,15 @@ class AtrScannerPanel(QWidget):
         self._atr_distance_spin.setValue(float(defaults.get("atr_distance_threshold", 1.5)))
         self._cvd_zscore_spin.setValue(float(defaults.get("cvd_zscore_threshold", 1.5)))
         self._tf_spin.setValue(int(defaults.get("timeframe_minutes", 1)))
+        self._base_ema_spin.setValue(int(defaults.get("atr_base_ema", 21)))
+        self._atr_extension_spin.setValue(float(defaults.get("atr_extension_min", 1.1)))
+        self._sl_atr_mult_spin.setValue(float(defaults.get("sl_atr_multiplier", 1.5)))
+        self._strikes_above_spin.setValue(int(defaults.get("strikes_above", 1)))
+        self._strikes_below_spin.setValue(int(defaults.get("strikes_below", 1)))
+        self._min_confidence_spin.setValue(float(defaults.get("min_confidence", 0.6)))
+        self._min_adx_spin.setValue(float(defaults.get("min_adx", 20.0)))
+        self._session_start_spin.setValue(int(defaults.get("session_start", 915)))
+        self._session_end_spin.setValue(int(defaults.get("session_end", 1500)))
 
         self._pending_watchlist.clear()
         self._watchlist_table.setRowCount(0)
@@ -914,6 +1035,8 @@ class AtrScannerPanel(QWidget):
                 "timeframe_minutes": int(params.get("timeframe_minutes", self._tf_spin.value())),
                 "atr_distance_threshold": float(params.get("atr_distance_threshold", self._atr_distance_spin.value())),
                 "cvd_zscore_threshold": float(params.get("cvd_zscore_threshold", self._cvd_zscore_spin.value())),
+                "atr_base_ema": int(params.get("atr_base_ema", self._base_ema_spin.value())),
+                "atr_extension_min": float(params.get("atr_extension_min", self._atr_extension_spin.value())),
             }
             self._pending_watchlist[symbol] = merged_params
             self._add_watchlist_row(symbol, "queued")

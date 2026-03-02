@@ -18,6 +18,7 @@ Architecture concept: "Shared-Nothing Workers"
 from __future__ import annotations
 
 import logging
+import random
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Optional
@@ -58,6 +59,7 @@ class AtrSignalEvent:
     confidence: float                # 0.0–1.0 from SignalGovernance
     quality_score: float
     chop_filtered: bool
+    cvd_zscore: float = 0.0
     timestamp: datetime = field(default_factory=datetime.now)
 
     @property
@@ -123,12 +125,14 @@ class SymbolWorker(QObject):
         self.chop = ChopFilter(period=14, threshold=61.8)
 
         # State
-        self._last_signal_bar: dict[str, int] = {"long": -1, "short": -1}
+        self._last_signal_ts: dict[str, Optional[object]] = {"long": None, "short": None}
         self._active = False
         self._refresh_timer: Optional[QTimer] = None
         self._fetch_thread: Optional[QThread] = None
         self._fetch_worker: Optional[_DataFetchWorker] = None
         self._market_data_confirmed = False
+        self._consecutive_errors = 0
+        self._last_heartbeat: datetime = datetime.now()
 
     @Slot()
     def start(self):
@@ -145,8 +149,9 @@ class SymbolWorker(QObject):
         self._refresh_timer.setInterval(self.REFRESH_INTERVAL_MS)
         self._refresh_timer.timeout.connect(self._run_scan)
         self._refresh_timer.start()
-        # Run immediately on start
-        QTimer.singleShot(0, self._run_scan)
+        # Stagger first run across the minute to avoid synchronized spikes.
+        jitter_ms = random.randint(0, max(self.REFRESH_INTERVAL_MS - 5_000, 1))
+        QTimer.singleShot(jitter_ms, self._run_scan)
 
     @Slot()
     def stop(self):
@@ -158,10 +163,16 @@ class SymbolWorker(QObject):
             self._refresh_timer = None
         if self._fetch_worker:
             self._fetch_worker.cancel()
+            self._fetch_worker = None
+        try:
+            self.signal_fired.disconnect()
+        except RuntimeError:
+            pass
 
     def _run_scan(self):
         if not self._active:
             return
+        self._last_heartbeat = datetime.now()
         # Skip if previous fetch is still running (backpressure guard)
         if self._fetch_thread and self._fetch_thread.isRunning():
             logger.warning("[SCANNER] %s skipping scan — previous fetch still running", self.symbol)
@@ -192,6 +203,7 @@ class SymbolWorker(QObject):
         thread.start()
 
     def _on_fetch_error(self, msg: str):
+        self._consecutive_errors += 1
         logger.error(
             "[SCANNER] %s market-data fetch failed for token=%d: %s",
             self.symbol,
@@ -200,6 +212,19 @@ class SymbolWorker(QObject):
         )
         self.error_occurred.emit(self.symbol, f"fetch_error:{msg}")
         self.status_update.emit(self.symbol, "error")
+        if not self._active:
+            return
+
+        max_consecutive_errors = 5
+        if self._consecutive_errors >= max_consecutive_errors:
+            logger.error("[SCANNER] %s disabled after %d consecutive errors", self.symbol, self._consecutive_errors)
+            self.error_occurred.emit(self.symbol, "max_errors_reached")
+            self.stop()
+            return
+
+        backoff_ms = min(60_000 * self._consecutive_errors, 300_000)
+        logger.warning("[SCANNER] %s retrying in %ds", self.symbol, backoff_ms // 1000)
+        QTimer.singleShot(backoff_ms, self._run_scan)
 
     def _on_data_ready(self, cvd_df, price_df, prev_close, previous_day_cpr):
         """
@@ -216,7 +241,13 @@ class SymbolWorker(QObject):
                 self.status_update.emit(self.symbol, "no_data")
                 return
 
-            # ── Arrays ──────────────────────────────────────────────────
+            # ── Arrays (hot path on sliding lookback window) ───────────
+            lookback = 60
+            if len(price_df) > lookback:
+                price_df = price_df.iloc[-lookback:]
+                if cvd_df is not None and not cvd_df.empty:
+                    cvd_df = cvd_df.iloc[-lookback:]
+
             price_close = price_df["close"].to_numpy(dtype=float)
             price_high  = price_df["high"].to_numpy(dtype=float)
             price_low   = price_df["low"].to_numpy(dtype=float)
@@ -304,14 +335,16 @@ class SymbolWorker(QObject):
                 exhaustion_min_score=2,
             )
 
+            self._consecutive_errors = 0
+
             # ── Check current bar for new signal ─────────────────────────
+            signal_ts = price_df.index[-1] if hasattr(price_df.index, "__getitem__") else None
             for side, mask in [("long", long_confirmed), ("short", short_confirmed)]:
                 if not mask[idx]:
                     continue
-                if self._last_signal_bar[side] == idx:
+                if signal_ts is not None and self._last_signal_ts[side] == signal_ts:
                     continue  # already emitted this bar
-
-                self._last_signal_bar[side] = idx
+                self._last_signal_ts[side] = signal_ts
 
                 # Gate through governance
                 strategy_masks = {
@@ -343,6 +376,7 @@ class SymbolWorker(QObject):
                     confidence=decision.confidence,
                     quality_score=decision.signal_quality_score,
                     chop_filtered=in_chop,
+                    cvd_zscore=float(cvd_zscore[idx]) if np.isfinite(cvd_zscore[idx]) else 0.0,
                 )
 
                 logger.info(
@@ -397,6 +431,16 @@ class MultiSymbolEngine(QObject):
             "atr_extension_min": 1.10,
         }
 
+        self._watchdog = QTimer(self)
+        self._watchdog.setInterval(180_000)
+        self._watchdog.timeout.connect(self._check_worker_health)
+        self._watchdog.start()
+
+        self._session_reset_timer = QTimer(self)
+        self._session_reset_timer.setInterval(60_000)
+        self._session_reset_timer.timeout.connect(self._maybe_reset_session)
+        self._session_reset_timer.start()
+
     @property
     def watched_symbols(self) -> list[str]:
         return list(self._workers.keys())
@@ -415,14 +459,15 @@ class MultiSymbolEngine(QObject):
             symbol=symbol,
             **p,
         )
-        thread = QThread()
-        worker.moveToThread(thread)
+        thread = QThread(self)  # ← parent = engine, so it's owned        worker.moveToThread(thread)
 
         worker.signal_fired.connect(self.signal_fired)
         worker.status_update.connect(self.symbol_status)
         worker.error_occurred.connect(self.symbol_error)
 
-        thread.started.connect(worker.start)
+        symbol_index = len(self._workers)
+        startup_delay_ms = symbol_index * 350
+        thread.started.connect(lambda w=worker, delay=startup_delay_ms: QTimer.singleShot(delay, w.start))
         thread.start()
 
         self._workers[symbol] = worker
@@ -462,10 +507,38 @@ class MultiSymbolEngine(QObject):
             self.remove_symbol(symbol)
 
     def update_params(self, symbol: str, params: dict):
-        """Hot-update strategy parameters for a running worker."""
         worker = self._workers.get(symbol)
         if not worker:
             return
+
         for k, v in params.items():
             if hasattr(worker, k):
                 setattr(worker, k, v)
+
+        # Propagate relevant params to child components
+        if "atr_extension_min" in params:
+            worker.detector.ATR_EXTENSION_THRESHOLD = float(params["atr_extension_min"])
+        if "timeframe_minutes" in params:
+            worker.detector.timeframe_minutes = int(params["timeframe_minutes"])
+
+    def _check_worker_health(self):
+        stale_threshold = timedelta(minutes=4)
+        now = datetime.now()
+        stale_workers: list[tuple[str, int]] = []
+        for symbol, worker in self._workers.items():
+            age = now - worker._last_heartbeat
+            if age > stale_threshold:
+                logger.warning("[ENGINE] %s worker stale (%s) — restarting", symbol, age)
+                self.symbol_error.emit(symbol, "watchdog_restart")
+                stale_workers.append((symbol, worker.instrument_token))
+
+        for symbol, token in stale_workers:
+            self.remove_symbol(symbol)
+            QTimer.singleShot(500, lambda s=symbol, t=token: self.add_symbol(s, t))
+
+    def _maybe_reset_session(self):
+        now = datetime.now().time()
+        if now.hour == TRADING_START.hour and now.minute == TRADING_START.minute:
+            for worker in self._workers.values():
+                worker._last_signal_ts = {"long": None, "short": None}
+            logger.info("[ENGINE] Session reset — signal dedup cleared for all workers")
