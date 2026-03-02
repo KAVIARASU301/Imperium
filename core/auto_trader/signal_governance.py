@@ -25,7 +25,7 @@ class GovernanceDecision:
 class SignalGovernance:
     """Lightweight institutional-style guardrails for strategy signals."""
 
-    STRATEGIES = ("atr_reversal", "atr_divergence", "ema_cross", "range_breakout", "cvd_range_breakout", "open_drive")
+    STRATEGIES = ("atr_reversal",)
 
     def __init__(self):
         self.deploy_mode = "canary"  # shadow | canary | live
@@ -39,12 +39,7 @@ class SignalGovernance:
         self._bar_counter = 0
 
         self._base_strategy_weights = {
-            "atr_reversal": 0.24,
-            "atr_divergence": 0.20,
-            "ema_cross": 0.26,
-            "range_breakout": 0.20,
-            "cvd_range_breakout": 0.06,
-            "open_drive": 0.04,
+            "atr_reversal": 1.0,
         }
         self.strategy_weights = dict(self._base_strategy_weights)
         self.strategy_weight_window_days = 5
@@ -58,9 +53,9 @@ class SignalGovernance:
         self._last_edge_idx_by_strategy = {name: -1 for name in self.STRATEGIES}
         self._regime_snapshot = None  # MarketRegime from RegimeEngine, set each redraw
         self.regime_strategy_matrix = {
-            "trend": {"atr_reversal": True, "atr_divergence": True, "ema_cross": True, "range_breakout": True, "cvd_range_breakout": True, "open_drive": True},
-            "chop": {"atr_reversal": True, "atr_divergence": False, "ema_cross": False, "range_breakout": False, "cvd_range_breakout": True, "open_drive": True},
-            "high_vol": {"atr_reversal": True, "atr_divergence": True, "ema_cross": True, "range_breakout": False, "cvd_range_breakout": False, "open_drive": True},
+            "trend": {"atr_reversal": True},
+            "chop": {"atr_reversal": True},
+            "high_vol": {"atr_reversal": True},
         }
         self.quality_scorer = SignalQualityScorer(min_score=self.min_confidence_for_live)
 

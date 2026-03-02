@@ -71,11 +71,6 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
 
     SIGNAL_FILTER_ALL = "all"
     SIGNAL_FILTER_ATR_ONLY = "atr_only"
-    SIGNAL_FILTER_EMA_CROSS_ONLY = "ema_cross_only"
-    SIGNAL_FILTER_BREAKOUT_ONLY = "breakout_only"
-    SIGNAL_FILTER_CVD_BREAKOUT_ONLY = "cvd_breakout_only"
-    SIGNAL_FILTER_OTHERS = "others"
-    SIGNAL_FILTER_OPEN_DRIVE_ONLY = "open_drive_only"
 
     ATR_MARKER_SHOW_ALL = "show_all"
     ATR_MARKER_CONFLUENCE_ONLY = "confluence_only"
@@ -91,11 +86,6 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
     BREAKOUT_SWITCH_ADAPTIVE = "adaptive"
 
     MAX_GIVEBACK_STRATEGY_ATR_REVERSAL = "atr_reversal"
-    MAX_GIVEBACK_STRATEGY_EMA_CROSS = "ema_cross"
-    MAX_GIVEBACK_STRATEGY_ATR_DIVERGENCE = "atr_divergence"
-    MAX_GIVEBACK_STRATEGY_RANGE_BREAKOUT = "range_breakout"
-    MAX_GIVEBACK_STRATEGY_CVD_RANGE_BREAKOUT = "cvd_range_breakout"
-    MAX_GIVEBACK_STRATEGY_OPEN_DRIVE = "open_drive"
 
     ROUTE_BUY_EXIT_PANEL = "buy_exit_panel"
     ROUTE_DIRECT = "direct"
@@ -104,19 +94,9 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
 
     STRATEGY_PRIORITY_KEYS = (
         "atr_reversal",
-        "atr_divergence",
-        "ema_cross",
-        "cvd_range_breakout",
-        "range_breakout",
-        "open_drive",
     )
     STRATEGY_PRIORITY_LABELS = {
         "atr_reversal": "ATR Reversal",
-        "atr_divergence": "ATR Divergence",
-        "ema_cross": "EMA Cross",
-        "cvd_range_breakout": "CVD Range Breakout",
-        "range_breakout": "Range Breakout",
-        "open_drive": "Open Drive",
     }
     CPR_PRIORITY_LIST_LABELS = {
         "narrow": "Narrow CPR",
@@ -638,6 +618,20 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         self.dynamic_exit_open_drive_check.setChecked(False)
         self.dynamic_exit_open_drive_check.setToolTip("Enable regime-aware trend-unlock exits for Open Drive trades.")
         self.dynamic_exit_open_drive_check.toggled.connect(self._on_automation_settings_changed)
+
+        # ATR Reversal is the only supported auto-trader strategy.
+        for _deprecated_strategy_widget in (
+            self.max_giveback_ema_cross_check,
+            self.max_giveback_atr_divergence_check,
+            self.max_giveback_range_breakout_check,
+            self.dynamic_exit_ema_cross_check,
+            self.dynamic_exit_atr_divergence_check,
+            self.dynamic_exit_range_breakout_check,
+            self.dynamic_exit_cvd_range_breakout_check,
+            self.dynamic_exit_open_drive_check,
+        ):
+            _deprecated_strategy_widget.setChecked(False)
+            _deprecated_strategy_widget.setVisible(False)
 
         self.trend_exit_adx_min_input = QDoubleSpinBox()
         self.trend_exit_adx_min_input.setRange(15.0, 45.0)
@@ -2740,21 +2734,11 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         return [
             ("Select All", self.SIGNAL_FILTER_ALL),
             ("ATR Reversal", self.SIGNAL_FILTER_ATR_ONLY),
-            ("EMA Cross", self.SIGNAL_FILTER_EMA_CROSS_ONLY),
-            ("Range Breakout", self.SIGNAL_FILTER_BREAKOUT_ONLY),
-            ("CVD Range Breakout", self.SIGNAL_FILTER_CVD_BREAKOUT_ONLY),
-            ("ATR Divergence", self.SIGNAL_FILTER_OTHERS),
-            ("Open Drive", self.SIGNAL_FILTER_OPEN_DRIVE_ONLY),
         ]
 
     def _strategy_filter_values(self) -> list[str]:
         return [
             self.SIGNAL_FILTER_ATR_ONLY,
-            self.SIGNAL_FILTER_EMA_CROSS_ONLY,
-            self.SIGNAL_FILTER_BREAKOUT_ONLY,
-            self.SIGNAL_FILTER_CVD_BREAKOUT_ONLY,
-            self.SIGNAL_FILTER_OTHERS,
-            self.SIGNAL_FILTER_OPEN_DRIVE_ONLY,
         ]
 
     def _init_signal_filter_combo(self, combo: QComboBox):
@@ -2885,47 +2869,18 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
 
     @classmethod
     def _dynamic_exit_strategy_defaults(cls) -> tuple[str, ...]:
-        return (
-            cls.MAX_GIVEBACK_STRATEGY_EMA_CROSS,
-            cls.MAX_GIVEBACK_STRATEGY_RANGE_BREAKOUT,
-            cls.MAX_GIVEBACK_STRATEGY_CVD_RANGE_BREAKOUT,
-        )
+        return (cls.MAX_GIVEBACK_STRATEGY_ATR_REVERSAL,)
 
     def _selected_dynamic_exit_strategies(self) -> list[str]:
         selected: list[str] = []
         if self.dynamic_exit_atr_reversal_check.isChecked():
             selected.append(self.MAX_GIVEBACK_STRATEGY_ATR_REVERSAL)
-        if self.dynamic_exit_ema_cross_check.isChecked():
-            selected.append(self.MAX_GIVEBACK_STRATEGY_EMA_CROSS)
-        if self.dynamic_exit_atr_divergence_check.isChecked():
-            selected.append(self.MAX_GIVEBACK_STRATEGY_ATR_DIVERGENCE)
-        if self.dynamic_exit_range_breakout_check.isChecked():
-            selected.append(self.MAX_GIVEBACK_STRATEGY_RANGE_BREAKOUT)
-        if self.dynamic_exit_cvd_range_breakout_check.isChecked():
-            selected.append(self.MAX_GIVEBACK_STRATEGY_CVD_RANGE_BREAKOUT)
-        if self.dynamic_exit_open_drive_check.isChecked():
-            selected.append(self.MAX_GIVEBACK_STRATEGY_OPEN_DRIVE)
         return selected
 
     def _apply_dynamic_exit_strategy_selection(self, strategies: list[str]):
         selected = set(strategies or [])
         self.dynamic_exit_atr_reversal_check.setChecked(
             self.MAX_GIVEBACK_STRATEGY_ATR_REVERSAL in selected
-        )
-        self.dynamic_exit_ema_cross_check.setChecked(
-            self.MAX_GIVEBACK_STRATEGY_EMA_CROSS in selected
-        )
-        self.dynamic_exit_atr_divergence_check.setChecked(
-            self.MAX_GIVEBACK_STRATEGY_ATR_DIVERGENCE in selected
-        )
-        self.dynamic_exit_range_breakout_check.setChecked(
-            self.MAX_GIVEBACK_STRATEGY_RANGE_BREAKOUT in selected
-        )
-        self.dynamic_exit_cvd_range_breakout_check.setChecked(
-            self.MAX_GIVEBACK_STRATEGY_CVD_RANGE_BREAKOUT in selected
-        )
-        self.dynamic_exit_open_drive_check.setChecked(
-            self.MAX_GIVEBACK_STRATEGY_OPEN_DRIVE in selected
         )
 
     @classmethod
@@ -2936,29 +2891,12 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
         selected: list[str] = []
         if self.max_giveback_atr_reversal_check.isChecked():
             selected.append(self.MAX_GIVEBACK_STRATEGY_ATR_REVERSAL)
-        if self.max_giveback_ema_cross_check.isChecked():
-            selected.append(self.MAX_GIVEBACK_STRATEGY_EMA_CROSS)
-        if self.max_giveback_atr_divergence_check.isChecked():
-            selected.append(self.MAX_GIVEBACK_STRATEGY_ATR_DIVERGENCE)
-        if self.max_giveback_range_breakout_check.isChecked():
-            selected.append(self.MAX_GIVEBACK_STRATEGY_RANGE_BREAKOUT)
-            selected.append(self.MAX_GIVEBACK_STRATEGY_CVD_RANGE_BREAKOUT)
         return selected
 
     def _apply_max_giveback_strategy_selection(self, strategies: list[str]):
         selected = set(strategies or [])
         self.max_giveback_atr_reversal_check.setChecked(
             self.MAX_GIVEBACK_STRATEGY_ATR_REVERSAL in selected
-        )
-        self.max_giveback_ema_cross_check.setChecked(
-            self.MAX_GIVEBACK_STRATEGY_EMA_CROSS in selected
-        )
-        self.max_giveback_atr_divergence_check.setChecked(
-            self.MAX_GIVEBACK_STRATEGY_ATR_DIVERGENCE in selected
-        )
-        self.max_giveback_range_breakout_check.setChecked(
-            (self.MAX_GIVEBACK_STRATEGY_RANGE_BREAKOUT in selected)
-            or (self.MAX_GIVEBACK_STRATEGY_CVD_RANGE_BREAKOUT in selected)
         )
 
     def _enabled_ema_periods(self) -> set[int]:
@@ -3389,38 +3327,10 @@ class AutoTraderDialog(TrendChangeMarkersMixin, RegimeTabMixin, SetupPanelMixin,
 
     def _default_cpr_strategy_priorities(self) -> dict[str, dict[str, int]]:
         return {
-            "narrow": {
-                "open_drive": 1,
-                "cvd_range_breakout": 2,
-                "range_breakout": 3,
-                "ema_cross": 4,
-                "atr_divergence": 5,
-                "atr_reversal": 6,
-            },
-            "neutral": {
-                "open_drive": 1,
-                "cvd_range_breakout": 2,
-                "range_breakout": 3,
-                "ema_cross": 4,
-                "atr_divergence": 5,
-                "atr_reversal": 6,
-            },
-            "wide": {
-                "open_drive": 1,
-                "atr_reversal": 2,
-                "atr_divergence": 3,
-                "cvd_range_breakout": 4,
-                "range_breakout": 5,
-                "ema_cross": 6,
-            },
-            "fallback": {
-                "open_drive": 1,
-                "cvd_range_breakout": 2,
-                "range_breakout": 3,
-                "ema_cross": 4,
-                "atr_divergence": 5,
-                "atr_reversal": 6,
-            },
+            "narrow": {"atr_reversal": 1},
+            "neutral": {"atr_reversal": 1},
+            "wide": {"atr_reversal": 1},
+            "fallback": {"atr_reversal": 1},
         }
 
     def _active_cpr_priority_list_key(self) -> str:

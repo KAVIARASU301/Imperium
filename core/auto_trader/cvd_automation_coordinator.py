@@ -261,9 +261,9 @@ class CvdAutomationCoordinator:
         open_drive_tick_drawdown_limit_points = float(payload.get("open_drive_tick_drawdown_limit_points") or state.get("open_drive_tick_drawdown_limit_points") or 100.0)
         atr_trailing_step_points = float(payload.get("atr_trailing_step_points") or state.get("atr_trailing_step_points") or 10.0)
         current_atr = float(payload.get("atr") or state.get("atr") or 0.0)
-        max_profit_giveback_strategies = payload.get("max_profit_giveback_strategies") or state.get("max_profit_giveback_strategies") or ["atr_reversal", "ema_cross", "atr_divergence", "cvd_range_breakout", "range_breakout", "open_drive"]
+        max_profit_giveback_strategies = payload.get("max_profit_giveback_strategies") or state.get("max_profit_giveback_strategies") or ["atr_reversal"]
         if not isinstance(max_profit_giveback_strategies, (list, tuple, set)):
-            max_profit_giveback_strategies = ["atr_reversal", "ema_cross", "atr_divergence", "cvd_range_breakout", "range_breakout", "open_drive"]
+            max_profit_giveback_strategies = ["atr_reversal"]
         dynamic_exit_trend_following_strategies = payload.get("dynamic_exit_trend_following_strategies") or state.get("dynamic_exit_trend_following_strategies") or ["ema_cross", "range_breakout", "cvd_range_breakout"]
         if not isinstance(dynamic_exit_trend_following_strategies, (list, tuple, set)):
             dynamic_exit_trend_following_strategies = ["ema_cross", "range_breakout", "cvd_range_breakout"]
@@ -593,7 +593,7 @@ class CvdAutomationCoordinator:
         stoploss_points = _to_finite_float(active_trade.get("stoploss_points"), 0.0)
         max_profit_giveback_points = _to_finite_float(active_trade.get("max_profit_giveback_points"), 0.0)
         open_drive_max_profit_giveback_points = _to_finite_float(active_trade.get("open_drive_max_profit_giveback_points"), 0.0)
-        max_profit_giveback_strategies = set(active_trade.get("max_profit_giveback_strategies") or ["atr_reversal", "ema_cross", "atr_divergence", "cvd_range_breakout", "range_breakout", "open_drive"])
+        max_profit_giveback_strategies = set(active_trade.get("max_profit_giveback_strategies") or ["atr_reversal"])
         dynamic_exit_trend_following_strategies = set(active_trade.get("dynamic_exit_trend_following_strategies") or ["ema_cross", "range_breakout", "cvd_range_breakout"])
         entry_underlying = _to_finite_float(active_trade.get("entry_underlying"), 0.0)
         max_favorable_points = _to_finite_float(active_trade.get("max_favorable_points"), 0.0)

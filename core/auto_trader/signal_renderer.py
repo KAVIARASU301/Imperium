@@ -373,93 +373,22 @@ class SignalRendererMixin:
         atr_values  = calculate_atr(price_high, price_low, price_data, period=14)
         adx_pre     = compute_adx(price_high, price_low, price_data, period=14)
 
-        short_ema_cross, long_ema_cross = self.strategy_detector.detect_ema_cvd_cross_strategy(
-            timestamps=self.all_timestamps,
-            price_data=price_data,
-            price_ema10=price_fast_filter,
-            price_ema51=price_slow_filter,
-            cvd_data=cvd_data,
-            cvd_ema10=cvd_fast_filter,
-            cvd_ema51=cvd_slow_filter,
-            cvd_ema_gap_threshold=self.cvd_ema_gap_input.value(),
-            use_parent_mask=self.ema_cross_use_parent_mask_check.isChecked(),
-            atr_values=atr_values,
-            volume=volume_data,
-            adx_values=adx_pre,
-        )
-
-        short_divergence, long_divergence = self.strategy_detector.detect_atr_cvd_divergence_strategy(
-            price_atr_above=price_above_mask,
-            price_atr_below=price_below_mask,
-            cvd_above_ema10=cvd_above_fast,
-            cvd_below_ema10=cvd_below_fast,
-            cvd_above_ema51=cvd_above_ema51,
-            cvd_below_ema51=cvd_below_ema51,
-            cvd_data=cvd_data,
-            ema_cross_short=short_ema_cross,
-            ema_cross_long=long_ema_cross
-        )
-
-        long_breakout, short_breakout, range_highs, range_lows = \
-            self.strategy_detector.detect_range_breakout_strategy(
-                price_high=price_high,
-                price_low=price_low,
-                price_close=price_data,
-                price_ema10=price_fast_filter,
-                cvd_data=cvd_data,
-                cvd_ema10=cvd_fast_filter,
-                volume=volume_data,
-                range_lookback_minutes=self.range_lookback_input.value(),
-                breakout_threshold_multiplier=1.5,
-                min_consolidation_minutes=int(self.breakout_min_consol_input.value()),
-                min_consolidation_adx=float(self.breakout_min_consol_adx_input.value()),
-            )
-
-        cvd_lookback_min = int(self.cvd_range_lookback_min_input.value())
-        cvd_lookback_max = int(self.cvd_range_lookback_max_input.value())
-        if cvd_lookback_min > cvd_lookback_max:
-            cvd_lookback_min, cvd_lookback_max = cvd_lookback_max, cvd_lookback_min
-
-        short_cvd_range_breakout, long_cvd_range_breakout = self.strategy_detector.detect_cvd_range_breakout_strategy(
-            price_high=price_high,
-            price_low=price_low,
-            price_close=price_data,
-            price_ema10=price_fast_filter,
-            cvd_data=cvd_data,
-            cvd_ema10=cvd_fast_filter,
-            volume=volume_data,
-            cvd_range_lookback_bars=cvd_lookback_max,
-            cvd_range_lookback_min_bars=cvd_lookback_min,
-            cvd_range_lookback_max_bars=cvd_lookback_max,
-            cvd_breakout_buffer=float(self.cvd_breakout_buffer_input.value()),
-            cvd_min_consol_bars=int(self.cvd_min_consol_bars_input.value()),
-            cvd_max_range_ratio=float(self.cvd_max_range_ratio_input.value()),
-            min_consolidation_adx=float(self.cvd_breakout_min_adx_input.value()),
-            min_conviction_score=int(self.cvd_conviction_score_input.value()),
-            vol_expansion_mult=float(self.cvd_vol_expansion_mult_input.value()),
-            atr_expansion_pct=float(self.cvd_atr_expansion_pct_input.value()),
-            htf_bars=int(self.cvd_htf_bars_input.value()),
-            regime_adx_block=float(self.cvd_regime_adx_block_input.value()),
-        )
-
+        short_ema_cross = np.zeros_like(price_above_mask, dtype=bool)
+        long_ema_cross = np.zeros_like(price_above_mask, dtype=bool)
+        short_divergence = np.zeros_like(price_above_mask, dtype=bool)
+        long_divergence = np.zeros_like(price_above_mask, dtype=bool)
+        short_breakout = np.zeros_like(price_above_mask, dtype=bool)
+        long_breakout = np.zeros_like(price_above_mask, dtype=bool)
+        short_cvd_range_breakout = np.zeros_like(price_above_mask, dtype=bool)
+        long_cvd_range_breakout = np.zeros_like(price_above_mask, dtype=bool)
         session_keys = [ts.date() for ts in self.all_timestamps]
         price_vwap = calculate_vwap(price_data, volume_data, session_keys)
 
         # ── FIX: Always detect open_drive using the user's configured time ──
         # Previously open_drive was computed elsewhere and not passed here,
         # so confluence lines never rendered for open_drive signals.
-        short_open_drive, long_open_drive = self.strategy_detector.detect_open_drive_strategy(
-            timestamps=self.all_timestamps,
-            price_data=price_data,
-            price_ema10=price_fast_filter,
-            price_ema51=price_slow_filter,
-            price_vwap=price_vwap,
-            cvd_data=cvd_data,
-            cvd_ema10=cvd_fast_filter,
-            trigger_hour=int(self.open_drive_time_hour_input.value()),
-            trigger_minute=int(self.open_drive_time_minute_input.value()),
-            enabled=bool(self.open_drive_enabled_check.isChecked()),
-        )
+        short_open_drive = np.zeros_like(price_above_mask, dtype=bool)
+        long_open_drive = np.zeros_like(price_above_mask, dtype=bool)
 
         breakout_long_context, breakout_short_context = self.strategy_detector.build_breakout_context_masks(
             long_breakout=long_breakout,
@@ -535,52 +464,16 @@ class SignalRendererMixin:
 
         short_atr_reversal = _apply_chop_filter(short_atr_reversal, "atr_reversal")
         long_atr_reversal = _apply_chop_filter(long_atr_reversal, "atr_reversal")
-        short_ema_cross = _apply_chop_filter(short_ema_cross, "ema_cross")
-        long_ema_cross = _apply_chop_filter(long_ema_cross, "ema_cross")
-        short_divergence = _apply_chop_filter(short_divergence, "atr_divergence")
-        long_divergence = _apply_chop_filter(long_divergence, "atr_divergence")
-        short_cvd_range_breakout = _apply_chop_filter(short_cvd_range_breakout, "cvd_range_breakout")
-        long_cvd_range_breakout = _apply_chop_filter(long_cvd_range_breakout, "cvd_range_breakout")
 
         selected_filters = set(self._selected_signal_filters())
-        all_filters = {
-            self.SIGNAL_FILTER_ATR_ONLY,
-            self.SIGNAL_FILTER_EMA_CROSS_ONLY,
-            self.SIGNAL_FILTER_BREAKOUT_ONLY,
-            self.SIGNAL_FILTER_CVD_BREAKOUT_ONLY,
-            self.SIGNAL_FILTER_OTHERS,
-            self.SIGNAL_FILTER_OPEN_DRIVE_ONLY,
-        }
+        all_filters = {self.SIGNAL_FILTER_ATR_ONLY}
 
-        if selected_filters >= all_filters:
-            short_mask = short_atr_reversal | short_ema_cross | short_divergence | short_breakout | short_cvd_range_breakout | short_open_drive
-            long_mask = long_atr_reversal | long_ema_cross | long_divergence | long_breakout | long_cvd_range_breakout | long_open_drive
+        if self.SIGNAL_FILTER_ATR_ONLY in selected_filters or selected_filters >= all_filters:
+            short_mask = short_atr_reversal
+            long_mask = long_atr_reversal
         else:
             short_mask = np.zeros_like(short_atr_reversal, dtype=bool)
             long_mask = np.zeros_like(long_atr_reversal, dtype=bool)
-
-            if self.SIGNAL_FILTER_ATR_ONLY in selected_filters:
-                short_mask |= short_atr_reversal
-                long_mask |= long_atr_reversal
-            if self.SIGNAL_FILTER_EMA_CROSS_ONLY in selected_filters:
-                short_mask |= short_ema_cross
-                long_mask |= long_ema_cross
-            if self.SIGNAL_FILTER_BREAKOUT_ONLY in selected_filters:
-                short_mask |= short_breakout
-                long_mask |= long_breakout
-            if self.SIGNAL_FILTER_CVD_BREAKOUT_ONLY in selected_filters:
-                short_mask |= short_cvd_range_breakout
-                long_mask |= long_cvd_range_breakout
-            if self.SIGNAL_FILTER_OTHERS in selected_filters:
-                short_mask |= short_divergence
-                long_mask |= long_divergence
-            if self.SIGNAL_FILTER_OPEN_DRIVE_ONLY in selected_filters:
-                short_mask |= short_open_drive
-                long_mask |= long_open_drive
-
-        if bool(self.open_drive_enabled_check.isChecked()):
-            short_mask = short_mask | short_open_drive
-            long_mask = long_mask | long_open_drive
 
         length = min(len(x_arr), len(short_mask), len(long_mask))
         x_arr = x_arr[:length]
@@ -590,19 +483,9 @@ class SignalRendererMixin:
         strategy_masks = {
             "short": {
                 "atr_reversal": short_atr_reversal[:length],
-                "atr_divergence": short_divergence[:length],
-                "ema_cross": short_ema_cross[:length],
-                "range_breakout": short_breakout[:length],
-                "cvd_range_breakout": short_cvd_range_breakout[:length],
-                "open_drive": short_open_drive[:length],
             },
             "long": {
                 "atr_reversal": long_atr_reversal[:length],
-                "atr_divergence": long_divergence[:length],
-                "ema_cross": long_ema_cross[:length],
-                "range_breakout": long_breakout[:length],
-                "cvd_range_breakout": long_cvd_range_breakout[:length],
-                "open_drive": long_open_drive[:length],
             },
         }
 
@@ -611,31 +494,6 @@ class SignalRendererMixin:
             price_data=price_data[:length],
         )
 
-        # ── Sync strategy_masks with the active signal filter ─────────────────
-        # Apply the user's UI signal filter first so that both the confluence lines
-        # and the historical simulator properly ignore unselected strategies.
-        if selected_filters < all_filters:
-            _filter_to_strategy = {
-                self.SIGNAL_FILTER_ATR_ONLY: ["atr_reversal"],
-                self.SIGNAL_FILTER_EMA_CROSS_ONLY: ["ema_cross"],
-                self.SIGNAL_FILTER_BREAKOUT_ONLY: ["range_breakout"],
-                self.SIGNAL_FILTER_CVD_BREAKOUT_ONLY: ["cvd_range_breakout"],
-                self.SIGNAL_FILTER_OTHERS: ["atr_divergence"],
-                self.SIGNAL_FILTER_OPEN_DRIVE_ONLY: ["open_drive"],
-            }
-            _allowed_strategies: set[str] = set()
-            for _filt_const, _strat_list in _filter_to_strategy.items():
-                if _filt_const in selected_filters:
-                    _allowed_strategies.update(_strat_list)
-            # open_drive always passes through if its global checkbox is enabled
-            if bool(self.open_drive_enabled_check.isChecked()):
-                _allowed_strategies.add("open_drive")
-
-            _zero = np.zeros(length, dtype=bool)
-            for _side in ("short", "long"):
-                for _strat in list(strategy_masks[_side].keys()):
-                    if _strat not in _allowed_strategies:
-                        strategy_masks[_side][_strat] = _zero.copy()
 
         # ── Snapshot RAW masks (now reflecting UI signal filters) ─────────────
         # The simulator uses these masks to replay historical regime states, but
