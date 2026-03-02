@@ -366,6 +366,13 @@ class SignalRendererMixin:
         price_data = np.array(self.all_price_data, dtype=float)
         price_fast_filter, price_slow_filter = calculate_regime_trend_filter(price_data)
 
+        # Compute ATR/volume/ADX here so they can feed the EMA cross quality gates
+        price_high  = np.array(self.all_price_high_data, dtype=float)
+        price_low   = np.array(self.all_price_low_data,  dtype=float)
+        volume_data = np.array(self.all_volume_data,     dtype=float)
+        atr_values  = calculate_atr(price_high, price_low, price_data, period=14)
+        adx_pre     = compute_adx(price_high, price_low, price_data, period=14)
+
         short_ema_cross, long_ema_cross = self.strategy_detector.detect_ema_cvd_cross_strategy(
             timestamps=self.all_timestamps,
             price_data=price_data,
@@ -376,6 +383,9 @@ class SignalRendererMixin:
             cvd_ema51=cvd_slow_filter,
             cvd_ema_gap_threshold=self.cvd_ema_gap_input.value(),
             use_parent_mask=self.ema_cross_use_parent_mask_check.isChecked(),
+            atr_values=atr_values,
+            volume=volume_data,
+            adx_values=adx_pre,
         )
 
         short_divergence, long_divergence = self.strategy_detector.detect_atr_cvd_divergence_strategy(
@@ -389,11 +399,6 @@ class SignalRendererMixin:
             ema_cross_short=short_ema_cross,
             ema_cross_long=long_ema_cross
         )
-
-        price_high = np.array(self.all_price_high_data, dtype=float)
-        price_low = np.array(self.all_price_low_data, dtype=float)
-        volume_data = np.array(self.all_volume_data, dtype=float)
-        atr_values = calculate_atr(price_high, price_low, price_data, period=14)
 
         long_breakout, short_breakout, range_highs, range_lows = \
             self.strategy_detector.detect_range_breakout_strategy(

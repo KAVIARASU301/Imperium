@@ -295,13 +295,11 @@ class StrategySignalDetector:
             cvd_low_of_window = np.min(cvd_window)
 
             price_at_high = price_close[i] >= price_high_of_window * 0.9995
-            cvd_high_epsilon = abs(cvd_high_of_window) * 0.0005
-            cvd_not_at_high = cvd_data[i] < (cvd_high_of_window - cvd_high_epsilon)
+            cvd_not_at_high = cvd_data[i] < cvd_high_of_window * 0.9995
             bearish_div[i] = price_at_high and cvd_not_at_high
 
             price_at_low = price_close[i] <= price_low_of_window * 1.0005
-            cvd_low_epsilon = abs(cvd_low_of_window) * 0.0005
-            cvd_not_at_low = cvd_data[i] > (cvd_low_of_window + cvd_low_epsilon)
+            cvd_not_at_low = cvd_data[i] > cvd_low_of_window * 1.0005
             bullish_div[i] = price_at_low and cvd_not_at_low
 
         return bearish_div, bullish_div
@@ -444,14 +442,59 @@ class StrategySignalDetector:
             cvd_ema51: np.ndarray,
             cvd_ema_gap_threshold: float,
             use_parent_mask: bool = True,
+            # ── NEW optional inputs (pass from signal_renderer for quality gates) ──
+            atr_values: np.ndarray | None = None,
+            volume: np.ndarray | None = None,
+            adx_values: np.ndarray | None = None,
+            # ── Tuning knobs ──
+            pullback_lookback: int = 10,       # bars to look back for the pullback
+            whipsaw_lookback: int = 8,         # bars to count CVD/EMA51 crosses
+            max_cvd_crosses: int = 2,          # max crosses allowed (more = choppy)
+            adx_min: float = 20.0,             # minimum ADX to confirm real trend
+            ema51_trend_window: int = 20,      # bars to measure historical EMA51 slope
+            ema51_trend_min_ratio: float = 0.5,  # fraction of window bars EMA51 must be rising
     ) -> tuple[np.ndarray, np.ndarray]:
         """
-        EMA & CVD CROSS STRATEGY:
-        - Price already above/below both EMA10 and EMA51
-        - CVD already above/below its EMA10
-        - CVD crosses above/below its EMA51 → SIGNAL
-        - Parent timeframe filter: 5m EMA10 must be above/below EMA51 and
-          both slopes must confirm trend direction.
+        ═══════════════════════════════════════════════════════════════
+        EMA CROSS STRATEGY — INSTITUTIONAL REBUILD: TREND PULLBACK ENTRY
+        ═══════════════════════════════════════════════════════════════
+
+        WHY THE OLD LOGIC WAS LATE:
+          Old trigger: CVD was BELOW EMA51 (downtrend) → crossed ABOVE EMA51 → signal
+          Reality: by the time CVD crosses EMA51 from below, you're 60-80% into
+          the recovery move. The hard work of getting from "below" to "crossing" already
+          happened without you.
+
+        THE INSTITUTIONAL PATTERN — TREND PULLBACK ENTRY:
+          Institutions don't chase. They wait for the market to RETURN TO VALUE
+          within an established trend, then re-enter at the best price.
+
+          Step 1 — TREND ESTABLISHED:
+            EMA51 was rising (net) over the last N bars — slow money is bullish.
+            This means the trend has legs, not just a spike.
+
+          Step 2 — PULLBACK (price returned to value):
+            Price actually dipped BELOW EMA10 at least once in the last N bars.
+            This is key: a real pullback, not just a slow-trending bar.
+            This is where institutions add to positions — at a discount.
+
+          Step 3 — RESUMPTION (the entry bar):
+            Price is NOW back above EMA10 (structure restored after pullback).
+            Price is above EMA51 (still above long-term value).
+            CVD has come near EMA51 recently (order flow also pulled back).
+            CVD is NOW above EMA51 and actively rising (buyers returned).
+
+          Step 4 — QUALITY GATES:
+            ADX >= 20 → real trend, not flat market.
+            CVD ≤ max_crosses of EMA51 in last N bars → no whipsaw zone.
+
+        PARENT MASK FIX:
+          Old: required EMA10 > EMA51 AND both slopes up simultaneously.
+          Problem: At the START of a trend, EMA51 is still flat/falling — both
+          slopes can't be up at the same time. Best entries were being killed.
+          New: Just check EMA ordering (EMA10 > EMA51) on the 5m chart.
+          That's the actual structural condition. Slope is already captured by
+          the EMA51 historical trend check in the main logic.
         """
 
         length = min(
@@ -461,78 +504,178 @@ class StrategySignalDetector:
         if length <= 0:
             return np.array([], dtype=bool), np.array([], dtype=bool)
 
+        price  = np.asarray(price_data[:length],  dtype=float)
+        ema10  = np.asarray(price_ema10[:length],  dtype=float)
+        ema51  = np.asarray(price_ema51[:length],  dtype=float)
+        cvd    = np.asarray(cvd_data[:length],     dtype=float)
+        cema10 = np.asarray(cvd_ema10[:length],    dtype=float)
+        cema51 = np.asarray(cvd_ema51[:length],    dtype=float)
+
+        # ── PARENT MASK (5m structure, lighter version) ─────────────────
         if use_parent_mask:
             parent_long_mask, parent_short_mask = self._build_parent_5m_trend_masks(
                 timestamps=timestamps[:length],
-                price_data=price_data[:length],
+                price_data=price,
             )
         else:
-            parent_long_mask = np.ones(length, dtype=bool)
+            parent_long_mask  = np.ones(length, dtype=bool)
             parent_short_mask = np.ones(length, dtype=bool)
 
-        # Price position checks
-        price_above_both_emas = (price_data > price_ema10) & (price_data > price_ema51)
-        price_below_both_emas = (price_data < price_ema10) & (price_data < price_ema51)
+        # ────────────────────────────────────────────────────────────────
+        # GATE 1: EMA51 HISTORICAL TREND
+        #
+        # Was EMA51 net rising/falling over the last ema51_trend_window bars?
+        # EMA51 is the slow money anchor — if it was trending, the trend is real.
+        #
+        # Why EMA51 slope instead of EMA10?
+        # During a normal pullback, EMA10 FALLS (it's fast, it follows price down).
+        # Checking EMA10 slope during a pullback always returns False.
+        # EMA51 is much more stable — it keeps rising even during 10-15 bar pullbacks.
+        # This is exactly what we want: trend context that survives the pullback.
+        # ────────────────────────────────────────────────────────────────
+        ema51_slope     = np.diff(ema51, prepend=ema51[0])
+        ema51_bar_up    = (ema51_slope > 0).astype(np.int32)
+        cs51            = np.cumsum(ema51_bar_up)
+        sh51            = np.empty_like(cs51)
+        sh51[:ema51_trend_window] = 0
+        sh51[ema51_trend_window:] = cs51[:-ema51_trend_window]
+        win             = np.minimum(np.arange(1, length + 1), ema51_trend_window)
+        ema51_trending_up   = ((cs51 - sh51) / np.maximum(win, 1)) >= ema51_trend_min_ratio
+        ema51_trending_down = ((win - (cs51 - sh51)) / np.maximum(win, 1)) >= ema51_trend_min_ratio
 
-        # CVD position checks
-        cvd_above_ema10 = cvd_data > cvd_ema10
-        cvd_below_ema10 = cvd_data < cvd_ema10
+        # ────────────────────────────────────────────────────────────────
+        # GATE 2: REAL PRICE PULLBACK HAPPENED
+        #
+        # Price must have actually DIPPED below EMA10 at least once in the
+        # pullback_lookback window. This filters out pure trending bars where
+        # price never pulled back at all — those are trend-chase entries, not
+        # pullback entries, and they have poor risk/reward.
+        #
+        # For shorts: price must have spiked ABOVE EMA10 at least once.
+        # ────────────────────────────────────────────────────────────────
+        price_below_ema10_bar = (price < ema10).astype(np.int32)
+        price_above_ema10_bar = (price > ema10).astype(np.int32)
+        cs_pb_long  = np.cumsum(price_below_ema10_bar)
+        cs_pb_short = np.cumsum(price_above_ema10_bar)
+        sh_pb = np.empty(length, dtype=np.int32)
+        sh_pb[:pullback_lookback] = 0
+        sh_pb[pullback_lookback:] = cs_pb_long[:-pullback_lookback]
+        price_had_pullback_long  = (cs_pb_long  - sh_pb) >= 1
 
-        # Detect CVD crosses of EMA10/EMA51
-        cvd_prev = np.concatenate(([cvd_data[0]], cvd_data[:-1]))
-        cvd_ema10_prev = np.concatenate(([cvd_ema10[0]], cvd_ema10[:-1]))
-        cvd_ema51_prev = np.concatenate(([cvd_ema51[0]], cvd_ema51[:-1]))
+        sh_pb2 = np.empty(length, dtype=np.int32)
+        sh_pb2[:pullback_lookback] = 0
+        sh_pb2[pullback_lookback:] = cs_pb_short[:-pullback_lookback]
+        price_had_pullback_short = (cs_pb_short - sh_pb2) >= 1
 
-        cvd_cross_above_ema10_raw = (cvd_prev <= cvd_ema10_prev) & (cvd_data > cvd_ema10)
-        cvd_cross_below_ema10_raw = (cvd_prev >= cvd_ema10_prev) & (cvd_data < cvd_ema10)
-        cvd_cross_above_ema51_raw = (cvd_prev <= cvd_ema51_prev) & (cvd_data > cvd_ema51)
-        cvd_cross_below_ema51_raw = (cvd_prev >= cvd_ema51_prev) & (cvd_data < cvd_ema51)
+        # ────────────────────────────────────────────────────────────────
+        # GATE 3: RESUMPTION — PRICE STRUCTURE RESTORED
+        #
+        # After the pullback, price must be:
+        #   LONG:  back ABOVE EMA10 (structure restored) AND above EMA51
+        #   SHORT: back BELOW EMA10 (structure restored) AND below EMA51
+        #
+        # This is the exact bar institutions re-enter — EMA10 was support
+        # during the pullback, price dipped below it briefly, and now it's
+        # back above. That's the institutional re-entry signal.
+        # ────────────────────────────────────────────────────────────────
+        price_above_ema10  = price > ema10
+        price_below_ema10  = price < ema10
+        price_above_ema51  = price > ema51
+        price_below_ema51  = price < ema51
 
-        # Enforce ordered cross sequence for EMA cross strategy only:
-        # long  -> CVD must cross EMA10 first, then EMA51 (not on same bar)
-        # short -> CVD must cross EMA10 first, then EMA51 (not on same bar)
-        cvd_was_above_ema10 = cvd_prev > cvd_ema10_prev
-        cvd_was_below_ema10 = cvd_prev < cvd_ema10_prev
+        # ────────────────────────────────────────────────────────────────
+        # GATE 4: CVD TESTED VALUE (CVD pulled back to EMA51)
+        #
+        # During the price pullback, CVD should also have dipped toward EMA51.
+        # This confirms order flow also pulled back — institutions were letting
+        # sellers push CVD down, absorbing at value.
+        #
+        # Tolerance: 5% of EMA51 magnitude + 10 pts flat floor.
+        # Works for positive and negative CVD (absolute tolerance).
+        # ────────────────────────────────────────────────────────────────
+        cvd_eps          = np.abs(cema51) * 0.05 + 10.0
+        cvd_roll_min_ser = pd.Series(cvd).rolling(pullback_lookback, min_periods=1).min().to_numpy()
+        cvd_roll_max_ser = pd.Series(cvd).rolling(pullback_lookback, min_periods=1).max().to_numpy()
+        cvd_tested_ema51_long  = cvd_roll_min_ser <= (cema51 + cvd_eps)   # CVD dipped to EMA51
+        cvd_tested_ema51_short = cvd_roll_max_ser >= (cema51 - cvd_eps)   # CVD spiked to EMA51
 
-        cvd_cross_above_ema51_ordered = (
-            cvd_cross_above_ema51_raw &
-            cvd_was_above_ema10 &
-            ~cvd_cross_above_ema10_raw
-        )
-        cvd_cross_below_ema51_ordered = (
-            cvd_cross_below_ema51_raw &
-            cvd_was_below_ema10 &
-            ~cvd_cross_below_ema10_raw
-        )
+        # ────────────────────────────────────────────────────────────────
+        # GATE 5: CVD RESUMPTION — ORDER FLOW RESTORED
+        #
+        # CVD must NOW be on the correct side of EMA51 and rising/falling.
+        # This confirms buyers/sellers came back after the pullback.
+        #
+        # CVD rising = current bar CVD > previous bar CVD.
+        # Simple, clean, no lookback needed — just "is CVD moving my way now?"
+        # ────────────────────────────────────────────────────────────────
+        cvd_prev    = np.concatenate(([cvd[0]], cvd[:-1]))
+        cvd_rising  = cvd > cvd_prev
+        cvd_falling = cvd < cvd_prev
+        cvd_above_ema51 = cvd > cema51
+        cvd_below_ema51 = cvd < cema51
 
-        # Anti-hug filter - CVD must be meaningfully away from EMA51
-        gap = np.abs(cvd_data - cvd_ema51)
-        min_gap = cvd_ema_gap_threshold * 0.5
-        cvd_cross_above_ema51 = cvd_cross_above_ema51_ordered & (gap > min_gap)
-        cvd_cross_below_ema51 = cvd_cross_below_ema51_ordered & (gap > min_gap)
+        # ────────────────────────────────────────────────────────────────
+        # GATE 6: ANTI-WHIPSAW
+        #
+        # If CVD has crossed EMA51 more than max_crosses times in the last
+        # whipsaw_lookback bars, the market is choppy — skip it.
+        #
+        # Whipsaw means: CVD can't commit to a side. Trading in that zone
+        # produces losing entries regardless of other conditions.
+        # ────────────────────────────────────────────────────────────────
+        cema51_prev = np.concatenate(([cema51[0]], cema51[:-1]))
+        cross_up    = (cvd_prev <= cema51_prev) & (cvd > cema51)
+        cross_down  = (cvd_prev >= cema51_prev) & (cvd < cema51)
+        any_cross   = (cross_up | cross_down).astype(np.int32)
+        cs_x        = np.cumsum(any_cross)
+        sh_x        = np.empty_like(cs_x)
+        sh_x[:whipsaw_lookback] = 0
+        sh_x[whipsaw_lookback:] = cs_x[:-whipsaw_lookback]
+        no_whipsaw  = (cs_x - sh_x) <= max_cvd_crosses
 
-        # Slope confirmation - both price and CVD trending in same direction
-        price_up_slope, price_down_slope = self._calculate_slope_masks(price_data)
-        cvd_up_slope, cvd_down_slope = self._calculate_slope_masks(cvd_data)
+        # ────────────────────────────────────────────────────────────────
+        # GATE 7: ADX — REAL TREND, NOT FLAT MARKET (if provided)
+        #
+        # ADX < 20 = flat/choppy. Pullback entries in flat markets are noise.
+        # ADX >= 20 = real directional trend. This is where pullbacks have edge.
+        # ────────────────────────────────────────────────────────────────
+        if adx_values is not None and len(adx_values) >= length:
+            adx_arr = np.asarray(adx_values[:length], dtype=float)
+            adx_ok  = np.nan_to_num(adx_arr, nan=0.0) >= adx_min
+        else:
+            adx_ok  = np.ones(length, dtype=bool)  # skip gate if not provided
 
-        # LONG signals: Everything bullish
+        # ────────────────────────────────────────────────────────────────
+        # COMBINE — LONG SIGNAL (trend pullback resumption, bullish)
+        # ────────────────────────────────────────────────────────────────
         long_ema_cross = (
-                price_above_both_emas &
-                cvd_above_ema10 &
-                cvd_cross_above_ema51 &
-                price_up_slope &
-                cvd_up_slope &
-                parent_long_mask
+            ema51_trending_up       &   # slow trend was bullish historically
+            price_had_pullback_long &   # price actually dipped (real pullback, not chase)
+            price_above_ema10       &   # structure restored: back above EMA10
+            price_above_ema51       &   # above long-term value (EMA51)
+            cvd_tested_ema51_long   &   # CVD also pulled back to value
+            cvd_above_ema51         &   # CVD order flow restored above EMA51
+            cvd_rising              &   # CVD actively rising this bar
+            no_whipsaw              &   # no choppy CVD behavior
+            adx_ok                  &   # real trend
+            parent_long_mask            # 5m structure agrees
         )
 
-        # SHORT signals: Everything bearish
+        # ────────────────────────────────────────────────────────────────
+        # COMBINE — SHORT SIGNAL (trend pullback resumption, bearish)
+        # Mirror of long: trend was down, price bounced to EMA10 then resumed
+        # ────────────────────────────────────────────────────────────────
         short_ema_cross = (
-                price_below_both_emas &
-                cvd_below_ema10 &
-                cvd_cross_below_ema51 &
-                price_down_slope &
-                cvd_down_slope &
-                parent_short_mask
+            ema51_trending_down      &  # slow trend was bearish historically
+            price_had_pullback_short &  # price actually spiked up (real pullback)
+            price_below_ema10        &  # structure restored: back below EMA10
+            price_below_ema51        &  # below long-term value (EMA51)
+            cvd_tested_ema51_short   &  # CVD also spiked toward EMA51
+            cvd_below_ema51          &  # CVD order flow restored below EMA51
+            cvd_falling              &  # CVD actively falling this bar
+            no_whipsaw               &  # no choppy CVD behavior
+            adx_ok                   &  # real trend
+            parent_short_mask           # 5m structure agrees
         )
 
         return short_ema_cross, long_ema_cross
@@ -542,7 +685,19 @@ class StrategySignalDetector:
             timestamps: list,
             price_data: np.ndarray,
     ) -> tuple[np.ndarray, np.ndarray]:
-        """Build 5m parent-trend masks and map them back to base bars."""
+        """
+        Build 5m parent-trend masks and map them back to base bars.
+
+        FIXED: Old version required (EMA10 > EMA51) AND (ema10_up) AND (ema51_up).
+        Problem: At the START of a new trend, EMA51 is still flat or slightly declining.
+        This killed the best pullback entries — early trend re-entries after the first
+        pullback — because EMA51 hadn't had time to start rising yet.
+
+        New version: only checks EMA ordering (EMA10 > EMA51 for bullish).
+        That's the structural condition. It's met as soon as the trend is established,
+        regardless of whether EMA51 has started sloping in the new direction.
+        The historical EMA51 slope check is now done inside the main strategy method.
+        """
         length = min(len(timestamps), len(price_data))
         if length == 0:
             return np.array([], dtype=bool), np.array([], dtype=bool)
@@ -559,7 +714,7 @@ class StrategySignalDetector:
             neutral = np.ones(length, dtype=bool)
             return neutral.copy(), neutral
 
-        base_frame = base_frame.set_index("timestamp").sort_index()
+        base_frame   = base_frame.set_index("timestamp").sort_index()
         parent_close = base_frame["price"].resample("5min").last().dropna()
         if parent_close.empty:
             neutral = np.ones(length, dtype=bool)
@@ -568,28 +723,26 @@ class StrategySignalDetector:
         parent_ema10 = parent_close.ewm(span=10, adjust=False).mean()
         parent_ema51 = parent_close.ewm(span=51, adjust=False).mean()
 
-        ema10_up = parent_ema10 > parent_ema10.shift(1)
-        ema51_up = parent_ema51 > parent_ema51.shift(1)
-        ema10_down = parent_ema10 < parent_ema10.shift(1)
-        ema51_down = parent_ema51 < parent_ema51.shift(1)
-
-        parent_long = (parent_ema10 > parent_ema51) & ema10_up & ema51_up
-        parent_short = (parent_ema10 < parent_ema51) & ema10_down & ema51_down
+        # FIXED: EMA ordering only — no slope requirement
+        # Old: (ema10 > ema51) & ema10_up & ema51_up  ← killed early trend entries
+        # New: (ema10 > ema51)                         ← structure is there, that's enough
+        parent_long  = (parent_ema10 > parent_ema51)
+        parent_short = (parent_ema10 < parent_ema51)
 
         parent_signal = pd.DataFrame(
             {
-                "parent_long": parent_long.fillna(False),
+                "parent_long":  parent_long.fillna(False),
                 "parent_short": parent_short.fillna(False),
             },
             index=parent_close.index,
         )
 
-        expanded = parent_signal.reindex(base_frame.index, method="ffill").fillna(False)
-        long_lookup = expanded["parent_long"].to_dict()
-        short_lookup = expanded["parent_short"].to_dict()
+        expanded        = parent_signal.reindex(base_frame.index, method="ffill").fillna(False)
+        long_lookup     = expanded["parent_long"].to_dict()
+        short_lookup    = expanded["parent_short"].to_dict()
 
-        base_timestamps = pd.to_datetime(pd.Index(timestamps[:length]))
-        parent_long_mask = np.array([bool(long_lookup.get(ts, False)) for ts in base_timestamps], dtype=bool)
+        base_timestamps  = pd.to_datetime(pd.Index(timestamps[:length]))
+        parent_long_mask  = np.array([bool(long_lookup.get(ts, False))  for ts in base_timestamps], dtype=bool)
         parent_short_mask = np.array([bool(short_lookup.get(ts, False)) for ts in base_timestamps], dtype=bool)
         return parent_long_mask, parent_short_mask
 
