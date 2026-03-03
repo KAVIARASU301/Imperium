@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
     QLineEdit, QComboBox, QDialogButtonBox, QFrame
 )
 from PySide6.QtCore import Qt, Signal, QPoint, QTimer, QEvent
-from PySide6.QtGui import QColor, QFont, QFontMetrics
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPixmap, QPainter, QPen
 
 from utils.config_manager import ConfigManager
 
@@ -34,8 +34,8 @@ class PositionsTable(QWidget):
     PNL_COL = 4
 
     GROUP_ICON_OPTIONS = {
-        "Cube": "📦",
-        "Folder": "📁",
+        "Cube": "cube",
+        "Folder": "folder",
     }
 
     GROUP_COLOR_OPTIONS = {
@@ -585,15 +585,53 @@ class PositionsTable(QWidget):
         self.table.setCellWidget(row, self.SYMBOL_COL, container)
         self.table.setSpan(row, self.SYMBOL_COL, 1, self.table.columnCount())
 
+    def _normalize_group_icon_style(self, icon_value: Optional[str]) -> str:
+        if icon_value in {"folder", "📁", "Folder"}:
+            return "folder"
+        return "cube"
+
+    def _build_group_icon_pixmap(self, icon_kind: str, color_hex: str) -> QPixmap:
+        pixmap = QPixmap(16, 16)
+        pixmap.fill(Qt.transparent)
+
+        color = QColor(color_hex)
+        if not color.isValid():
+            color = QColor("#E5E7EB")
+
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+
+        if icon_kind == "folder":
+            body = color.lighter(110)
+            tab = color.lighter(125)
+            painter.setPen(QPen(color.darker(130), 1.0))
+            painter.setBrush(tab)
+            painter.drawRoundedRect(2, 3, 6, 3, 1.4, 1.4)
+            painter.setBrush(body)
+            painter.drawRoundedRect(1.5, 5, 13, 8.5, 1.8, 1.8)
+        else:
+            painter.setPen(QPen(color.darker(130), 1.1))
+            painter.setBrush(color)
+            painter.drawRoundedRect(3, 3, 10, 10, 1.6, 1.6)
+            painter.setPen(QPen(color.lighter(165), 1.0))
+            painter.drawLine(3.5, 7.5, 13, 7.5)
+            painter.drawLine(7.5, 3.5, 7.5, 13)
+
+        painter.end()
+        return pixmap
+
     def _set_group_header_items(self, row: int, group_name: str, group_pnl: float):
         style = self.group_styles.get(group_name, {})
-        label = f"{style.get('icon', '📦')} {group_name}"
-        symbol_item = QTableWidgetItem(label)
+        icon_kind = self._normalize_group_icon_style(style.get("icon"))
+        color_hex = style.get("color", "#E5E7EB")
+
+        symbol_item = QTableWidgetItem(group_name)
         symbol_item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         symbol_font = QFont()
         symbol_font.setBold(True)
         symbol_item.setFont(symbol_font)
-        symbol_item.setForeground(QColor(style.get("color", "#E5E7EB")))
+        symbol_item.setForeground(QColor(color_hex))
+        symbol_item.setIcon(QIcon(self._build_group_icon_pixmap(icon_kind, color_hex)))
         symbol_item.setBackground(QColor("#0E2533"))
         self.table.setItem(row, self.SYMBOL_COL, symbol_item)
 
@@ -710,14 +748,17 @@ class PositionsTable(QWidget):
         name_edit.setMinimumHeight(32)
 
         icon_combo = QComboBox()
-        for icon_name, icon_symbol in self.GROUP_ICON_OPTIONS.items():
-            icon_combo.addItem(f"{icon_symbol}  {icon_name}", icon_symbol)
+        for icon_name, icon_key in self.GROUP_ICON_OPTIONS.items():
+            icon_combo.addItem(icon_name, icon_key)
         icon_combo.setMinimumHeight(32)
 
         color_combo = QComboBox()
         for color_name, color_hex in self.GROUP_COLOR_OPTIONS.items():
             color_combo.addItem(f"{color_name} ({color_hex})", color_hex)
         color_combo.setMinimumHeight(32)
+        default_cyan_index = color_combo.findData("#22D3EE")
+        if default_cyan_index >= 0:
+            color_combo.setCurrentIndex(default_cyan_index)
 
         form.addRow("Group name", name_edit)
         form.addRow("Group icon", icon_combo)
@@ -728,17 +769,21 @@ class PositionsTable(QWidget):
         preview_card.setStyleSheet("QFrame { background: #102431; border: 1px solid #2B3A4A; border-radius: 8px; }")
         preview_layout = QHBoxLayout(preview_card)
         preview_layout.setContentsMargins(12, 10, 12, 10)
+        preview_icon = QLabel()
+        preview_icon.setFixedSize(18, 18)
         preview_label = QLabel()
         preview_label.setStyleSheet("font-size: 13px; font-weight: 700;")
+        preview_layout.addWidget(preview_icon)
         preview_layout.addWidget(preview_label)
         preview_layout.addStretch(1)
         layout.addWidget(preview_card)
 
         def _update_preview():
             group_name = name_edit.text().strip() or "Group Preview"
-            icon = icon_combo.currentData()
+            icon_kind = self._normalize_group_icon_style(icon_combo.currentData())
             color = color_combo.currentData()
-            preview_label.setText(f"{icon} {group_name}")
+            preview_icon.setPixmap(self._build_group_icon_pixmap(icon_kind, color))
+            preview_label.setText(group_name)
             preview_label.setStyleSheet(f"font-size: 13px; font-weight: 700; color: {color};")
 
         icon_combo.currentIndexChanged.connect(_update_preview)
@@ -771,8 +816,8 @@ class PositionsTable(QWidget):
     def _add_symbols_to_group(self, symbols: List[str], group_name: str, style: Optional[Dict[str, str]] = None):
         if style:
             self.group_styles[group_name] = {
-                "icon": style.get("icon", "📦"),
-                "color": style.get("color", "#E5E7EB"),
+                "icon": self._normalize_group_icon_style(style.get("icon")),
+                "color": style.get("color", "#22D3EE"),
             }
 
         for symbol in symbols:
@@ -963,6 +1008,12 @@ class PositionsTable(QWidget):
                 self.group_order = data.get("group_order", list(self.group_members.keys()))
                 self.group_sl_tp = data.get("group_sl_tp", {})
                 self.group_styles = data.get("group_styles", {})
+                for group_name in list(self.group_styles.keys()):
+                    style = self.group_styles.get(group_name, {})
+                    self.group_styles[group_name] = {
+                        "icon": self._normalize_group_icon_style(style.get("icon")),
+                        "color": style.get("color", "#22D3EE"),
+                    }
         except Exception as e:
             logger.warning(f"Failed to load position order: {e}")
 
