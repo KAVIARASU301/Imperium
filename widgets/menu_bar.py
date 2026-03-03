@@ -55,8 +55,8 @@ def create_menu_bar(parent) -> Tuple[QMenuBar, Dict[str, QAction]]:
     menu_actions["market_monitor"].setShortcut("Ctrl+M")
     tools_menu.addSeparator()
 
-    # menu_actions["cvd_chart"] = tools_menu.addAction("Auto Trader")
-    # menu_actions["cvd_chart"].setShortcut("Ctrl+Shift+A")
+    menu_actions["cvd_chart"] = tools_menu.addAction("CVD Chart")
+    menu_actions["cvd_chart"].setShortcut("Ctrl+Shift+A")
 
     menu_actions["cvd_market_monitor"] = tools_menu.addAction("CVD Multi Index Chart")
     menu_actions["cvd_market_monitor"].setShortcut("Ctrl+D")
