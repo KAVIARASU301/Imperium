@@ -792,7 +792,75 @@ class PositionsTable(QWidget):
         _update_preview()
 
         button_box = QDialogButtonBox(QDialogButtonBox.Cancel | QDialogButtonBox.Ok)
-        button_box.button(QDialogButtonBox.Ok).setText("Create Group")
+        create_button = button_box.button(QDialogButtonBox.Ok)
+        cancel_button = button_box.button(QDialogButtonBox.Cancel)
+
+        create_button.setText("Create Group")
+        create_button.setObjectName("primaryButton")
+        create_button.setCursor(Qt.PointingHandCursor)
+        create_button.setMinimumHeight(36)
+
+        cancel_button.setText("Cancel")
+        cancel_button.setObjectName("secondaryButton")
+        cancel_button.setCursor(Qt.PointingHandCursor)
+        cancel_button.setMinimumHeight(36)
+
+        button_box.setStyleSheet("""
+            QPushButton#secondaryButton {
+                background: #1E293B;
+                color: #CBD5E1;
+                border: 1px solid #334155;
+                border-radius: 8px;
+                padding: 8px 16px;
+                font-size: 12px;
+                font-weight: 600;
+            }
+
+            QPushButton#secondaryButton:hover {
+                background: #273449;
+                color: #E2E8F0;
+                border-color: #475569;
+            }
+
+            QPushButton#secondaryButton:pressed {
+                background: #182233;
+            }
+
+            QPushButton#primaryButton {
+                background: qlineargradient(
+                    x1: 0, y1: 0, x2: 1, y2: 1,
+                    stop: 0 #22D3EE,
+                    stop: 1 #14B8A6
+                );
+                color: #05202C;
+                border: 1px solid #4DE4EA;
+                border-radius: 8px;
+                padding: 8px 18px;
+                font-size: 12px;
+                font-weight: 700;
+            }
+
+            QPushButton#primaryButton:hover {
+                background: qlineargradient(
+                    x1: 0, y1: 0, x2: 1, y2: 1,
+                    stop: 0 #67E8F9,
+                    stop: 1 #2DD4BF
+                );
+                border-color: #8AF0F5;
+            }
+
+            QPushButton#primaryButton:pressed {
+                background: #0EA5A6;
+                border-color: #14B8A6;
+                color: #03161F;
+            }
+
+            QPushButton:disabled {
+                background: #1F2937;
+                color: #64748B;
+                border-color: #334155;
+            }
+        """)
         layout.addWidget(button_box)
 
         payload: Dict[str, str] = {}
