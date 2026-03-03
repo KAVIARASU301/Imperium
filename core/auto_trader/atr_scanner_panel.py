@@ -152,6 +152,11 @@ BASE_STYLE = f"""
         color: {C_TEXT};
         padding: 4px 12px;
     }}
+    QPushButton[compact="true"] {{
+        padding: 2px 8px;
+        font-size: 10px;
+        font-weight: 600;
+    }}
     QPushButton:hover {{
         border-color: {C_ACCENT};
         color: {C_ACCENT};
@@ -279,13 +284,13 @@ class AtrScannerPanel(QWidget):
         dlg.finished.connect(lambda _: self._clear_signals())
 
         lay = QVBoxLayout(dlg)
-        lay.setContentsMargins(8, 8, 8, 8)
-        lay.setSpacing(8)
+        lay.setContentsMargins(6, 6, 6, 6)
+        lay.setSpacing(6)
 
         setup_grp = QGroupBox("Setup Panel")
         setup_lay = QVBoxLayout(setup_grp)
-        setup_lay.setContentsMargins(6, 6, 6, 6)
-        setup_lay.setSpacing(8)
+        setup_lay.setContentsMargins(5, 5, 5, 5)
+        setup_lay.setSpacing(6)
 
         setup_cols = QGridLayout()
         setup_cols.setContentsMargins(0, 0, 0, 0)
@@ -296,7 +301,7 @@ class AtrScannerPanel(QWidget):
         add_grp = QGroupBox("Symbol Setup")
         form_lay = QFormLayout(add_grp)
         form_lay.setLabelAlignment(Qt.AlignRight)
-        form_lay.setSpacing(6)
+        form_lay.setSpacing(4)
 
         self._symbol_selector = QComboBox()
         self._symbol_selector.setPlaceholderText("Select symbol")
@@ -305,13 +310,13 @@ class AtrScannerPanel(QWidget):
         quick_add_widget = QWidget()
         quick_add_grid = QGridLayout(quick_add_widget)
         quick_add_grid.setContentsMargins(0, 0, 0, 0)
-        quick_add_grid.setHorizontalSpacing(4)
-        quick_add_grid.setVerticalSpacing(4)
+        quick_add_grid.setHorizontalSpacing(3)
+        quick_add_grid.setVerticalSpacing(3)
         quick_symbols = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"]
         for idx, symbol in enumerate(quick_symbols):
             quick_btn = QPushButton(symbol)
-            quick_btn.setFixedHeight(22)
-            quick_btn.setMinimumWidth(88)
+            quick_btn.setFixedHeight(20)
+            quick_btn.setMinimumWidth(80)
             quick_btn.setStyleSheet(f"font-size: 10px; padding: 2px 6px; color: {C_MUTED};")
             quick_btn.clicked.connect(lambda _checked=False, s=symbol: self._quick_add_symbol(s))
             quick_add_grid.addWidget(quick_btn, idx // 2, idx % 2)
@@ -417,13 +422,27 @@ class AtrScannerPanel(QWidget):
         btn_row = QHBoxLayout()
         add_btn = QPushButton("+ ADD")
         add_btn.setObjectName("add_btn")
+        add_btn.setProperty("compact", True)
         add_btn.clicked.connect(self._on_add_symbol)
+        add_btn.setFixedHeight(22)
+        add_btn.setMinimumWidth(70)
         btn_row.addWidget(add_btn)
 
         remove_btn = QPushButton("− REMOVE")
         remove_btn.setObjectName("remove_btn")
+        remove_btn.setProperty("compact", True)
         remove_btn.clicked.connect(self._on_remove_selected)
+        remove_btn.setFixedHeight(22)
+        remove_btn.setMinimumWidth(78)
         btn_row.addWidget(remove_btn)
+
+        clear_all_btn = QPushButton("CLEAR ALL")
+        clear_all_btn.setObjectName("clear_btn")
+        clear_all_btn.setProperty("compact", True)
+        clear_all_btn.clicked.connect(self._on_clear_all_symbols)
+        clear_all_btn.setFixedHeight(22)
+        clear_all_btn.setMinimumWidth(88)
+        btn_row.addWidget(clear_all_btn)
         form_lay.addRow(btn_row)
 
         symbol_col = QVBoxLayout()
@@ -445,6 +464,7 @@ class AtrScannerPanel(QWidget):
         self._watchlist_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self._watchlist_table.setAlternatingRowColors(False)
         self._watchlist_table.verticalHeader().setVisible(False)
+        self._watchlist_table.verticalHeader().setDefaultSectionSize(22)
         self._watchlist_table.setShowGrid(False)
         watch_lay.addWidget(self._watchlist_table)
 
@@ -471,6 +491,7 @@ class AtrScannerPanel(QWidget):
         simulator_grp = QGroupBox("Simulator Backtester")
         simulator_form = QFormLayout(simulator_grp)
         simulator_form.setLabelAlignment(Qt.AlignRight)
+        simulator_form.setSpacing(4)
 
         self._sim_date_edit = QDateEdit()
         self._sim_date_edit.setCalendarPopup(True)
@@ -482,14 +503,32 @@ class AtrScannerPanel(QWidget):
         sim_run_btn.clicked.connect(self._run_simulator_backtest)
         simulator_form.addRow(sim_run_btn)
 
-        self._sim_result_label = QLabel("Net pts captured: --")
-        self._sim_result_label.setStyleSheet(f"color: {C_MUTED}; font-size: 11px;")
-        simulator_form.addRow("Result:", self._sim_result_label)
+        sim_result_widget = QWidget()
+        sim_result_lay = QVBoxLayout(sim_result_widget)
+        sim_result_lay.setContentsMargins(0, 0, 0, 0)
+        sim_result_lay.setSpacing(2)
+
+        self._sim_points_label = QLabel(f"<span style='color:{C_ACCENT};'>Underlying pts:</span> --")
+        self._sim_premium_label = QLabel(f"<span style='color:{C_WARN};'>Option premium est:</span> --")
+        self._sim_signal_label = QLabel(f"<span style='color:{C_TEXT};'>Signals:</span> --")
+        self._sim_winrate_label = QLabel(f"<span style='color:{C_LONG};'>Win rate:</span> --")
+
+        for lbl in (
+            self._sim_points_label,
+            self._sim_premium_label,
+            self._sim_signal_label,
+            self._sim_winrate_label,
+        ):
+            lbl.setStyleSheet(f"color: {C_MUTED}; font-size: 10px;")
+            lbl.setTextFormat(Qt.RichText)
+            sim_result_lay.addWidget(lbl)
+
+        simulator_form.addRow("Result:", sim_result_widget)
 
         setup_cols.addLayout(symbol_col, 0, 0)
         setup_cols.addWidget(simulator_grp, 0, 2)
-        setup_cols.setColumnStretch(0, 1)
-        setup_cols.setColumnStretch(1, 1)
+        setup_cols.setColumnStretch(0, 2)
+        setup_cols.setColumnStretch(1, 2)
         setup_cols.setColumnStretch(2, 1)
         setup_lay.addLayout(setup_cols)
 
@@ -669,6 +708,23 @@ class AtrScannerPanel(QWidget):
         self._update_counts()
         self._save_setup_state()
         self._set_status(f"Removed {symbol} from watchlist.")
+
+
+    def _on_clear_all_symbols(self):
+        symbols = list(self._pending_watchlist.keys())
+        if not symbols:
+            self._set_status("Watchlist is already clear.")
+            return
+
+        for symbol in symbols:
+            self.engine.remove_symbol(symbol)
+            self._symbol_tokens.pop(symbol, None)
+
+        self._pending_watchlist.clear()
+        self._watchlist_table.setRowCount(0)
+        self._update_counts()
+        self._save_setup_state()
+        self._set_status("Cleared all symbols from setup watchlist.")
 
     def _clear_signals(self):
         self._signal_table.setRowCount(0)
@@ -974,9 +1030,17 @@ class AtrScannerPanel(QWidget):
             symbols_processed += 1
 
         win_rate = (wins / closed_trades * 100.0) if closed_trades else 0.0
-        self._sim_result_label.setText(
-            f"Underlying pts: {total_points:.2f} (≈ option premium: {total_points * 0.45:.2f} @ 0.45Δ) | "
-            f"Signals: {total_signals} | Win rate: {win_rate:.1f}%"
+        self._sim_points_label.setText(
+            f"<span style='color:{C_ACCENT};'>Underlying pts:</span> {total_points:.2f}"
+        )
+        self._sim_premium_label.setText(
+            f"<span style='color:{C_WARN};'>Option premium est:</span> {total_points * 0.45:.2f} @ 0.45Δ"
+        )
+        self._sim_signal_label.setText(
+            f"<span style='color:{C_TEXT};'>Signals:</span> {total_signals}"
+        )
+        self._sim_winrate_label.setText(
+            f"<span style='color:{C_LONG};'>Win rate:</span> {win_rate:.1f}%"
         )
         self._set_status(
             f"Simulator completed for {run_day.isoformat()}: "
