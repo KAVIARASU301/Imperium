@@ -1985,15 +1985,22 @@ class ImperiumMainWindow(QMainWindow):
             self.active_quick_order_dialog.reject()
 
         default_lots = self.header.lot_size_spin.value()
-
-        # Check if position already exists for this symbol
         position_exists = self.position_manager.get_position(contract.tradingsymbol) is not None
+
+        # ✅ Pull user's preferred risk settings from config
+        cfg = self.settings
+        sl_per_lot = int(cfg.get("order_sl_per_lot", 1000))
+        rr_ratio = float(cfg.get("order_rr_ratio", 1.5))
+        trailing_enabled = bool(cfg.get("order_trailing_enabled", True))
 
         dialog = QuickOrderDialog(
             parent=self,
             contract=contract,
             default_lots=default_lots,
-            position_exists=position_exists
+            position_exists=position_exists,
+            sl_per_lot=sl_per_lot,
+            rr_ratio=rr_ratio,
+            trailing_enabled=trailing_enabled,
         )
         self.active_quick_order_dialog = dialog
 

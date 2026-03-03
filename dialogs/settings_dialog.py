@@ -2,7 +2,7 @@ import logging
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTabWidget,
     QWidget, QGroupBox, QGridLayout, QLabel, QLineEdit,
-    QSpinBox, QComboBox, QCheckBox, QPushButton, QMessageBox,
+    QSpinBox, QDoubleSpinBox, QComboBox, QCheckBox, QPushButton, QMessageBox,
     QButtonGroup, QRadioButton
 )
 from PySide6.QtCore import Qt, Signal
@@ -141,24 +141,22 @@ class SettingsDialog(QDialog):
         layout = QVBoxLayout(tab)
         layout.setContentsMargins(15, 20, 15, 15)
 
+        # ── Existing: Default Trading Values ──────────────────────────────────
         group = QGroupBox("Default Trading Values")
         grid = QGridLayout(group)
         grid.setHorizontalSpacing(15)
         grid.setVerticalSpacing(14)
 
-        # Symbol
         grid.addWidget(QLabel("Default Symbol:"), 0, 0)
         self.default_symbol = QComboBox()
         self.default_symbol.addItems(["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"])
         grid.addWidget(self.default_symbol, 0, 1)
 
-        # Product
         grid.addWidget(QLabel("Default Product:"), 1, 0)
         self.default_product = QComboBox()
         self.default_product.addItems(["MIS", "NRML"])
         grid.addWidget(self.default_product, 1, 1)
 
-        # Lots
         grid.addWidget(QLabel("Default Lots:"), 2, 0)
         self.default_lots = QSpinBox()
         self.default_lots.setRange(1, 100)
@@ -167,8 +165,47 @@ class SettingsDialog(QDialog):
 
         layout.addWidget(group)
 
-        # Info box
-        info = QLabel("💡 These values will be used when starting a new session")
+        # ── NEW: Quick Order Risk Defaults ────────────────────────────────────
+        risk_group = QGroupBox("Quick Order Risk Defaults")
+        risk_grid = QGridLayout(risk_group)
+        risk_grid.setHorizontalSpacing(15)
+        risk_grid.setVerticalSpacing(14)
+
+        risk_grid.addWidget(QLabel("SL per Lot (₹):"), 0, 0)
+        self.order_sl_per_lot = QSpinBox()
+        self.order_sl_per_lot.setRange(100, 100000)
+        self.order_sl_per_lot.setSingleStep(100)
+        self.order_sl_per_lot.setValue(1000)
+        self.order_sl_per_lot.setToolTip(
+            "Default stop-loss in ₹ per lot. "
+            "Dialog will set SL = this × number of lots."
+        )
+        risk_grid.addWidget(self.order_sl_per_lot, 0, 1)
+
+        risk_grid.addWidget(QLabel("Risk : Reward Ratio:"), 1, 0)
+        self.order_rr_ratio = QDoubleSpinBox()
+        self.order_rr_ratio.setRange(0.5, 10.0)
+        self.order_rr_ratio.setSingleStep(0.25)
+        self.order_rr_ratio.setDecimals(2)
+        self.order_rr_ratio.setValue(1.5)
+        self.order_rr_ratio.setToolTip(
+            "TP = SL × this ratio.  1.5 means TP is 1.5× the SL amount."
+        )
+        risk_grid.addWidget(self.order_rr_ratio, 1, 1)
+
+        self.order_trailing_enabled = QCheckBox("Enable Trailing Stop-Loss in Quick Order")
+        self.order_trailing_enabled.setChecked(True)
+        self.order_trailing_enabled.setToolTip(
+            "When unchecked the Trailing SL row is hidden in the Quick Order dialog."
+        )
+        risk_grid.addWidget(self.order_trailing_enabled, 2, 0, 1, 2)
+
+        layout.addWidget(risk_group)
+
+        info = QLabel(
+            "💡 These values pre-fill the Quick Order dialog. "
+            "SL and TP will auto-update when you change the lot count."
+        )
         info.setObjectName("infoLabel")
         info.setWordWrap(True)
         layout.addWidget(info)
@@ -311,6 +348,9 @@ class SettingsDialog(QDialog):
         self.default_symbol.currentTextChanged.connect(lambda: setattr(self, '_has_changes', True))
         self.default_product.currentTextChanged.connect(lambda: setattr(self, '_has_changes', True))
         self.default_lots.valueChanged.connect(lambda: setattr(self, '_has_changes', True))
+        self.order_sl_per_lot.valueChanged.connect(lambda: setattr(self, '_has_changes', True))
+        self.order_rr_ratio.valueChanged.connect(lambda: setattr(self, '_has_changes', True))
+        self.order_trailing_enabled.stateChanged.connect(lambda: setattr(self, '_has_changes', True))
         self.auto_refresh.stateChanged.connect(lambda: setattr(self, '_has_changes', True))
         self.refresh_interval.valueChanged.connect(lambda: setattr(self, '_has_changes', True))
         self.auto_adjust_ladder.stateChanged.connect(lambda: setattr(self, '_has_changes', True))
@@ -517,6 +557,9 @@ class SettingsDialog(QDialog):
         self.default_symbol.setCurrentText(settings.get("default_symbol", "NIFTY"))
         self.default_product.setCurrentText(settings.get("default_product", "MIS"))
         self.default_lots.setValue(settings.get("default_lots", 1))
+        self.order_sl_per_lot.setValue(int(settings.get("order_sl_per_lot", 1000)))
+        self.order_rr_ratio.setValue(float(settings.get("order_rr_ratio", 1.5)))
+        self.order_trailing_enabled.setChecked(bool(settings.get("order_trailing_enabled", True)))
         self.auto_refresh.setChecked(settings.get("auto_refresh", True))
         self.refresh_interval.setValue(settings.get("refresh_interval", 2))
         self.auto_adjust_ladder.setChecked(settings.get("auto_adjust_ladder", True))
@@ -543,6 +586,9 @@ class SettingsDialog(QDialog):
             "default_symbol": self.default_symbol.currentText(),
             "default_product": self.default_product.currentText(),
             "default_lots": self.default_lots.value(),
+            "order_sl_per_lot": self.order_sl_per_lot.value(),
+            "order_rr_ratio": self.order_rr_ratio.value(),
+            "order_trailing_enabled": self.order_trailing_enabled.isChecked(),
             "auto_refresh": self.auto_refresh.isChecked(),
             "refresh_interval": self.refresh_interval.value(),
             "auto_adjust_ladder": self.auto_adjust_ladder.isChecked(),
@@ -577,6 +623,9 @@ class SettingsDialog(QDialog):
             self.default_symbol.setCurrentText(defaults["default_symbol"])
             self.default_product.setCurrentText(defaults["default_product"])
             self.default_lots.setValue(defaults["default_lots"])
+            self.order_sl_per_lot.setValue(int(defaults.get("order_sl_per_lot", 1000)))
+            self.order_rr_ratio.setValue(float(defaults.get("order_rr_ratio", 1.5)))
+            self.order_trailing_enabled.setChecked(bool(defaults.get("order_trailing_enabled", True)))
             self.auto_refresh.setChecked(defaults.get("auto_refresh", True))
             self.refresh_interval.setValue(defaults.get("refresh_interval", 2))
             self.auto_adjust_ladder.setChecked(defaults.get("auto_adjust_ladder", True))

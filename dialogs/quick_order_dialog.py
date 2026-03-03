@@ -36,13 +36,28 @@ class QuickOrderDialog(QDialog):
     refresh_requested = Signal(str)
     risk_confirmed = Signal(dict)
 
-    def __init__(self, parent, contract, default_lots, mode=QuickOrderMode.ENTRY, position_exists=False):
+    def __init__(
+        self,
+        parent,
+        contract,
+        default_lots,
+        mode=QuickOrderMode.ENTRY,
+        position_exists=False,
+        sl_per_lot=1000,
+        rr_ratio=1.5,
+        trailing_enabled=True,
+    ):
         super().__init__(parent)
         self.mode = mode
         self.contract = contract
         self._drag_pos = None
         self._last_ltp = None
         self.position_exists = position_exists
+        self.sl_per_lot = sl_per_lot
+        self.rr_ratio = rr_ratio
+        self.trailing_enabled = trailing_enabled
+        self._sl_user_edited = False
+        self._tp_user_edited = False
 
         self._setup_window(parent)
         self._setup_ui(default_lots)
@@ -193,56 +208,63 @@ class QuickOrderDialog(QDialog):
         self.price_spinbox.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         form_layout.addWidget(self.price_spinbox, 2, 1)
 
-        # --- UPDATED SL/TP/TSL FIELDS ---
-        # Stop Loss
+        # ── Stop Loss ─────────────────────────────────────────────────────
         self.sl_checkbox = QCheckBox("Stop Loss (₹)")
         self.sl_spinbox = QDoubleSpinBox()
-        self.sl_spinbox.setRange(0, 10000000)
+        self.sl_spinbox.setRange(0, 10_000_000)
         self.sl_spinbox.setDecimals(0)
         self.sl_spinbox.setSingleStep(500)
-        self.sl_spinbox.setValue(1000)
+
+        default_sl = self.sl_per_lot * int(default_lots)
+        self.sl_spinbox.setValue(default_sl)
         self.sl_spinbox.setEnabled(False)
         self.sl_checkbox.toggled.connect(self.sl_spinbox.setEnabled)
+        self.sl_spinbox.valueChanged.connect(self._on_sl_manually_changed)
         form_layout.addWidget(self.sl_checkbox, 3, 0)
         form_layout.addWidget(self.sl_spinbox, 3, 1)
 
-        # Take Profit
+        # ── Take Profit ───────────────────────────────────────────────────
         self.tp_checkbox = QCheckBox("Take Profit (₹)")
         self.tp_spinbox = QDoubleSpinBox()
-        self.tp_spinbox.setRange(0, 10000000)
+        self.tp_spinbox.setRange(0, 10_000_000)
         self.tp_spinbox.setDecimals(0)
         self.tp_spinbox.setSingleStep(500)
-        self.tp_spinbox.setValue(1500)
+
+        default_tp = round(default_sl * self.rr_ratio)
+        self.tp_spinbox.setValue(default_tp)
         self.tp_spinbox.setEnabled(False)
         self.tp_checkbox.toggled.connect(self.tp_spinbox.setEnabled)
+        self.tp_spinbox.valueChanged.connect(self._on_tp_manually_changed)
         form_layout.addWidget(self.tp_checkbox, 4, 0)
         form_layout.addWidget(self.tp_spinbox, 4, 1)
 
-        # Trailing SL
+        # ── Trailing SL ───────────────────────────────────────────────────
         self.tsl_checkbox = QCheckBox("Trailing SL (₹)")
         self.tsl_spinbox = QDoubleSpinBox()
-        self.tsl_spinbox.setRange(0, 10000000)
+        self.tsl_spinbox.setRange(0, 10_000_000)
         self.tsl_spinbox.setDecimals(0)
         self.tsl_spinbox.setSingleStep(500)
-        self.tsl_spinbox.setValue(1000)
+        self.tsl_spinbox.setValue(default_sl)
         self.tsl_spinbox.setEnabled(False)
         self.tsl_checkbox.toggled.connect(self.tsl_spinbox.setEnabled)
         form_layout.addWidget(self.tsl_checkbox, 5, 0)
         form_layout.addWidget(self.tsl_spinbox, 5, 1)
 
+        if not self.trailing_enabled:
+            self.tsl_checkbox.setVisible(False)
+            self.tsl_spinbox.setVisible(False)
+
         # 🔒 Disable SL/TP/TSL when adding to existing position (ENTRY mode only)
         if self.position_exists and self.mode == QuickOrderMode.ENTRY:
-            self.sl_checkbox.setEnabled(False)
-            self.sl_spinbox.setEnabled(False)
-            self.sl_checkbox.setToolTip("Cannot set SL when adding to existing position - use 'Modify SL/TP' instead")
-
-            self.tp_checkbox.setEnabled(False)
-            self.tp_spinbox.setEnabled(False)
-            self.tp_checkbox.setToolTip("Cannot set TP when adding to existing position - use 'Modify SL/TP' instead")
-
-            self.tsl_checkbox.setEnabled(False)
-            self.tsl_spinbox.setEnabled(False)
-            self.tsl_checkbox.setToolTip("Cannot set TSL when adding to existing position - use 'Modify SL/TP' instead")
+            for widget in [
+                self.sl_checkbox, self.sl_spinbox,
+                self.tp_checkbox, self.tp_spinbox,
+                self.tsl_checkbox, self.tsl_spinbox,
+            ]:
+                widget.setEnabled(False)
+            self.sl_checkbox.setToolTip("Use 'Modify SL/TP' instead")
+            self.tp_checkbox.setToolTip("Use 'Modify SL/TP' instead")
+            self.tsl_checkbox.setToolTip("Use 'Modify SL/TP' instead")
 
         self.total_value_label = QLabel()
         self.total_value_label.setObjectName("totalValueLabel")
@@ -252,10 +274,47 @@ class QuickOrderDialog(QDialog):
         parent_layout.addStretch()
 
         self.lots_spinbox.valueChanged.connect(self._update_summary)
+        self.lots_spinbox.valueChanged.connect(self._recalculate_sl_tp)
         self.price_spinbox.valueChanged.connect(self._update_summary)
         self._update_summary()
         self.buy_radio.toggled.connect(self._update_summary)
         self.sell_radio.toggled.connect(self._update_summary)
+
+    def _on_sl_manually_changed(self, value):
+        if getattr(self, '_recalc_in_progress', False):
+            return
+
+        self._sl_user_edited = True
+        if not self._tp_user_edited:
+            self._recalc_in_progress = True
+            try:
+                self.tp_spinbox.setValue(round(value * self.rr_ratio))
+            finally:
+                self._recalc_in_progress = False
+
+    def _on_tp_manually_changed(self, value):
+        if getattr(self, '_recalc_in_progress', False):
+            return
+
+        self._tp_user_edited = True
+
+    def _recalculate_sl_tp(self, lots):
+        if getattr(self, '_recalc_in_progress', False):
+            return
+
+        self._recalc_in_progress = True
+        try:
+            new_sl = self.sl_per_lot * int(lots)
+            new_tp = round(new_sl * self.rr_ratio)
+
+            if not self._sl_user_edited:
+                self.sl_spinbox.setValue(new_sl)
+                self.tsl_spinbox.setValue(new_sl)
+
+            if not self._tp_user_edited:
+                self.tp_spinbox.setValue(new_tp)
+        finally:
+            self._recalc_in_progress = False
 
     def _create_action_buttons(self, parent_layout):
         action_layout = QHBoxLayout()
