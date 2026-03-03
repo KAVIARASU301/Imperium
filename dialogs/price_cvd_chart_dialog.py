@@ -243,6 +243,7 @@ class PriceCVDChartDialog(QDialog):
 
         self.live_mode        = True
         self._two_day         = False
+        self._cvd_rebased     = True
         self._selected_tf     = 1
         self.current_date     = None
         self.previous_date    = None
@@ -330,6 +331,14 @@ class PriceCVDChartDialog(QDialog):
         self.btn_1d.setChecked(True)
         self.btn_1d.clicked.connect(self._on_day_mode_toggled)
         row.addWidget(self.btn_1d)
+
+        self.btn_cvd_rebase = _btn("Rebased CVD", fg=_C["text_2"], mw=90, checkable=True,
+                                   chk_bg="#2A3B5C", chk_fg="#FFFFFF")
+        self.btn_cvd_rebase.setChecked(True)
+        self.btn_cvd_rebase.setEnabled(False)
+        self.btn_cvd_rebase.setToolTip("Available in 2D comparison mode")
+        self.btn_cvd_rebase.toggled.connect(self._on_cvd_rebase_toggled)
+        row.addWidget(self.btn_cvd_rebase)
         row.addWidget(_sep())
 
         lbl_tf = QLabel("TF")
@@ -531,7 +540,14 @@ class PriceCVDChartDialog(QDialog):
     def _on_day_mode_toggled(self):
         self._two_day = not self.btn_1d.isChecked()
         self.btn_1d.setText("2D" if self._two_day else "1D")
+        self.btn_cvd_rebase.setEnabled(self._two_day)
         if self._all_timestamps:
+            self._render_from_cache()
+
+    def _on_cvd_rebase_toggled(self, checked: bool):
+        self._cvd_rebased = checked
+        self.btn_cvd_rebase.setText("Rebased CVD" if checked else "Session CVD")
+        if self._all_timestamps and self._two_day:
             self._render_from_cache()
 
     def _on_indicator_toggled(self, *_):
@@ -752,6 +768,17 @@ class PriceCVDChartDialog(QDialog):
                 co_prev  = self._all_cvd_open[:sp];    co_cur  = self._all_cvd_open[sp:]
                 ch_prev  = self._all_cvd_high[:sp];    ch_cur  = self._all_cvd_high[sp:]
                 cl_prev  = self._all_cvd_low[:sp];     cl_cur  = self._all_cvd_low[sp:]
+
+                if self._cvd_rebased and cvd_prev:
+                    rebase_offset = cvd_prev[-1]
+                    cvd_prev = [v - rebase_offset for v in cvd_prev]
+                    cvd_cur = [v - rebase_offset for v in cvd_cur]
+                    co_prev = [v - rebase_offset for v in co_prev]
+                    co_cur = [v - rebase_offset for v in co_cur]
+                    ch_prev = [v - rebase_offset for v in ch_prev]
+                    ch_cur = [v - rebase_offset for v in ch_cur]
+                    cl_prev = [v - rebase_offset for v in cl_prev]
+                    cl_cur = [v - rebase_offset for v in cl_cur]
             else:
                 self._price_day_sep.hide(); self._cvd_day_sep.hide()
                 xs_prev = []; px_prev = []; po_prev = []; ph_prev = []; pl_prev = []
@@ -819,7 +846,7 @@ class PriceCVDChartDialog(QDialog):
             _ts_ov  = list(self._all_timestamps)
             _px_ov  = list(self._all_price)
             _vol_ov = list(self._all_volume)
-            _cvd_ov = list(self._all_cvd)
+            _cvd_ov = cvd_prev + cvd_cur
             _xs_ov  = list(xs_all)
 
         self._render_overlays_with(_xs_ov, _px_ov, _vol_ov, _cvd_ov, _ts_ov)
@@ -847,6 +874,13 @@ class PriceCVDChartDialog(QDialog):
             px     = list(self._all_price)
             vol    = list(self._all_volume)
             cvd    = list(self._all_cvd)
+
+            if has_two and self._session_x_break is not None and self._cvd_rebased:
+                split = int(self._session_x_break)
+                if split > 0:
+                    rebase_offset = cvd[split - 1]
+                    cvd = [v - rebase_offset for v in cvd]
+
             self._render_overlays_with(xs, px, vol, cvd, ts)
             return
 
