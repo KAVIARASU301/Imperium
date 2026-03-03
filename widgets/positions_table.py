@@ -5,7 +5,8 @@ from typing import Dict, List, Optional
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QTableWidget, QTableWidgetItem, QHeaderView, QApplication,
-    QMenu, QAbstractItemView, QDialog, QFormLayout, QDoubleSpinBox, QPushButton, QInputDialog
+    QMenu, QAbstractItemView, QDialog, QFormLayout, QDoubleSpinBox, QPushButton,
+    QLineEdit, QComboBox, QDialogButtonBox, QFrame
 )
 from PySide6.QtCore import Qt, Signal, QPoint, QTimer, QEvent
 from PySide6.QtGui import QColor, QFont, QFontMetrics
@@ -32,6 +33,22 @@ class PositionsTable(QWidget):
     LTP_COL = 3
     PNL_COL = 4
 
+    GROUP_ICON_OPTIONS = {
+        "Cube": "📦",
+        "Folder": "📁",
+    }
+
+    GROUP_COLOR_OPTIONS = {
+        "Red": "#F85149",
+        "Green": "#34D399",
+        "Cyan": "#22D3EE",
+        "White": "#E5E7EB",
+        "Grey": "#9CA3AF",
+        "Sky Blue": "#60A5FA",
+        "Vintage Teal": "#458985",
+        "Vintage Deep Blue": "#074358",
+    }
+
     def __init__(self, config_manager: ConfigManager, parent=None):
         super().__init__(parent)
 
@@ -43,6 +60,7 @@ class PositionsTable(QWidget):
         self.group_members: Dict[str, List[str]] = {}
         self.group_order: List[str] = []
         self.group_sl_tp: Dict[str, Dict[str, float]] = {}
+        self.group_styles: Dict[str, Dict[str, str]] = {}
 
         self._hovered_row = -1
 
@@ -568,13 +586,14 @@ class PositionsTable(QWidget):
         self.table.setSpan(row, self.SYMBOL_COL, 1, self.table.columnCount())
 
     def _set_group_header_items(self, row: int, group_name: str, group_pnl: float):
-        label = f"📦 {group_name}"
+        style = self.group_styles.get(group_name, {})
+        label = f"{style.get('icon', '📦')} {group_name}"
         symbol_item = QTableWidgetItem(label)
         symbol_item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         symbol_font = QFont()
         symbol_font.setBold(True)
         symbol_item.setFont(symbol_font)
-        symbol_item.setForeground(QColor("#E5E7EB"))
+        symbol_item.setForeground(QColor(style.get("color", "#E5E7EB")))
         symbol_item.setBackground(QColor("#0E2533"))
         self.table.setItem(row, self.SYMBOL_COL, symbol_item)
 
@@ -655,13 +674,107 @@ class PositionsTable(QWidget):
     def _create_group_from_selection(self, symbols: List[str]):
         if not symbols:
             return
-        group_name, ok = QInputDialog.getText(self, "Create Group", "Group name:")
-        if not ok or not group_name.strip():
-            return
-        group_name = group_name.strip()
-        self._add_symbols_to_group(symbols, group_name)
 
-    def _add_symbols_to_group(self, symbols: List[str], group_name: str):
+        payload = self._open_create_group_dialog()
+        if not payload:
+            return
+
+        self._add_symbols_to_group(
+            symbols,
+            payload["group_name"],
+            {"icon": payload["icon"], "color": payload["color"]},
+        )
+
+    def _open_create_group_dialog(self) -> Optional[Dict[str, str]]:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Create Group")
+        dialog.setMinimumWidth(460)
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(12)
+
+        title = QLabel("Create strategy group")
+        title.setStyleSheet("font-size: 17px; font-weight: 700; color: #E5E7EB;")
+        subtitle = QLabel("Set group name, icon, and color to make your positions easier to scan.")
+        subtitle.setWordWrap(True)
+        subtitle.setStyleSheet("font-size: 12px; color: #9CA3AF;")
+        layout.addWidget(title)
+        layout.addWidget(subtitle)
+
+        form = QFormLayout()
+        form.setSpacing(10)
+
+        name_edit = QLineEdit()
+        name_edit.setPlaceholderText("e.g. Short Strategy")
+        name_edit.setMinimumHeight(32)
+
+        icon_combo = QComboBox()
+        for icon_name, icon_symbol in self.GROUP_ICON_OPTIONS.items():
+            icon_combo.addItem(f"{icon_symbol}  {icon_name}", icon_symbol)
+        icon_combo.setMinimumHeight(32)
+
+        color_combo = QComboBox()
+        for color_name, color_hex in self.GROUP_COLOR_OPTIONS.items():
+            color_combo.addItem(f"{color_name} ({color_hex})", color_hex)
+        color_combo.setMinimumHeight(32)
+
+        form.addRow("Group name", name_edit)
+        form.addRow("Group icon", icon_combo)
+        form.addRow("Group color", color_combo)
+        layout.addLayout(form)
+
+        preview_card = QFrame()
+        preview_card.setStyleSheet("QFrame { background: #102431; border: 1px solid #2B3A4A; border-radius: 8px; }")
+        preview_layout = QHBoxLayout(preview_card)
+        preview_layout.setContentsMargins(12, 10, 12, 10)
+        preview_label = QLabel()
+        preview_label.setStyleSheet("font-size: 13px; font-weight: 700;")
+        preview_layout.addWidget(preview_label)
+        preview_layout.addStretch(1)
+        layout.addWidget(preview_card)
+
+        def _update_preview():
+            group_name = name_edit.text().strip() or "Group Preview"
+            icon = icon_combo.currentData()
+            color = color_combo.currentData()
+            preview_label.setText(f"{icon} {group_name}")
+            preview_label.setStyleSheet(f"font-size: 13px; font-weight: 700; color: {color};")
+
+        icon_combo.currentIndexChanged.connect(_update_preview)
+        color_combo.currentIndexChanged.connect(_update_preview)
+        name_edit.textChanged.connect(_update_preview)
+        _update_preview()
+
+        button_box = QDialogButtonBox(QDialogButtonBox.Cancel | QDialogButtonBox.Ok)
+        button_box.button(QDialogButtonBox.Ok).setText("Create Group")
+        layout.addWidget(button_box)
+
+        payload: Dict[str, str] = {}
+
+        def _on_accept():
+            group_name = name_edit.text().strip()
+            if not group_name:
+                name_edit.setFocus()
+                return
+            payload["group_name"] = group_name
+            payload["icon"] = icon_combo.currentData()
+            payload["color"] = color_combo.currentData()
+            dialog.accept()
+
+        button_box.accepted.connect(_on_accept)
+        button_box.rejected.connect(dialog.reject)
+
+        self._position_dialog_above_footer(dialog)
+        return payload if dialog.exec() == QDialog.Accepted else None
+
+    def _add_symbols_to_group(self, symbols: List[str], group_name: str, style: Optional[Dict[str, str]] = None):
+        if style:
+            self.group_styles[group_name] = {
+                "icon": style.get("icon", "📦"),
+                "color": style.get("color", "#E5E7EB"),
+            }
+
         for symbol in symbols:
             self._assign_symbol_to_group(symbol, group_name, append=True)
         self._rebuild_table_from_order()
@@ -676,6 +789,7 @@ class PositionsTable(QWidget):
         if not self.group_members[group_name]:
             self.group_members.pop(group_name, None)
             self.group_sl_tp.pop(group_name, None)
+            self.group_styles.pop(group_name, None)
             self.group_order = [g for g in self.group_order if g != group_name]
         self._rebuild_table_from_order()
         self._save_table_state()
@@ -683,6 +797,7 @@ class PositionsTable(QWidget):
     def _ungroup_group(self, group_name: str):
         members = self.group_members.pop(group_name, [])
         self.group_sl_tp.pop(group_name, None)
+        self.group_styles.pop(group_name, None)
         self.group_order = [g for g in self.group_order if g != group_name]
         for symbol in members:
             if symbol not in self.visual_order:
@@ -772,8 +887,14 @@ class PositionsTable(QWidget):
             if not self.group_members[group_name]:
                 self.group_members.pop(group_name, None)
                 self.group_sl_tp.pop(group_name, None)
+                self.group_styles.pop(group_name, None)
 
         self.group_order = [g for g in self.group_order if g in self.group_members]
+        self.group_styles = {
+            group_name: style
+            for group_name, style in self.group_styles.items()
+            if group_name in self.group_members
+        }
 
         for pos in positions_data:
             symbol = pos.get('tradingsymbol')
@@ -794,6 +915,7 @@ class PositionsTable(QWidget):
             if not self.group_members[current_group]:
                 self.group_members.pop(current_group, None)
                 self.group_sl_tp.pop(current_group, None)
+                self.group_styles.pop(current_group, None)
                 self.group_order = [g for g in self.group_order if g != current_group]
 
         if group_name not in self.group_members:
@@ -816,6 +938,7 @@ class PositionsTable(QWidget):
             if not self.group_members[group_name]:
                 self.group_members.pop(group_name, None)
                 self.group_sl_tp.pop(group_name, None)
+                self.group_styles.pop(group_name, None)
         self.group_order = [g for g in self.group_order if g in self.group_members]
 
     # ------------------------------------------------------------------
@@ -839,6 +962,7 @@ class PositionsTable(QWidget):
                 self.group_members = data.get("groups", {})
                 self.group_order = data.get("group_order", list(self.group_members.keys()))
                 self.group_sl_tp = data.get("group_sl_tp", {})
+                self.group_styles = data.get("group_styles", {})
         except Exception as e:
             logger.warning(f"Failed to load position order: {e}")
 
@@ -852,6 +976,7 @@ class PositionsTable(QWidget):
                 "groups": self.group_members,
                 "group_order": self.group_order,
                 "group_sl_tp": self.group_sl_tp,
+                "group_styles": self.group_styles,
             }
 
             with open(path, "w") as f:
