@@ -87,6 +87,22 @@ STATUS_LABELS = {
     "watchdog_restart": "RESTARTING",
 }
 
+
+BANK_MAJORS_PACKAGE = [
+    "HDFCBANK", "ICICIBANK", "KOTAKBANK", "AXISBANK", "SBIN", "INDUSINDBK",
+    "AUBANK", "BANKBARODA", "FEDERALBNK", "IDFCFIRSTB", "PNB",
+]
+
+NIFTY_50_PACKAGE = [
+    "ADANIENT", "ADANIPORTS", "APOLLOHOSP", "ASIANPAINT", "AXISBANK", "BAJAJ-AUTO",
+    "BAJFINANCE", "BAJAJFINSV", "BEL", "BHARTIARTL", "CIPLA", "COALINDIA",
+    "DRREDDY", "EICHERMOT", "ETERNAL", "GRASIM", "HCLTECH", "HDFCBANK", "HDFCLIFE",
+    "HEROMOTOCO", "HINDALCO", "HINDUNILVR", "ICICIBANK", "ITC", "INDUSINDBK", "INFY",
+    "JSWSTEEL", "JIOFIN", "KOTAKBANK", "LT", "M&M", "MARUTI", "NTPC", "NESTLEIND",
+    "ONGC", "POWERGRID", "RELIANCE", "SBILIFE", "SHRIRAMFIN", "SBIN", "SUNPHARMA",
+    "TCS", "TATACONSUM", "TATAMOTORS", "TATASTEEL", "TECHM", "TITAN", "TRENT",
+    "ULTRACEMCO", "WIPRO",
+]
 STATUS_COLORS = {
     "MONITORING": C_LONG,
     "DATA LIVE": C_ACCENT,
@@ -368,6 +384,15 @@ class AtrScannerPanel(QWidget):
         self._tp_atr_mult_spin.setDecimals(1)
         self._tp_atr_mult_spin.setToolTip("Take-profit = Entry ± (ATR × multiplier). 2.0 = 1:2 R:R")
 
+        self._target_mode_combo = QComboBox()
+        self._target_mode_combo.addItem("ATR Multiple", "atr")
+        self._target_mode_combo.addItem("EMA 51 Cross (directional)", "ema51_cross")
+        self._target_mode_combo.setToolTip(
+            "ATR Multiple: fixed ATR-based TP.\n"
+            "EMA 51 Cross: long exits on cross above EMA 51, short exits on cross below EMA 51."
+        )
+        form_lay.addRow("TP Mode:", self._target_mode_combo)
+
         sl_tp_widget = QWidget()
         sl_tp_lay = QHBoxLayout(sl_tp_widget)
         sl_tp_lay.setContentsMargins(0, 0, 0, 0)
@@ -470,13 +495,26 @@ class AtrScannerPanel(QWidget):
 
         setup_cols.addWidget(watch_grp, 0, 1)
 
-        note = QLabel(
-            "ATR Dist: how many ATRs price must be\n"
-            "from EMA to qualify as extended.\n"
-            "CVD Z-Score: minimum CVD deviation."
-        )
-        note.setStyleSheet(f"color: {C_MUTED}; font-size: 10px; padding: 4px;")
-        symbol_col.addWidget(note)
+        package_widget = QWidget()
+        package_row = QHBoxLayout(package_widget)
+        package_row.setContentsMargins(0, 0, 0, 0)
+        package_row.setSpacing(6)
+
+        nifty50_btn = QPushButton("+ NIFTY 50")
+        nifty50_btn.setObjectName("add_btn")
+        nifty50_btn.setProperty("compact", True)
+        nifty50_btn.setFixedHeight(22)
+        nifty50_btn.clicked.connect(lambda: self._quick_add_package("NIFTY 50", NIFTY_50_PACKAGE))
+        package_row.addWidget(nifty50_btn)
+
+        bank_majors_btn = QPushButton("+ BANK MAJORS")
+        bank_majors_btn.setObjectName("add_btn")
+        bank_majors_btn.setProperty("compact", True)
+        bank_majors_btn.setFixedHeight(22)
+        bank_majors_btn.clicked.connect(lambda: self._quick_add_package("BANK MAJORS", BANK_MAJORS_PACKAGE))
+        package_row.addWidget(bank_majors_btn)
+        package_row.addStretch()
+        symbol_col.addWidget(package_widget)
 
         actions_row = QHBoxLayout()
         save_btn = QPushButton("SAVE SETUP")
@@ -690,6 +728,30 @@ class AtrScannerPanel(QWidget):
             return
         self._symbol_selector.setCurrentIndex(idx)
         self._on_add_symbol()
+
+    def _quick_add_package(self, package_name: str, package_symbols: list[str]):
+        added = 0
+        missing = 0
+
+        for symbol in package_symbols:
+            if symbol in self._pending_watchlist:
+                continue
+
+            idx = self._symbol_selector.findText(symbol)
+            if idx < 0:
+                missing += 1
+                continue
+
+            self._symbol_selector.setCurrentIndex(idx)
+            before = len(self._pending_watchlist)
+            self._on_add_symbol()
+            if len(self._pending_watchlist) > before:
+                added += 1
+
+        summary = f"{package_name}: added {added} symbols"
+        if missing:
+            summary += f" | unavailable: {missing}"
+        self._set_status(summary)
 
     def _on_remove_selected(self):
         selected = self._watchlist_table.selectedItems()
@@ -1132,6 +1194,7 @@ class AtrScannerPanel(QWidget):
                 "atr_extension_min": self._atr_extension_spin.value(),
                 "sl_atr_multiplier": self._sl_atr_mult_spin.value(),
                 "tp_atr_multiplier": self._tp_atr_mult_spin.value(),
+                "tp_target_mode": self._target_mode_combo.currentData(),
                 "strikes_above": self._strikes_above_spin.value(),
                 "strikes_below": self._strikes_below_spin.value(),
                 "min_confidence": self._min_confidence_spin.value(),
@@ -1172,6 +1235,9 @@ class AtrScannerPanel(QWidget):
         self._atr_extension_spin.setValue(float(defaults.get("atr_extension_min", 1.1)))
         self._sl_atr_mult_spin.setValue(float(defaults.get("sl_atr_multiplier", 1.5)))
         self._tp_atr_mult_spin.setValue(float(defaults.get("tp_atr_multiplier", 2.0)))
+        saved_target_mode = str(defaults.get("tp_target_mode", "atr"))
+        mode_index = self._target_mode_combo.findData(saved_target_mode)
+        self._target_mode_combo.setCurrentIndex(mode_index if mode_index >= 0 else 0)
         self._strikes_above_spin.setValue(int(defaults.get("strikes_above", 1)))
         self._strikes_below_spin.setValue(int(defaults.get("strikes_below", 1)))
         self._min_confidence_spin.setValue(float(defaults.get("min_confidence", 0.6)))
