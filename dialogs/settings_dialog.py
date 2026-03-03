@@ -140,36 +140,50 @@ class SettingsDialog(QDialog):
         tab = QWidget()
         layout = QVBoxLayout(tab)
         layout.setContentsMargins(15, 20, 15, 15)
+        layout.setSpacing(10)
 
         # ── Existing: Default Trading Values ──────────────────────────────────
         group = QGroupBox("Default Trading Values")
-        grid = QGridLayout(group)
-        grid.setHorizontalSpacing(15)
-        grid.setVerticalSpacing(14)
+        group_layout = QVBoxLayout(group)
+        group_layout.setContentsMargins(12, 10, 12, 10)
+        group_layout.setSpacing(8)
 
-        grid.addWidget(QLabel("Default Symbol:"), 0, 0)
+        top_row = QWidget()
+        top_row_layout = QGridLayout(top_row)
+        top_row_layout.setContentsMargins(0, 0, 0, 0)
+        top_row_layout.setHorizontalSpacing(10)
+        top_row_layout.setVerticalSpacing(8)
+
+        top_row_layout.addWidget(QLabel("Default Symbol:"), 0, 0)
         self.default_symbol = QComboBox()
         self.default_symbol.addItems(["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"])
-        grid.addWidget(self.default_symbol, 0, 1)
+        top_row_layout.addWidget(self.default_symbol, 0, 1)
 
-        grid.addWidget(QLabel("Default Product:"), 1, 0)
+        top_row_layout.addWidget(QLabel("Default Product:"), 0, 2)
         self.default_product = QComboBox()
         self.default_product.addItems(["MIS", "NRML"])
-        grid.addWidget(self.default_product, 1, 1)
+        top_row_layout.addWidget(self.default_product, 0, 3)
 
-        grid.addWidget(QLabel("Default Lots:"), 2, 0)
+        top_row_layout.addWidget(QLabel("Default Lots:"), 0, 4)
         self.default_lots = QSpinBox()
         self.default_lots.setRange(1, 100)
         self.default_lots.setSuffix(" lots")
-        grid.addWidget(self.default_lots, 2, 1)
+        self.default_lots.setMinimumWidth(110)
+        top_row_layout.addWidget(self.default_lots, 0, 5)
+
+        top_row_layout.setColumnStretch(1, 2)
+        top_row_layout.setColumnStretch(3, 2)
+        top_row_layout.setColumnStretch(5, 1)
+        group_layout.addWidget(top_row)
 
         layout.addWidget(group)
 
         # ── NEW: Quick Order Risk Defaults ────────────────────────────────────
         risk_group = QGroupBox("Quick Order Risk Defaults")
         risk_grid = QGridLayout(risk_group)
-        risk_grid.setHorizontalSpacing(15)
-        risk_grid.setVerticalSpacing(14)
+        risk_grid.setContentsMargins(12, 10, 12, 10)
+        risk_grid.setHorizontalSpacing(10)
+        risk_grid.setVerticalSpacing(8)
 
         risk_grid.addWidget(QLabel("SL per Lot (₹):"), 0, 0)
         self.order_sl_per_lot = QSpinBox()
@@ -180,9 +194,10 @@ class SettingsDialog(QDialog):
             "Default stop-loss in ₹ per lot. "
             "Dialog will set SL = this × number of lots."
         )
+        self.order_sl_per_lot.setMinimumWidth(120)
         risk_grid.addWidget(self.order_sl_per_lot, 0, 1)
 
-        risk_grid.addWidget(QLabel("Risk : Reward Ratio:"), 1, 0)
+        risk_grid.addWidget(QLabel("Risk : Reward Ratio:"), 0, 2)
         self.order_rr_ratio = QDoubleSpinBox()
         self.order_rr_ratio.setRange(0.5, 10.0)
         self.order_rr_ratio.setSingleStep(0.25)
@@ -191,14 +206,18 @@ class SettingsDialog(QDialog):
         self.order_rr_ratio.setToolTip(
             "TP = SL × this ratio.  1.5 means TP is 1.5× the SL amount."
         )
-        risk_grid.addWidget(self.order_rr_ratio, 1, 1)
+        self.order_rr_ratio.setMinimumWidth(100)
+        risk_grid.addWidget(self.order_rr_ratio, 0, 3)
+
+        risk_grid.setColumnStretch(1, 1)
+        risk_grid.setColumnStretch(3, 1)
 
         self.order_trailing_enabled = QCheckBox("Enable Trailing Stop-Loss in Quick Order")
         self.order_trailing_enabled.setChecked(True)
         self.order_trailing_enabled.setToolTip(
             "When unchecked the Trailing SL row is hidden in the Quick Order dialog."
         )
-        risk_grid.addWidget(self.order_trailing_enabled, 2, 0, 1, 2)
+        risk_grid.addWidget(self.order_trailing_enabled, 1, 0, 1, 4)
 
         layout.addWidget(risk_group)
 
