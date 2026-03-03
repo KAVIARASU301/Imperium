@@ -943,6 +943,7 @@ class AtrScannerPanel(QWidget):
     def _set_status(self, msg: str):
         self._status_label.setText(msg)
 
+
     def _run_simulator_backtest(self):
         if not self._pending_watchlist:
             self._set_status("No symbols in watchlist for simulator run.")
