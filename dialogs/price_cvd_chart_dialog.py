@@ -770,15 +770,21 @@ class PriceCVDChartDialog(QDialog):
                 cl_prev  = self._all_cvd_low[:sp];     cl_cur  = self._all_cvd_low[sp:]
 
                 if self._cvd_rebased and cvd_prev:
-                    rebase_offset = cvd_prev[-1]
-                    cvd_prev = [v - rebase_offset for v in cvd_prev]
-                    cvd_cur = [v - rebase_offset for v in cvd_cur]
-                    co_prev = [v - rebase_offset for v in co_prev]
-                    co_cur = [v - rebase_offset for v in co_cur]
-                    ch_prev = [v - rebase_offset for v in ch_prev]
-                    ch_cur = [v - rebase_offset for v in ch_cur]
-                    cl_prev = [v - rebase_offset for v in cl_prev]
-                    cl_cur = [v - rebase_offset for v in cl_cur]
+                    # Compare session deltas directly:
+                    # - previous session closes at 0
+                    # - current session opens at 0
+                    prev_offset = cvd_prev[-1]
+                    cur_offset = cvd_cur[0] if cvd_cur else prev_offset
+
+                    cvd_prev = [v - prev_offset for v in cvd_prev]
+                    cvd_cur = [v - cur_offset for v in cvd_cur]
+
+                    co_prev = [v - prev_offset for v in co_prev]
+                    co_cur = [v - cur_offset for v in co_cur]
+                    ch_prev = [v - prev_offset for v in ch_prev]
+                    ch_cur = [v - cur_offset for v in ch_cur]
+                    cl_prev = [v - prev_offset for v in cl_prev]
+                    cl_cur = [v - cur_offset for v in cl_cur]
             else:
                 self._price_day_sep.hide(); self._cvd_day_sep.hide()
                 xs_prev = []; px_prev = []; po_prev = []; ph_prev = []; pl_prev = []
@@ -878,8 +884,12 @@ class PriceCVDChartDialog(QDialog):
             if has_two and self._session_x_break is not None and self._cvd_rebased:
                 split = int(self._session_x_break)
                 if split > 0:
-                    rebase_offset = cvd[split - 1]
-                    cvd = [v - rebase_offset for v in cvd]
+                    prev_offset = cvd[split - 1]
+                    cur_offset = cvd[split] if split < len(cvd) else prev_offset
+                    cvd = [
+                        (v - prev_offset) if i < split else (v - cur_offset)
+                        for i, v in enumerate(cvd)
+                    ]
 
             self._render_overlays_with(xs, px, vol, cvd, ts)
             return
