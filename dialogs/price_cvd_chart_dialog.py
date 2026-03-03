@@ -652,7 +652,6 @@ class PriceCVDChartDialog(QDialog):
 
         tf       = self._selected_tf
         use_ohlc = (tf > 1)
-        n        = len(self._all_timestamps)
         sessions = sorted({ts.date() for ts in self._all_timestamps})
         has_two  = len(sessions) == 2
 
@@ -815,10 +814,12 @@ class PriceCVDChartDialog(QDialog):
             self.price_plot.setYRange(p_ymin, p_ymax, padding=0)
             self.cvd_plot.setYRange(c_ymin,   c_ymax, padding=0)
 
-            _ts_ov  = (self._all_timestamps[int(self._session_x_break):]
-                       if has_two and self._session_x_break else self._all_timestamps)
-            _px_ov  = px_cur; _vol_ov = vol_cur
-            _cvd_ov = cvd_cur; _xs_ov  = xs_cur
+            # In 2D mode overlays (EMA/VWAP) must span both sessions.
+            _ts_ov  = list(self._all_timestamps)
+            _px_ov  = list(self._all_price)
+            _vol_ov = list(self._all_volume)
+            _cvd_ov = list(self._all_cvd)
+            _xs_ov  = list(xs_all)
 
         self._render_overlays_with(_xs_ov, _px_ov, _vol_ov, _cvd_ov, _ts_ov)
 
@@ -826,7 +827,6 @@ class PriceCVDChartDialog(QDialog):
         if not self._all_timestamps: return
         tf       = self._selected_tf
         use_ohlc = tf > 1
-        n        = len(self._all_timestamps)
         sessions = sorted({ts.date() for ts in self._all_timestamps})
         has_two  = len(sessions) == 2
 
@@ -841,9 +841,13 @@ class PriceCVDChartDialog(QDialog):
             xs = [_m(t) + offset for t in ts]
         else:
             offset = 0.5 if use_ohlc else 0.0
-            split  = int(self._session_x_break) if has_two and self._session_x_break else 0
-            ts     = self._all_timestamps[split:]
-            xs     = [split + i + offset for i in range(len(ts))]
+            ts     = list(self._all_timestamps)
+            xs     = [i + offset for i in range(len(ts))]
+            px     = list(self._all_price)
+            vol    = list(self._all_volume)
+            cvd    = list(self._all_cvd)
+            self._render_overlays_with(xs, px, vol, cvd, ts)
+            return
 
         px  = self._all_price[split:]
         vol = self._all_volume[split:]
