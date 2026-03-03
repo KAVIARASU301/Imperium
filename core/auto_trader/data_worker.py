@@ -198,6 +198,8 @@ class _DataFetchWorker(QObject):
         try:
             if self._cancelled:
                 return
+
+            # ── Step 1: Always fetch at 1-minute granularity ────────────────
             df = self._load_minute_history()
             if self._cancelled:
                 return
@@ -205,8 +207,21 @@ class _DataFetchWorker(QObject):
                 self.error.emit("empty_df")
                 return
 
+            # ── Step 2: Build CVD at 1-minute resolution FIRST ──────────────
+            # This is the critical step: we capture every 1m bar's delta
+            # (buy/sell pressure) before aggregating to higher TFs.
+            # build_cvd_ohlc() computes per-bar delta → daily cumsum → OHLC.
+            cvd_1m = CVDHistoricalBuilder.build_cvd_ohlc(df)
+            if self._cancelled:
+                return
+
+            cvd_1m["session"] = cvd_1m.index.date
+
+            # ── Step 3: Resample to target timeframe ─────────────────────────
             if self.timeframe_minutes > 1:
                 rule = f"{self.timeframe_minutes}min"
+
+                # Resample price OHLCV
                 df = df.resample(rule).agg(
                     {
                         "open": "first",
@@ -219,11 +234,29 @@ class _DataFetchWorker(QObject):
                 df["volume"] = df["volume"].fillna(0)
                 df = df.dropna(subset=["open", "high", "low", "close"])
 
-            cvd_df = CVDHistoricalBuilder.build_cvd_ohlc(df)
-            if self._cancelled:
-                return
-            cvd_df["session"] = cvd_df.index.date
+                # Resample CVD from 1m using OHLC of the cumulative CVD values.
+                # This is correct because CVD is a running cumsum — treating it
+                # as a price series and taking first/max/min/last gives the real
+                # range of buyer/seller dominance within each higher-TF bar.
+                cvd_df = (
+                    cvd_1m
+                    .drop(columns=["session"], errors="ignore")
+                    .resample(rule)
+                    .agg(
+                        open=("open", "first"),
+                        high=("high", "max"),
+                        low=("low", "min"),
+                        close=("close", "last"),
+                    )
+                    .dropna(subset=["open", "high", "low", "close"])
+                )
+                cvd_df["session"] = cvd_df.index.date
 
+            else:
+                # 1-minute: use the 1m CVD directly
+                cvd_df = cvd_1m
+
+            # ── Step 4: Session filtering and output (unchanged) ─────────────
             sessions = sorted(cvd_df["session"].unique())
             if not sessions:
                 self.error.emit("no_sessions")
@@ -231,10 +264,11 @@ class _DataFetchWorker(QObject):
 
             prev_close = 0.0
             previous_day_cpr = None
+
             if len(sessions) >= 2:
                 prev_data = cvd_df[cvd_df["session"] == sessions[-2]]
                 if not prev_data.empty:
-                    prev_close = prev_data["close"].iloc[-1]
+                    prev_close = float(prev_data["close"].iloc[-1])
 
             df["session"] = df.index.date
 
@@ -251,6 +285,7 @@ class _DataFetchWorker(QObject):
 
             if self._cancelled:
                 return
+
             self.result_ready.emit(cvd_out, price_out, prev_close, previous_day_cpr)
 
         except Exception as exc:
