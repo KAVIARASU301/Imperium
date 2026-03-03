@@ -336,6 +336,7 @@ class ImperiumMainWindow(QMainWindow):
         self.strike_ladder.visible_tokens_changed.connect(self._update_market_subscriptions)
 
     def _setup_position_manager(self):
+        self.inline_positions_table.set_position_manager(self.position_manager)
         self.position_manager.positions_updated.connect(self._on_positions_updated)
         self.position_manager.position_added.connect(self._on_position_added)
         self.position_manager.position_removed.connect(self._on_position_removed)
@@ -1763,6 +1764,7 @@ class ImperiumMainWindow(QMainWindow):
         self.position_manager.update_sl_tp_for_position(
             tradingsymbol, sl_price, tp_price, tsl_value
         )
+        self.inline_positions_table._save_table_state()
 
     def _show_pending_orders_dialog(self):
         self.order_dialog_service.show_pending_orders_dialog()

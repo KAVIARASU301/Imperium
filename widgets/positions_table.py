@@ -61,6 +61,9 @@ class PositionsTable(QWidget):
         self.group_order: List[str] = []
         self.group_sl_tp: Dict[str, Dict[str, float]] = {}
         self.group_styles: Dict[str, Dict[str, str]] = {}
+        self.individual_sl_tp: Dict[str, Dict[str, Optional[float]]] = {}
+        self.position_manager = None
+        self._individual_sl_tp_restored = False
 
         self._hovered_row = -1
 
@@ -400,6 +403,12 @@ class PositionsTable(QWidget):
 
         self._prune_empty_groups()
         self._rebuild_table_from_order()
+
+        if not self._individual_sl_tp_restored:
+            self._restore_individual_sl_tp()
+
+    def set_position_manager(self, position_manager):
+        self.position_manager = position_manager
 
     def _rebuild_table_from_order(self):
         self.table.setUpdatesEnabled(False)
@@ -1076,6 +1085,7 @@ class PositionsTable(QWidget):
                 self.group_order = data.get("group_order", list(self.group_members.keys()))
                 self.group_sl_tp = data.get("group_sl_tp", {})
                 self.group_styles = data.get("group_styles", {})
+                self.individual_sl_tp = data.get("individual_sl_tp", {})
                 for group_name in list(self.group_styles.keys()):
                     style = self.group_styles.get(group_name, {})
                     self.group_styles[group_name] = {
@@ -1096,12 +1106,69 @@ class PositionsTable(QWidget):
                 "group_order": self.group_order,
                 "group_sl_tp": self.group_sl_tp,
                 "group_styles": self.group_styles,
+                "individual_sl_tp": self._collect_individual_sl_tp(),
             }
 
             with open(path, "w") as f:
                 json.dump(payload, f, indent=2)
         except Exception as e:
             logger.warning(f"Failed to save position order: {e}")
+
+    def _collect_individual_sl_tp(self) -> Dict[str, Dict[str, Optional[float]]]:
+        individual_sl_tp: Dict[str, Dict[str, Optional[float]]] = {}
+        for symbol, pos_data in self.positions.items():
+            sl = pos_data.get("stop_loss_price")
+            tp = pos_data.get("target_price")
+            tsl = pos_data.get("trailing_stop_loss")
+            if sl or tp or tsl:
+                individual_sl_tp[symbol] = {"sl": sl, "tp": tp, "tsl": tsl}
+        return individual_sl_tp
+
+    def _restore_individual_sl_tp(self):
+        """Called once after first positions refresh on startup."""
+        self._individual_sl_tp_restored = True
+
+        if not self.individual_sl_tp:
+            return
+
+        if self.position_manager is None:
+            logger.warning("Skipping individual SL/TP restore — position manager not configured")
+            return
+
+        for symbol, values in self.individual_sl_tp.items():
+            pos = self.position_manager.get_position(symbol)
+            if pos is None:
+                logger.info(f"Skipping SL/TP restore for {symbol} — position not found in broker")
+                continue
+
+            sl = values.get("sl")
+            tp = values.get("tp")
+            tsl = values.get("tsl")
+            current_price = getattr(pos, "ltp", None)
+
+            if current_price is not None and current_price > 0:
+                qty = getattr(pos, "quantity", 0)
+                if sl:
+                    if (qty > 0 and current_price <= sl) or (qty < 0 and current_price >= sl):
+                        logger.warning(
+                            "⚠️ %s LTP %s already crossed saved SL %s — skipping restore",
+                            symbol,
+                            current_price,
+                            sl,
+                        )
+                        continue
+                if tp:
+                    if (qty > 0 and current_price >= tp) or (qty < 0 and current_price <= tp):
+                        logger.warning(
+                            "⚠️ %s LTP %s already crossed saved TP %s — skipping restore",
+                            symbol,
+                            current_price,
+                            tp,
+                        )
+                        continue
+
+            self.position_manager.update_sl_tp_for_position(symbol, sl, tp, tsl)
+            logger.info(f"✅ Restored SL/TP for {symbol}: SL={sl}, TP={tp}, TSL={tsl}")
 
     def _load_column_widths(self):
         try:

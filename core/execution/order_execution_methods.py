@@ -308,6 +308,8 @@ class OrderExecutionMethods:
                     anchored_tp,
                     anchored_tsl,
                 )
+                if getattr(self.window, "inline_positions_table", None):
+                    self.window.inline_positions_table._save_table_state()
                 logger.info(
                     "✅ Applied fill-anchored SL/TP for %s | SL=%s TP=%s TSL=%s",
                     contract_to_trade.tradingsymbol,
