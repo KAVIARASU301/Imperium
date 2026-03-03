@@ -1,20 +1,20 @@
 /* Color Theme Swatches in Hex */
-.color-theme_blade-runner-wallpaper-1920x1080-luxury-blade-runner-wallpapers-c2b7e291a0-wallpapertag-this-month-of-blade-runner-wallpaper-1920x1080-1-hex { color: #010326; }
-.color-theme_blade-runner-wallpaper-1920x1080-luxury-blade-runner-wallpapers-c2b7e291a0-wallpapertag-this-month-of-blade-runner-wallpaper-1920x1080-2-hex { color: #024959; }
-.color-theme_blade-runner-wallpaper-1920x1080-luxury-blade-runner-wallpapers-c2b7e291a0-wallpapertag-this-month-of-blade-runner-wallpaper-1920x1080-3-hex { color: #208C8C; }
-.color-theme_blade-runner-wallpaper-1920x1080-luxury-blade-runner-wallpapers-c2b7e291a0-wallpapertag-this-month-of-blade-runner-wallpaper-1920x1080-4-hex { color: #89D9C2; }
-.color-theme_blade-runner-wallpaper-1920x1080-luxury-blade-runner-wallpapers-c2b7e291a0-wallpapertag-this-month-of-blade-runner-wallpaper-1920x1080-5-hex { color: #0D0D0D; }
+.Vintage-1-1-hex { color: #074358; }
+.Vintage-1-2-hex { color: #458985; }
+.Vintage-1-3-hex { color: #D7D6A5; }
+.Vintage-1-4-hex { color: #DBA67B; }
+.Vintage-1-5-hex { color: #A55C55; }
 
 /* Color Theme Swatches in RGBA */
-.color-theme_blade-runner-wallpaper-1920x1080-luxury-blade-runner-wallpapers-c2b7e291a0-wallpapertag-this-month-of-blade-runner-wallpaper-1920x1080-1-rgba { color: rgba(1, 3, 38, 1); }
-.color-theme_blade-runner-wallpaper-1920x1080-luxury-blade-runner-wallpapers-c2b7e291a0-wallpapertag-this-month-of-blade-runner-wallpaper-1920x1080-2-rgba { color: rgba(2, 73, 89, 1); }
-.color-theme_blade-runner-wallpaper-1920x1080-luxury-blade-runner-wallpapers-c2b7e291a0-wallpapertag-this-month-of-blade-runner-wallpaper-1920x1080-3-rgba { color: rgba(32, 140, 140, 1); }
-.color-theme_blade-runner-wallpaper-1920x1080-luxury-blade-runner-wallpapers-c2b7e291a0-wallpapertag-this-month-of-blade-runner-wallpaper-1920x1080-4-rgba { color: rgba(137, 217, 194, 1); }
-.color-theme_blade-runner-wallpaper-1920x1080-luxury-blade-runner-wallpapers-c2b7e291a0-wallpapertag-this-month-of-blade-runner-wallpaper-1920x1080-5-rgba { color: rgba(13, 13, 13, 1); }
+.Vintage-1-1-rgba { color: rgba(7, 66, 87, 1); }
+.Vintage-1-2-rgba { color: rgba(68, 137, 133, 1); }
+.Vintage-1-3-rgba { color: rgba(214, 214, 165, 1); }
+.Vintage-1-4-rgba { color: rgba(219, 165, 123, 1); }
+.Vintage-1-5-rgba { color: rgba(165, 91, 84, 1); }
 
 /* Color Theme Swatches in HSLA */
-.color-theme_blade-runner-wallpaper-1920x1080-luxury-blade-runner-wallpapers-c2b7e291a0-wallpapertag-this-month-of-blade-runner-wallpaper-1920x1080-1-hsla { color: hsla(236, 94, 7, 1); }
-.color-theme_blade-runner-wallpaper-1920x1080-luxury-blade-runner-wallpapers-c2b7e291a0-wallpapertag-this-month-of-blade-runner-wallpaper-1920x1080-2-hsla { color: hsla(191, 95, 17, 1); }
-.color-theme_blade-runner-wallpaper-1920x1080-luxury-blade-runner-wallpapers-c2b7e291a0-wallpapertag-this-month-of-blade-runner-wallpaper-1920x1080-3-hsla { color: hsla(180, 62, 33, 1); }
-.color-theme_blade-runner-wallpaper-1920x1080-luxury-blade-runner-wallpapers-c2b7e291a0-wallpapertag-this-month-of-blade-runner-wallpaper-1920x1080-4-hsla { color: hsla(162, 51, 69, 1); }
-.color-theme_blade-runner-wallpaper-1920x1080-luxury-blade-runner-wallpapers-c2b7e291a0-wallpapertag-this-month-of-blade-runner-wallpaper-1920x1080-5-hsla { color: hsla(0, 0, 5, 1); }
+.Vintage-1-1-hsla { color: hsla(195, 85, 18, 1); }
+.Vintage-1-2-hsla { color: hsla(176, 33, 40, 1); }
+.Vintage-1-3-hsla { color: hsla(58, 38, 74, 1); }
+.Vintage-1-4-hsla { color: hsla(26, 57, 67, 1); }
+.Vintage-1-5-hsla { color: hsla(5, 32, 49, 1); }
