@@ -231,6 +231,7 @@ class MainWindowShell:
         menu_actions["cvd_chart"].triggered.connect(window._show_cvd_chart_dialog)
         menu_actions["cvd_market_monitor"].triggered.connect(window._show_cvd_market_monitor_dialog)
         menu_actions["cvd_symbol_sets"].triggered.connect(window._show_cvd_symbol_set_dialog)
+        menu_actions["price_cvd_chart"].triggered.connect(window._show_price_cvd_chart_dialog)
         menu_actions["fii_dii_data"].triggered.connect(window._show_fii_dii_dialog)
 
     @staticmethod

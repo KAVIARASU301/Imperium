@@ -34,24 +34,31 @@ def create_menu_bar(parent) -> Tuple[QMenuBar, Dict[str, QAction]]:
 
     # -------- VIEW --------
     view_menu = menubar.addMenu("&View")
-    menu_actions["watchlist"] = view_menu.addAction("Watchlist")
-    menu_actions["watchlist"].setShortcut("Ctrl+Shift+W")
-    menu_actions["positions"] = view_menu.addAction("Open Positions")
-    menu_actions["pending_orders"] = view_menu.addAction("Pending Orders")
     menu_actions["orders"] = view_menu.addAction("Order History")
     menu_actions["pnl_history"] = view_menu.addAction("P&L History")
     menu_actions["performance"] = view_menu.addAction("Performance")
+    menu_actions["positions"] = view_menu.addAction("Open Positions")
+    menu_actions["pending_orders"] = view_menu.addAction("Pending Orders")
+    menu_actions["watchlist"] = view_menu.addAction("Watchlist")
+    menu_actions["watchlist"].setShortcut("Ctrl+Shift+W")
 
     # -------- TOOLS --------
     tools_menu = menubar.addMenu("&Tools")
 
+    menu_actions["price_cvd_chart"] = tools_menu.addAction("Price & CVD Chart")
+    menu_actions["price_cvd_chart"].setShortcut("Ctrl+Shift+P")
+
+    menu_actions["strategy_builder"] = tools_menu.addAction("Strategy Builder")
+    menu_actions["strategy_builder"].setShortcut("Ctrl+Shift+B")
+
     menu_actions["market_monitor"] = tools_menu.addAction("Market Monitor")
     menu_actions["market_monitor"].setShortcut("Ctrl+M")
+    tools_menu.addSeparator()
 
-    menu_actions["cvd_chart"] = tools_menu.addAction("Auto Trader")
-    menu_actions["cvd_chart"].setShortcut("Ctrl+C")
+    # menu_actions["cvd_chart"] = tools_menu.addAction("Auto Trader")
+    # menu_actions["cvd_chart"].setShortcut("Ctrl+Shift+A")
 
-    menu_actions["cvd_market_monitor"] = tools_menu.addAction("CVD Index Chart")
+    menu_actions["cvd_market_monitor"] = tools_menu.addAction("CVD Multi Index Chart")
     menu_actions["cvd_market_monitor"].setShortcut("Ctrl+D")
 
     menu_actions["cvd_symbol_sets"] = tools_menu.addAction("CVD Multi Symbol Chart")
@@ -61,10 +68,6 @@ def create_menu_bar(parent) -> Tuple[QMenuBar, Dict[str, QAction]]:
     menu_actions["option_chain"].setShortcut("Ctrl+O")
 
     tools_menu.addAction(menu_actions["option_chain"])
-
-    menu_actions["strategy_builder"] = tools_menu.addAction("Strategy Builder")
-    menu_actions["strategy_builder"].setShortcut("Ctrl+Shift+B")
-
     tools_menu.addSeparator()
 
     menu_actions["fii_dii_data"] = tools_menu.addAction("FII DII Data")

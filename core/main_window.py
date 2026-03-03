@@ -199,6 +199,7 @@ class ImperiumMainWindow(QMainWindow):
         self.cvd_symbols = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"]
         self.active_cvd_tokens: set[int] = set()
         self.cvd_symbol_set_manager = CVDSymbolSetManager(base_dir=Path.home() / ".imperium_desk")
+        self._price_cvd_chart_dialogs: list = []   # Tools → Price & CVD Chart
 
         self._last_subscription_set: set[int] = set()
 
@@ -1815,6 +1816,78 @@ class ImperiumMainWindow(QMainWindow):
             parent=self
         )
         dlg.show()
+
+    def _show_price_cvd_chart_dialog(self):
+        """
+        Tools → Price & CVD Chart
+        Opens a lightweight standalone Price + CVD chart for the currently
+        selected symbol.  Multiple instances are allowed (one per open dialog).
+        """
+        from dialogs.price_cvd_chart_dialog import PriceCVDChartDialog
+        import logging
+        logger = logging.getLogger(__name__)
+
+        try:
+            current_settings = self.header.get_current_settings()
+            symbol = current_settings.get("symbol")
+
+            if not symbol:
+                from PySide6.QtWidgets import QMessageBox
+                QMessageBox.warning(self, "Price & CVD Chart", "No symbol selected.")
+                return
+
+            cvd_token, _, suffix = self._get_cvd_token(symbol)
+            if not cvd_token:
+                from PySide6.QtWidgets import QMessageBox
+                QMessageBox.warning(self, "Price & CVD Chart",
+                                    f"No futures token found for {symbol}.")
+                return
+
+            full_symbol = f"{symbol}{suffix}"
+
+            # Reuse an already-open dialog for the same token if one exists
+            for dlg in list(self._price_cvd_chart_dialogs):
+                try:
+                    if (
+                        not dlg.isHidden()
+                        and getattr(dlg, "instrument_token", None) == cvd_token
+                    ):
+                        dlg.raise_()
+                        dlg.activateWindow()
+                        return
+                except RuntimeError:
+                    # C++ object already deleted — prune the list
+                    self._price_cvd_chart_dialogs.remove(dlg)
+
+            dlg = PriceCVDChartDialog(
+                kite=self.real_kite_client,
+                instrument_token=cvd_token,
+                symbol=full_symbol,
+                parent=self,
+            )
+
+            # Clean up list entry when dialog closes
+            dlg.destroyed.connect(
+                lambda obj=dlg: self._price_cvd_chart_dialogs.remove(obj)
+                if obj in self._price_cvd_chart_dialogs else None
+            )
+
+            self._price_cvd_chart_dialogs.append(dlg)
+            dlg.show()
+            dlg.raise_()
+            dlg.activateWindow()
+
+            logger.info(
+                "[PriceCVDChart] Opened for %s (token %s)", full_symbol, cvd_token
+            )
+
+        except Exception as exc:
+            logger.error("Failed to open Price & CVD Chart dialog", exc_info=True)
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.critical(
+                self, "Price & CVD Chart Error",
+                f"Could not open chart:\n{exc}"
+            )
 
 
     def _on_market_monitor_closed(self, dialog: QDialog):
