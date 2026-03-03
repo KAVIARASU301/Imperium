@@ -325,6 +325,7 @@ class PriceCVDChartDialog(QDialog):
         self.price_plot.showGrid(x=True, y=True, alpha=0.06)
         self.price_plot.setMenuEnabled(False)
         self.price_plot.setMinimumHeight(200)
+        self.price_plot.getViewBox().setAutoVisible(y=True)
 
         py_ax = self.price_plot.getAxis("left")
         py_ax.setWidth(72)
@@ -359,8 +360,8 @@ class PriceCVDChartDialog(QDialog):
         self._price_hline = pg.InfiniteLine(angle=0,  movable=False,
                                             pen=pg.mkPen("#FFFFFF", width=0.6, style=Qt.DotLine))
         self._price_vline.hide(); self._price_hline.hide()
-        self.price_plot.addItem(self._price_vline)
-        self.price_plot.addItem(self._price_hline)
+        self.price_plot.addItem(self._price_vline, ignoreBounds=True)
+        self.price_plot.addItem(self._price_hline, ignoreBounds=True)
 
         root.addWidget(self.price_plot, 3)
 
@@ -372,6 +373,7 @@ class PriceCVDChartDialog(QDialog):
         self.cvd_plot.showGrid(x=True, y=True, alpha=0.06)
         self.cvd_plot.setMenuEnabled(False)
         self.cvd_plot.setMinimumHeight(150)
+        self.cvd_plot.getViewBox().setAutoVisible(y=True)
 
         cy_ax = self.cvd_plot.getAxis("left")
         cy_ax.setWidth(72)
@@ -410,8 +412,8 @@ class PriceCVDChartDialog(QDialog):
         self._cvd_hline = pg.InfiniteLine(angle=0,  movable=False,
                                           pen=pg.mkPen("#FFFFFF", width=0.6, style=Qt.DotLine))
         self._cvd_vline.hide(); self._cvd_hline.hide()
-        self.cvd_plot.addItem(self._cvd_vline)
-        self.cvd_plot.addItem(self._cvd_hline)
+        self.cvd_plot.addItem(self._cvd_vline, ignoreBounds=True)
+        self.cvd_plot.addItem(self._cvd_hline, ignoreBounds=True)
 
         root.addWidget(self.cvd_plot, 2)
 
