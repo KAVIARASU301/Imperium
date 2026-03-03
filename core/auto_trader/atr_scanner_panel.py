@@ -213,6 +213,7 @@ class AtrScannerPanel(QWidget):
         self.kite = kite
         self._settings = QSettings("ImperiumDesk", "AtrScannerPanel")
         self._automation_enabled = False
+        self._runtime_enabled = True
         self._pending_watchlist: dict[str, dict[str, float | int]] = {}
 
         # Engine
@@ -1189,6 +1190,15 @@ class AtrScannerPanel(QWidget):
         self._save_setup_state()
 
     def _apply_automation_state(self, initial: bool):
+        if not self._runtime_enabled:
+            self.engine.remove_all()
+            self._symbol_tokens.clear()
+            for symbol in self._pending_watchlist.keys():
+                self._update_watchlist_status(symbol, STATUS_LABELS["queued"])
+            if not initial:
+                self._set_status("Automation suspended in Manual mode.")
+            return
+
         if self._automation_enabled:
             if not self._instrument_data:
                 if not initial:
@@ -1349,6 +1359,21 @@ class AtrScannerPanel(QWidget):
                 len(self._pending_watchlist),
             )
             self._apply_automation_state(initial=True)
+
+    def set_runtime_enabled(self, enabled: bool):
+        """Hard runtime gate controlled by MainWindow layout mode."""
+        enabled = bool(enabled)
+        if self._runtime_enabled == enabled:
+            return
+
+        self._runtime_enabled = enabled
+        self._automation_toggle.setEnabled(enabled)
+        if enabled:
+            self._set_status("Auto Trader runtime enabled.")
+        else:
+            self._set_status("Auto Trader runtime disabled in Manual mode.")
+
+        self._apply_automation_state(initial=False)
 
     def _reload_symbol_selector(self):
         current = self._symbol_selector.currentText().strip().upper()
