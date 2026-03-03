@@ -1823,14 +1823,16 @@ class ImperiumMainWindow(QMainWindow):
         Opens a lightweight standalone Price + CVD chart for the currently
         selected symbol.  Multiple instances are allowed (one per open dialog).
         """
+        current_settings = self.header.get_current_settings()
+        symbol = current_settings.get("symbol")
+        self._open_price_cvd_chart_for_symbol(symbol)
+
+    def _open_price_cvd_chart_for_symbol(self, symbol: Optional[str]):
+        """Open (or focus) Price & CVD chart dialog for a symbol."""
         from dialogs.price_cvd_chart_dialog import PriceCVDChartDialog
-        import logging
-        logger = logging.getLogger(__name__)
 
         try:
-            current_settings = self.header.get_current_settings()
-            symbol = current_settings.get("symbol")
-
+            symbol = (symbol or "").upper()
             if not symbol:
                 from PySide6.QtWidgets import QMessageBox
                 QMessageBox.warning(self, "Price & CVD Chart", "No symbol selected.")
@@ -1839,8 +1841,7 @@ class ImperiumMainWindow(QMainWindow):
             cvd_token, _, suffix = self._get_cvd_token(symbol)
             if not cvd_token:
                 from PySide6.QtWidgets import QMessageBox
-                QMessageBox.warning(self, "Price & CVD Chart",
-                                    f"No futures token found for {symbol}.")
+                QMessageBox.warning(self, "Price & CVD Chart", f"No futures token found for {symbol}.")
                 return
 
             full_symbol = f"{symbol}{suffix}"
@@ -1865,8 +1866,6 @@ class ImperiumMainWindow(QMainWindow):
                 symbol=full_symbol,
                 parent=self,
             )
-
-            # Clean up list entry when dialog closes
             dlg.destroyed.connect(
                 lambda obj=dlg: self._price_cvd_chart_dialogs.remove(obj)
                 if obj in self._price_cvd_chart_dialogs else None
@@ -1877,17 +1876,12 @@ class ImperiumMainWindow(QMainWindow):
             dlg.raise_()
             dlg.activateWindow()
 
-            logger.info(
-                "[PriceCVDChart] Opened for %s (token %s)", full_symbol, cvd_token
-            )
+            logger.info("[PriceCVDChart] Opened for %s (token %s)", full_symbol, cvd_token)
 
         except Exception as exc:
             logger.error("Failed to open Price & CVD Chart dialog", exc_info=True)
             from PySide6.QtWidgets import QMessageBox
-            QMessageBox.critical(
-                self, "Price & CVD Chart Error",
-                f"Could not open chart:\n{exc}"
-            )
+            QMessageBox.critical(self, "Price & CVD Chart Error", f"Could not open chart:\n{exc}")
 
 
     def _on_market_monitor_closed(self, dialog: QDialog):
@@ -2024,29 +2018,10 @@ class ImperiumMainWindow(QMainWindow):
         )
 
     def _on_strike_chart_requested(self, contract: Contract):
-        """Route strike chart requests to the ATR Scanner panel instead of a popup."""
+        """Open Price & CVD chart from a Strike Ladder chart-icon click."""
         if not contract:
             return
-
-        # ATR scanner must use mapped futures tokens from loaded NFO instruments.
-        symbol = (contract.symbol or "").upper()
-        cvd_token = self._get_nearest_future_token(symbol)
-        if not cvd_token:
-            logger.warning("[CVD] No futures token available for %s", symbol)
-            self._publish_status(f"No active futures token found for {symbol}", 3000, level="error")
-            return
-
-        self.cvd_engine.register_token(cvd_token)
-        self.active_cvd_tokens.add(cvd_token)
-        self._update_market_subscriptions()
-
-        panel = getattr(self, "auto_trader_embed", None)
-        if panel and hasattr(panel, "add_symbol_programmatic"):
-            panel.add_symbol_programmatic(symbol, cvd_token)
-            if hasattr(self, "center_stack"):
-                self.center_stack.setCurrentIndex(1)
-        else:
-            logger.warning("[CVD] Strike chart requested but ATR Scanner panel not available: %s", symbol)
+        self._open_price_cvd_chart_for_symbol(contract.symbol)
     # =========================================================================
     # SECTION 15: QUICK ORDER & SINGLE STRIKE
     # =========================================================================
