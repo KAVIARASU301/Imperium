@@ -687,17 +687,16 @@ class ImperiumMainWindow(QMainWindow):
         if not hasattr(self, "center_stack"):
             return
 
-        panel = getattr(self, "auto_trader_embed", None)
-
         if selected_mode == "auto":
             if self._ensure_center_auto_trader_widget():
-                panel = getattr(self, "auto_trader_embed", None)
-                if panel and hasattr(panel, "set_runtime_enabled"):
-                    panel.set_runtime_enabled(True)
                 self.center_stack.setCurrentIndex(1)
+                panel = getattr(self, "auto_trader_embed", None)
+                if panel is not None and hasattr(panel, "resume"):
+                    panel.resume()
         else:
-            if panel and hasattr(panel, "set_runtime_enabled"):
-                panel.set_runtime_enabled(False)
+            panel = getattr(self, "auto_trader_embed", None)
+            if panel is not None and hasattr(panel, "suspend"):
+                panel.suspend()
             self.center_stack.setCurrentIndex(0)
 
     def _show_settings(self):

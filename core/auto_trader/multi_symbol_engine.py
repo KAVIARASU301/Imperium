@@ -170,6 +170,20 @@ class SymbolWorker(QObject):
         except RuntimeError:
             pass
 
+    @Slot()
+    def pause(self):
+        """Suspend polling without destroying state. Called when app goes to Manual mode."""
+        if self._refresh_timer:
+            self._refresh_timer.stop()
+        logger.debug("[WORKER] %s paused", self.symbol)
+
+    @Slot()
+    def resume(self):
+        """Restart polling. Called when app returns to Auto mode."""
+        if self._active and self._refresh_timer:
+            self._refresh_timer.start(self.REFRESH_INTERVAL_MS)
+        logger.debug("[WORKER] %s resumed", self.symbol)
+
     def _run_scan(self):
         if not self._active:
             return
@@ -544,6 +558,26 @@ class MultiSymbolEngine(QObject):
             worker.detector.ATR_EXTENSION_THRESHOLD = float(params["atr_extension_min"])
         if "timeframe_minutes" in params:
             worker.detector.timeframe_minutes = int(params["timeframe_minutes"])
+
+    def pause_all(self):
+        """
+        Freeze all background activity without destroying workers.
+        Called when layout switches to Manual mode.
+        Institutional pattern: 'trading halt' — positions preserved, scanning stopped.
+        """
+        self._watchdog.stop()
+        self._session_reset_timer.stop()
+        for worker in self._workers.values():
+            QMetaObject.invokeMethod(worker, "pause", Qt.QueuedConnection)
+        logger.info("[ENGINE] All workers paused (manual mode)")
+
+    def resume_all(self):
+        """Unfreeze all workers. Called when layout switches back to Auto mode."""
+        self._watchdog.start()
+        self._session_reset_timer.start()
+        for worker in self._workers.values():
+            QMetaObject.invokeMethod(worker, "resume", Qt.QueuedConnection)
+        logger.info("[ENGINE] All workers resumed (auto mode)")
 
     def _check_worker_health(self):
         stale_threshold = timedelta(minutes=4)

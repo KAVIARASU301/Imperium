@@ -1376,6 +1376,26 @@ class AtrScannerPanel(QWidget):
 
         self._apply_automation_state(initial=False)
 
+    def suspend(self):
+        """
+        Called by main_window when switching TO manual mode.
+        Stops all background timers and freezes the engine.
+        Zero CPU cost while hidden.
+        """
+        self._uptime_timer.stop()
+        self.engine.pause_all()
+        logger.info("[SCANNER] Suspended — manual mode active")
+
+    def resume(self):
+        """
+        Called by main_window when switching TO auto mode.
+        Restarts timers and re-activates engine workers.
+        """
+        if not self._uptime_timer.isActive():
+            self._uptime_timer.start()
+        self.engine.resume_all()
+        logger.info("[SCANNER] Resumed — auto mode active")
+
     def _reload_symbol_selector(self):
         current = self._symbol_selector.currentText().strip().upper()
         self._symbol_selector.blockSignals(True)
