@@ -63,16 +63,16 @@ from core.cvd.cvd_historical import CVDHistoricalBuilder
 
 logger = logging.getLogger(__name__)
 
-# ── Color tokens ─────────────────────────────────────────────────────────────
-C_BG        = "#0D0F17"
-C_PANEL     = "#13161F"
-C_BORDER    = "#1E2535"
+# ── Color tokens (aligned with global Imperium theme) ───────────────────────
+C_BG        = "#071021"
+C_PANEL     = "#1E2230"
+C_BORDER    = "#3A4458"
 C_TEXT      = "#D0D4E0"
 C_MUTED     = "#5A6070"
 C_LONG      = "#00C896"   # institutional green — profit/long
 C_SHORT     = "#FF4560"   # institutional red — loss/short
 C_WARN      = "#FFB800"
-C_ACCENT    = "#4A9EFF"
+C_ACCENT    = "#29C7C9"
 C_CHOP      = "#FF6B35"   # orange = chop-filtered signal
 
 STATUS_LABELS = {
@@ -142,7 +142,7 @@ BASE_STYLE = f"""
         background: {C_PANEL};
         border: 1px solid {C_BORDER};
         gridline-color: {C_BORDER};
-        selection-background-color: #1E2D40;
+        selection-background-color: #232E42;
     }}
     QHeaderView::section {{
         background: {C_BG};
