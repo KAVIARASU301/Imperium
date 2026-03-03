@@ -16,6 +16,7 @@ from typing import Optional
 from PySide6.QtCore import QObject, QTimer, Slot
 
 from core.auto_trader.multi_symbol_engine import AtrSignalEvent
+from core.auto_trader.targeting import compute_target_price
 from utils.data_models import OptionType
 
 logger = logging.getLogger(__name__)
@@ -115,6 +116,7 @@ class AtrSignalRouter(QObject):
         panel = self._get_scanner_panel()
         sl_multiplier = panel._sl_atr_mult_spin.value() if panel else 1.5
         tp_multiplier = panel._tp_atr_mult_spin.value() if panel else 2.0
+        target_mode = panel._target_mode_combo.currentData() if panel and hasattr(panel, "_target_mode_combo") else "atr"
         sl_distance = event.atr * sl_multiplier
 
         positions = self.w.position_manager.get_all_positions()
@@ -127,10 +129,17 @@ class AtrSignalRouter(QObject):
 
             if event.side == "long":
                 sl_price = pos.average_price - sl_distance
-                tp_price = pos.average_price + (sl_distance * tp_multiplier)
             else:
                 sl_price = pos.average_price + sl_distance
-                tp_price = pos.average_price - (sl_distance * tp_multiplier)
+
+            tp_price = compute_target_price(
+                side=event.side,
+                average_price=pos.average_price,
+                sl_distance=sl_distance,
+                tp_multiplier=tp_multiplier,
+                target_mode=str(target_mode or "atr"),
+                ema51=float(getattr(event, "ema51", 0.0) or 0.0),
+            )
 
             try:
                 self.w.position_manager.update_position_risk(

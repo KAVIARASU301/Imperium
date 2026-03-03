@@ -302,6 +302,21 @@ class AtrScannerPanel(QWidget):
         self._symbol_selector.setPlaceholderText("Select symbol")
         form_lay.addRow("Symbol:", self._symbol_selector)
 
+        quick_add_widget = QWidget()
+        quick_add_grid = QGridLayout(quick_add_widget)
+        quick_add_grid.setContentsMargins(0, 0, 0, 0)
+        quick_add_grid.setHorizontalSpacing(4)
+        quick_add_grid.setVerticalSpacing(4)
+        quick_symbols = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"]
+        for idx, symbol in enumerate(quick_symbols):
+            quick_btn = QPushButton(symbol)
+            quick_btn.setFixedHeight(22)
+            quick_btn.setMinimumWidth(88)
+            quick_btn.setStyleSheet(f"font-size: 10px; padding: 2px 6px; color: {C_MUTED};")
+            quick_btn.clicked.connect(lambda _checked=False, s=symbol: self._quick_add_symbol(s))
+            quick_add_grid.addWidget(quick_btn, idx // 2, idx % 2)
+        form_lay.addRow("Quick Add:", quick_add_widget)
+
         # Strategy params
         self._atr_distance_spin = QDoubleSpinBox()
         self._atr_distance_spin.setRange(0.5, 5.0)
@@ -341,15 +356,22 @@ class AtrScannerPanel(QWidget):
         self._sl_atr_mult_spin.setValue(1.5)
         self._sl_atr_mult_spin.setSingleStep(0.25)
         self._sl_atr_mult_spin.setDecimals(2)
-        form_lay.addRow("SL Multiplier (ATR ×):", self._sl_atr_mult_spin)
-
         self._tp_atr_mult_spin = QDoubleSpinBox()
         self._tp_atr_mult_spin.setRange(1.0, 10.0)
         self._tp_atr_mult_spin.setValue(2.0)
         self._tp_atr_mult_spin.setSingleStep(0.5)
         self._tp_atr_mult_spin.setDecimals(1)
         self._tp_atr_mult_spin.setToolTip("Take-profit = Entry ± (ATR × multiplier). 2.0 = 1:2 R:R")
-        form_lay.addRow("TP Multiplier (ATR ×):", self._tp_atr_mult_spin)
+
+        sl_tp_widget = QWidget()
+        sl_tp_lay = QHBoxLayout(sl_tp_widget)
+        sl_tp_lay.setContentsMargins(0, 0, 0, 0)
+        sl_tp_lay.setSpacing(6)
+        sl_tp_lay.addWidget(QLabel("SL:"))
+        sl_tp_lay.addWidget(self._sl_atr_mult_spin)
+        sl_tp_lay.addWidget(QLabel("TP:"))
+        sl_tp_lay.addWidget(self._tp_atr_mult_spin)
+        form_lay.addRow("SL/TP Multiplier (ATR ×):", sl_tp_widget)
 
         self._strikes_above_spin = QSpinBox()
         self._strikes_above_spin.setRange(0, 5)
@@ -378,12 +400,19 @@ class AtrScannerPanel(QWidget):
         self._session_start_spin = QSpinBox()
         self._session_start_spin.setRange(900, 1530)
         self._session_start_spin.setValue(915)
-        form_lay.addRow("Session Start (HHMM):", self._session_start_spin)
-
         self._session_end_spin = QSpinBox()
         self._session_end_spin.setRange(900, 1530)
         self._session_end_spin.setValue(1500)
-        form_lay.addRow("Session End (HHMM):", self._session_end_spin)
+
+        session_widget = QWidget()
+        session_lay = QHBoxLayout(session_widget)
+        session_lay.setContentsMargins(0, 0, 0, 0)
+        session_lay.setSpacing(6)
+        session_lay.addWidget(QLabel("Start:"))
+        session_lay.addWidget(self._session_start_spin)
+        session_lay.addWidget(QLabel("End:"))
+        session_lay.addWidget(self._session_end_spin)
+        form_lay.addRow("Session (HHMM):", session_widget)
 
         btn_row = QHBoxLayout()
         add_btn = QPushButton("+ ADD")
@@ -614,6 +643,14 @@ class AtrScannerPanel(QWidget):
             self._set_status(f"Added {symbol} using mapped FUT token {token}.")
         else:
             self._set_status(f"Added {symbol} to setup queue. Enable AUTOMATE to start.")
+
+    def _quick_add_symbol(self, symbol: str):
+        idx = self._symbol_selector.findText(symbol)
+        if idx < 0:
+            self._set_status(f"{symbol} not available in symbol list.")
+            return
+        self._symbol_selector.setCurrentIndex(idx)
+        self._on_add_symbol()
 
     def _on_remove_selected(self):
         selected = self._watchlist_table.selectedItems()

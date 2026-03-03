@@ -60,6 +60,7 @@ class AtrSignalEvent:
     quality_score: float
     chop_filtered: bool
     cvd_zscore: float = 0.0
+    ema51: float = 0.0
     timestamp: datetime = field(default_factory=datetime.now)
 
     @property
@@ -386,6 +387,7 @@ class SymbolWorker(QObject):
                     quality_score=decision.signal_quality_score,
                     chop_filtered=in_chop,
                     cvd_zscore=float(cvd_zscore[idx]) if np.isfinite(cvd_zscore[idx]) else 0.0,
+                    ema51=float(ema51[idx]) if np.isfinite(ema51[idx]) else 0.0,
                 )
 
                 logger.info(
