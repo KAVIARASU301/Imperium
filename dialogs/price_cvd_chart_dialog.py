@@ -733,6 +733,7 @@ class PriceCVDChartDialog(QDialog):
 
         else:
             # ── 2D mode ───────────────────────────────────────────────────
+            n = len(self._all_timestamps)
             offset = 0.5 if use_ohlc else 0.0
             xs_all = [i + offset for i in range(n)]
 
