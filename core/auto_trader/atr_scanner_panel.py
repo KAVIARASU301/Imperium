@@ -64,14 +64,14 @@ from core.cvd.cvd_historical import CVDHistoricalBuilder
 logger = logging.getLogger(__name__)
 
 # ── Color tokens (aligned with global Imperium theme) ───────────────────────
-C_BG        = "#071021"
-C_PANEL     = "#1E2230"
+C_BG        = "#161A25"
+C_PANEL     = "#212635"
 C_BORDER    = "#3A4458"
-C_TEXT      = "#D0D4E0"
-C_MUTED     = "#5A6070"
-C_LONG      = "#00C896"   # institutional green — profit/long
-C_SHORT     = "#FF4560"   # institutional red — loss/short
-C_WARN      = "#FFB800"
+C_TEXT      = "#E0E0E0"
+C_MUTED     = "#A9B1C3"
+C_LONG      = "#00C9AD"   # app success/long tone
+C_SHORT     = "#F85149"   # app danger/short tone
+C_WARN      = "#F39C12"
 C_ACCENT    = "#29C7C9"
 C_CHOP      = "#FF6B35"   # orange = chop-filtered signal
 
@@ -142,7 +142,7 @@ BASE_STYLE = f"""
         background: {C_PANEL};
         border: 1px solid {C_BORDER};
         gridline-color: {C_BORDER};
-        selection-background-color: #232E42;
+        selection-background-color: #1D2A3E;
     }}
     QHeaderView::section {{
         background: {C_BG};
@@ -825,9 +825,9 @@ class AtrScannerPanel(QWidget):
 
         row_bg = None
         if event.confidence >= 0.75:
-            row_bg = QColor("#0D1F0D")
+            row_bg = QColor("#112D2E")
         elif event.confidence >= 0.60:
-            row_bg = QColor("#0D1520")
+            row_bg = QColor("#1A2536")
 
         for col, (text, fg) in enumerate(cells):
             item = QTableWidgetItem(text)
