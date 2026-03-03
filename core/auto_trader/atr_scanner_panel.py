@@ -528,7 +528,7 @@ class AtrScannerPanel(QWidget):
 
         simulator_grp = QGroupBox("Simulator Backtester")
         simulator_form = QFormLayout(simulator_grp)
-        simulator_form.setLabelAlignment(Qt.AlignRight)
+        simulator_form.setLabelAlignment(Qt.AlignLeft)
         simulator_form.setSpacing(4)
 
         self._sim_date_edit = QDateEdit()
@@ -544,24 +544,33 @@ class AtrScannerPanel(QWidget):
         sim_result_widget = QWidget()
         sim_result_lay = QVBoxLayout(sim_result_widget)
         sim_result_lay.setContentsMargins(0, 0, 0, 0)
-        sim_result_lay.setSpacing(2)
+        sim_result_lay.setSpacing(1)
 
-        self._sim_points_label = QLabel(f"<span style='color:{C_ACCENT};'>Underlying pts:</span> --")
-        self._sim_premium_label = QLabel(f"<span style='color:{C_WARN};'>Option premium est:</span> --")
-        self._sim_signal_label = QLabel(f"<span style='color:{C_TEXT};'>Signals:</span> --")
-        self._sim_winrate_label = QLabel(f"<span style='color:{C_LONG};'>Win rate:</span> --")
+        result_title = QLabel("RESULT")
+        result_title.setStyleSheet(f"color: {C_MUTED}; font-size: 10px; letter-spacing: 1px;")
+        simulator_form.addRow(result_title)
+
+        self._sim_points_label = QLabel("UNDERLYING PTS : --")
+        self._sim_premium_label = QLabel("OPTION PREMIUM : --")
+        self._sim_signal_label = QLabel("SIGNALS       : --")
+        self._sim_winrate_label = QLabel("WIN RATE      : --")
+        self._sim_wins_label = QLabel("WINS          : --")
+        self._sim_losses_label = QLabel("LOSSES        : --")
 
         for lbl in (
             self._sim_points_label,
             self._sim_premium_label,
             self._sim_signal_label,
             self._sim_winrate_label,
+            self._sim_wins_label,
+            self._sim_losses_label,
         ):
-            lbl.setStyleSheet(f"color: {C_MUTED}; font-size: 10px;")
-            lbl.setTextFormat(Qt.RichText)
+            lbl.setStyleSheet(f"color: {C_TEXT}; font-size: 10px;")
+            lbl.setTextFormat(Qt.PlainText)
+            lbl.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
             sim_result_lay.addWidget(lbl)
 
-        simulator_form.addRow("Result:", sim_result_widget)
+        simulator_form.addRow(sim_result_widget)
 
         setup_cols.addLayout(symbol_col, 0, 0)
         setup_cols.addWidget(simulator_grp, 0, 2)
@@ -1122,18 +1131,13 @@ class AtrScannerPanel(QWidget):
             symbols_processed += 1
 
         win_rate = (wins / closed_trades * 100.0) if closed_trades else 0.0
-        self._sim_points_label.setText(
-            f"<span style='color:{C_ACCENT};'>Underlying pts:</span> {total_points:.2f}"
-        )
-        self._sim_premium_label.setText(
-            f"<span style='color:{C_WARN};'>Option premium est:</span> {total_points * 0.45:.2f} @ 0.45Δ"
-        )
-        self._sim_signal_label.setText(
-            f"<span style='color:{C_TEXT};'>Signals:</span> {total_signals}"
-        )
-        self._sim_winrate_label.setText(
-            f"<span style='color:{C_LONG};'>Win rate:</span> {win_rate:.1f}%"
-        )
+        losses = max(closed_trades - wins, 0)
+        self._sim_points_label.setText(f"UNDERLYING PTS : {total_points:.2f}")
+        self._sim_premium_label.setText(f"OPTION PREMIUM : {total_points * 0.45:.2f} @ 0.45Δ")
+        self._sim_signal_label.setText(f"SIGNALS       : {total_signals}")
+        self._sim_winrate_label.setText(f"WIN RATE      : {win_rate:.1f}%")
+        self._sim_wins_label.setText(f"WINS          : {wins}")
+        self._sim_losses_label.setText(f"LOSSES        : {losses}")
         self._set_status(
             f"Simulator completed for {run_day.isoformat()}: "
             f"{symbols_processed} symbols, {total_signals} entries, net {total_points:.2f} pts"
