@@ -1044,41 +1044,71 @@ class AtrScannerPanel(QWidget):
             signals[short_confirmed] = -1
 
             symbol_points = 0.0
-            position = 0
+            position = 0  # 1=long, -1=short, 0=flat
             entry_price = 0.0
+            stop_price = np.nan
+            target_price = np.nan
+
+            sl_atr_multiplier = float(params.get("sl_atr_multiplier", self._sl_atr_mult_spin.value()))
+            tp_atr_multiplier = float(params.get("tp_atr_multiplier", self._tp_atr_mult_spin.value()))
+            tp_target_mode = str(params.get("tp_target_mode", self._target_mode_combo.currentData() or "atr"))
 
             for idx, signal in enumerate(signals):
-                px = price_close[idx]
-                if position == 0 and signal != 0:
-                    position = int(signal)
-                    entry_price = px
-                    total_signals += 1
-                    self._emit_simulated_signal(
-                        symbol=symbol,
-                        token=token,
-                        signal=signal,
-                        signal_time=df.index[idx].to_pydatetime(),
-                        price=px,
-                        atr=float(atr[idx]) if np.isfinite(atr[idx]) else 0.0,
-                    )
-                    continue
+                bar_high = price_high[idx]
+                bar_low = price_low[idx]
+                bar_close = price_close[idx]
+                bar_ema51 = ema51[idx]
+                just_exited = False
 
-                if position != 0 and signal == -position:
-                    trade_points = (px - entry_price) * position
-                    symbol_points += trade_points
-                    closed_trades += 1
-                    if trade_points > 0:
-                        wins += 1
+                # Institutional intrabar trade management: evaluate SL/TP on OHLC range.
+                if position != 0:
+                    sl_hit = (bar_low <= stop_price) if position > 0 else (bar_high >= stop_price)
+
+                    if tp_target_mode == "ema51_cross":
+                        tp_hit = (bar_high >= bar_ema51) if position > 0 else (bar_low <= bar_ema51)
+                        exit_price = float(bar_ema51)
+                    else:
+                        tp_hit = (bar_high >= target_price) if position > 0 else (bar_low <= target_price)
+                        exit_price = float(target_price)
+
+                    # SL always has priority if both are tagged intrabar.
+                    if sl_hit or tp_hit:
+                        realized_exit = float(stop_price) if sl_hit else exit_price
+                        trade_points = (realized_exit - entry_price) * position
+                        symbol_points += trade_points
+                        closed_trades += 1
+                        if trade_points > 0:
+                            wins += 1
+
+                        position = 0
+                        entry_price = 0.0
+                        stop_price = np.nan
+                        target_price = np.nan
+                        just_exited = True
+
+                # No reverse-on-signal: do not enter new trade on same bar as an exit.
+                if position == 0 and signal != 0 and not just_exited:
+                    bar_atr = float(atr[idx]) if np.isfinite(atr[idx]) else np.nan
+                    if not np.isfinite(bar_atr) or bar_atr <= 0:
+                        continue
+
                     position = int(signal)
-                    entry_price = px
+                    entry_price = float(bar_close)
+                    stop_price = entry_price - (sl_atr_multiplier * bar_atr * position)
+
+                    if tp_target_mode == "ema51_cross":
+                        target_price = np.nan
+                    else:
+                        target_price = entry_price + (tp_atr_multiplier * bar_atr * position)
+
                     total_signals += 1
                     self._emit_simulated_signal(
                         symbol=symbol,
                         token=token,
                         signal=signal,
                         signal_time=df.index[idx].to_pydatetime(),
-                        price=px,
-                        atr=float(atr[idx]) if np.isfinite(atr[idx]) else 0.0,
+                        price=bar_close,
+                        atr=bar_atr,
                     )
 
             if position != 0:
