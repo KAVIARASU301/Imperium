@@ -27,7 +27,7 @@ import pyqtgraph as pg
 from PySide6.QtCore import Qt, QThread, QTimer, QRectF, QPointF
 from PySide6.QtGui import QPicture, QPainter
 from PySide6.QtWidgets import (
-    QCheckBox, QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout,
+    QCheckBox, QComboBox, QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout,
     QWidget,
 )
 from pyqtgraph import AxisItem
@@ -309,6 +309,31 @@ class PriceCVDChartDialog(QDialog):
         row.setContentsMargins(6, 2, 6, 2)
         row.setSpacing(6)
 
+        left = QHBoxLayout()
+        left.setSpacing(6)
+
+        lbl_ema = QLabel("EMA")
+        lbl_ema.setStyleSheet(
+            "color:#6A7A90;font-size:10px;font-weight:700;background:transparent;")
+        left.addWidget(lbl_ema)
+
+        self.cb_ema10 = _ema_cb("10", _C["ema10"])
+        self.cb_ema21 = _ema_cb("21", _C["ema21"])
+        self.cb_ema51 = _ema_cb("51", _C["ema51"])
+        self.cb_ema51.setChecked(True)
+        for cb in (self.cb_ema10, self.cb_ema21, self.cb_ema51):
+            cb.toggled.connect(self._on_indicator_toggled)
+            left.addWidget(cb)
+
+        left.addWidget(_sep())
+
+        self.cb_vwap = _ema_cb("VWAP", _C["vwap"])
+        self.cb_vwap.toggled.connect(self._on_indicator_toggled)
+        left.addWidget(self.cb_vwap)
+
+        center = QHBoxLayout()
+        center.setSpacing(6)
+
         self.btn_back = _btn("◀", mw=24)
         self.btn_back.clicked.connect(self._go_back)
 
@@ -321,16 +346,49 @@ class PriceCVDChartDialog(QDialog):
         self.btn_fwd = _btn("▶", mw=24)
         self.btn_fwd.clicked.connect(self._go_forward)
 
-        row.addWidget(self.btn_back)
-        row.addWidget(self.lbl_dates)
-        row.addWidget(self.btn_fwd)
-        row.addWidget(_sep())
+        center.addWidget(self.btn_back)
+        center.addWidget(self.lbl_dates)
+        center.addWidget(self.btn_fwd)
 
-        self.btn_1d = _btn("1D", fg=_C["text_1"], mw=30, checkable=True,
+        right = QHBoxLayout()
+        right.setSpacing(6)
+
+        lbl_tf = QLabel("TF")
+        lbl_tf.setStyleSheet(
+            "color:#6A7A90;font-size:10px;font-weight:700;background:transparent;")
+        right.addWidget(lbl_tf)
+
+        self.cb_tf = QComboBox()
+        self.cb_tf.setFixedHeight(22)
+        self.cb_tf.setStyleSheet("""
+            QComboBox {
+                background: #151D2B;
+                color: #8A99B3;
+                border: 1px solid #1E2D40;
+                border-radius: 4px;
+                padding: 0px 18px 0px 8px;
+                font-size: 11px;
+                font-weight: 700;
+                min-width: 56px;
+            }
+            QComboBox:hover { border: 1px solid #4D9FFF; background: #1C2638; }
+            QComboBox::drop-down { border: none; }
+        """)
+        for tf_min, tf_label in _TIMEFRAMES:
+            self.cb_tf.addItem(tf_label, tf_min)
+        self.cb_tf.currentIndexChanged.connect(self._on_tf_combo_changed)
+        right.addWidget(self.cb_tf)
+
+        right.addWidget(_sep())
+
+        self.btn_1d = _btn("1D", fg=_C["text_1"], mw=34, checkable=True,
                            chk_bg="#26A69A", chk_fg="#000")
-        self.btn_1d.setChecked(True)
-        self.btn_1d.clicked.connect(self._on_day_mode_toggled)
-        row.addWidget(self.btn_1d)
+        self.btn_2d = _btn("2D", fg=_C["text_1"], mw=34, checkable=True,
+                           chk_bg="#26A69A", chk_fg="#000")
+        self.btn_1d.clicked.connect(lambda: self._set_day_mode(False))
+        self.btn_2d.clicked.connect(lambda: self._set_day_mode(True))
+        right.addWidget(self.btn_1d)
+        right.addWidget(self.btn_2d)
 
         self.btn_cvd_rebase = _btn("Rebased CVD", fg=_C["text_2"], mw=90, checkable=True,
                                    chk_bg="#2A3B5C", chk_fg="#FFFFFF")
@@ -338,46 +396,20 @@ class PriceCVDChartDialog(QDialog):
         self.btn_cvd_rebase.setEnabled(False)
         self.btn_cvd_rebase.setToolTip("Available in 2D comparison mode")
         self.btn_cvd_rebase.toggled.connect(self._on_cvd_rebase_toggled)
-        row.addWidget(self.btn_cvd_rebase)
-        row.addWidget(_sep())
+        right.addWidget(self.btn_cvd_rebase)
 
-        lbl_tf = QLabel("TF")
-        lbl_tf.setStyleSheet(
-            "color:#6A7A90;font-size:10px;font-weight:700;background:transparent;")
-        row.addWidget(lbl_tf)
+        self._set_day_mode(False, reload=False)
 
-        self._tf_buttons: dict[int, QPushButton] = {}
-        for tf_min, tf_label in _TIMEFRAMES:
-            btn = _btn(tf_label, fg=_C["text_2"], mw=32, checkable=True,
-                       chk_bg="#2D4A6A", chk_fg="#A0CFFF")
-            btn.clicked.connect(lambda _checked, m=tf_min: self._on_tf_changed(m))
-            self._tf_buttons[tf_min] = btn
-            row.addWidget(btn)
-        self._tf_buttons[1].setChecked(True)
-        row.addWidget(_sep())
-
-        lbl_ema = QLabel("EMA")
-        lbl_ema.setStyleSheet(
-            "color:#6A7A90;font-size:10px;font-weight:700;background:transparent;")
-        row.addWidget(lbl_ema)
-
-        self.cb_ema10 = _ema_cb("10", _C["ema10"])
-        self.cb_ema21 = _ema_cb("21", _C["ema21"])
-        self.cb_ema51 = _ema_cb("51", _C["ema51"])
-        self.cb_ema51.setChecked(True)
-        for cb in (self.cb_ema10, self.cb_ema21, self.cb_ema51):
-            cb.toggled.connect(self._on_indicator_toggled)
-            row.addWidget(cb)
-        row.addWidget(_sep())
-
-        self.cb_vwap = _ema_cb("VWAP", _C["vwap"])
-        self.cb_vwap.toggled.connect(self._on_indicator_toggled)
-        row.addWidget(self.cb_vwap)
-        row.addStretch()
+        row.addLayout(left)
+        row.addStretch(1)
+        row.addLayout(center)
+        row.addStretch(1)
+        row.addLayout(right)
 
         self.lbl_status = QLabel("●")
         self.lbl_status.setStyleSheet(
             f"color:{_C['ema51']};font-size:12px;background:transparent;")
+        row.addSpacing(6)
         row.addWidget(self.lbl_status)
         root.addWidget(bar)
 
@@ -537,11 +569,14 @@ class PriceCVDChartDialog(QDialog):
 
     # ---------------------------------------------------------------- modes --
 
-    def _on_day_mode_toggled(self):
-        self._two_day = not self.btn_1d.isChecked()
-        self.btn_1d.setText("2D" if self._two_day else "1D")
+    def _set_day_mode(self, two_day: bool, reload: bool = True):
+        if self._two_day == two_day and self.btn_1d.isChecked() == (not two_day):
+            return
+        self._two_day = two_day
+        self.btn_1d.setChecked(not two_day)
+        self.btn_2d.setChecked(two_day)
         self.btn_cvd_rebase.setEnabled(self._two_day)
-        if self._all_timestamps:
+        if reload and self._all_timestamps:
             self._render_from_cache()
 
     def _on_cvd_rebase_toggled(self, checked: bool):
@@ -556,10 +591,13 @@ class PriceCVDChartDialog(QDialog):
 
     def _on_tf_changed(self, tf_minutes: int):
         if tf_minutes == self._selected_tf: return
-        for m, btn in self._tf_buttons.items():
-            btn.setChecked(m == tf_minutes)
         self._selected_tf = tf_minutes
         self._load_and_plot()
+
+    def _on_tf_combo_changed(self, index: int):
+        tf_minutes = self.cb_tf.itemData(index)
+        if tf_minutes is not None:
+            self._on_tf_changed(int(tf_minutes))
 
     # --------------------------------------------------------------- loading -
 
@@ -987,8 +1025,8 @@ class PriceCVDChartDialog(QDialog):
         k = event.key()
         if   k == Qt.Key_Left:  self._go_back()
         elif k == Qt.Key_Right: self._go_forward()
-        elif k == Qt.Key_1:     self.btn_1d.setChecked(True);  self._on_day_mode_toggled()
-        elif k == Qt.Key_2:     self.btn_1d.setChecked(False); self._on_day_mode_toggled()
+        elif k == Qt.Key_1:     self._set_day_mode(False)
+        elif k == Qt.Key_2:     self._set_day_mode(True)
         else: super().keyPressEvent(event)
 
     def closeEvent(self, event):
