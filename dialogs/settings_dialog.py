@@ -3,7 +3,6 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTabWidget,
     QWidget, QGroupBox, QGridLayout, QLabel, QLineEdit,
     QSpinBox, QDoubleSpinBox, QComboBox, QCheckBox, QPushButton, QMessageBox,
-    QButtonGroup, QRadioButton
 )
 from PySide6.QtCore import Qt, Signal
 
@@ -253,20 +252,6 @@ class SettingsDialog(QDialog):
         self.auto_adjust_ladder = QCheckBox("Auto-adjust strike ladder on price movement")
         grid.addWidget(self.auto_adjust_ladder, 2, 0, 1, 2)
 
-        grid.addWidget(QLabel("Mode:"), 3, 0)
-        mode_widget = QWidget()
-        mode_layout = QHBoxLayout(mode_widget)
-        mode_layout.setContentsMargins(0, 0, 0, 0)
-        mode_layout.setSpacing(12)
-        self.layout_mode_group = QButtonGroup(self)
-        self.layout_mode_manual = QRadioButton("Manual")
-        self.layout_mode_auto = QRadioButton("Auto")
-        self.layout_mode_group.addButton(self.layout_mode_manual)
-        self.layout_mode_group.addButton(self.layout_mode_auto)
-        mode_layout.addWidget(self.layout_mode_manual)
-        mode_layout.addWidget(self.layout_mode_auto)
-        mode_layout.addStretch()
-        grid.addWidget(mode_widget, 3, 1)
 
         layout.addWidget(group)
         layout.addStretch()
@@ -373,7 +358,6 @@ class SettingsDialog(QDialog):
         self.auto_refresh.stateChanged.connect(lambda: setattr(self, '_has_changes', True))
         self.refresh_interval.valueChanged.connect(lambda: setattr(self, '_has_changes', True))
         self.auto_adjust_ladder.stateChanged.connect(lambda: setattr(self, '_has_changes', True))
-        self.layout_mode_group.buttonToggled.connect(lambda *_: setattr(self, '_has_changes', True))
         self.risk_intraday_drawdown_limit.valueChanged.connect(lambda: setattr(self, '_has_changes', True))
         self.risk_max_portfolio_loss.valueChanged.connect(lambda: setattr(self, '_has_changes', True))
         self.risk_max_open_positions.valueChanged.connect(lambda: setattr(self, '_has_changes', True))
@@ -582,9 +566,6 @@ class SettingsDialog(QDialog):
         self.auto_refresh.setChecked(settings.get("auto_refresh", True))
         self.refresh_interval.setValue(settings.get("refresh_interval", 2))
         self.auto_adjust_ladder.setChecked(settings.get("auto_adjust_ladder", True))
-        layout_mode = str(settings.get("layout_mode", "manual")).lower()
-        self.layout_mode_manual.setChecked(layout_mode != "auto")
-        self.layout_mode_auto.setChecked(layout_mode == "auto")
         self.risk_intraday_drawdown_limit.setValue(int(settings.get("risk_intraday_drawdown_limit", 0) or 0))
         self.risk_max_portfolio_loss.setValue(int(settings.get("risk_max_portfolio_loss", 0) or 0))
         self.risk_max_open_positions.setValue(int(settings.get("risk_max_open_positions", 0) or 0))
@@ -611,7 +592,6 @@ class SettingsDialog(QDialog):
             "auto_refresh": self.auto_refresh.isChecked(),
             "refresh_interval": self.refresh_interval.value(),
             "auto_adjust_ladder": self.auto_adjust_ladder.isChecked(),
-            "layout_mode": "auto" if self.layout_mode_auto.isChecked() else "manual",
             "risk_intraday_drawdown_limit": self.risk_intraday_drawdown_limit.value(),
             "risk_max_portfolio_loss": self.risk_max_portfolio_loss.value(),
             "risk_max_open_positions": self.risk_max_open_positions.value(),
@@ -648,9 +628,6 @@ class SettingsDialog(QDialog):
             self.auto_refresh.setChecked(defaults.get("auto_refresh", True))
             self.refresh_interval.setValue(defaults.get("refresh_interval", 2))
             self.auto_adjust_ladder.setChecked(defaults.get("auto_adjust_ladder", True))
-            default_mode = str(defaults.get("layout_mode", "manual")).lower()
-            self.layout_mode_manual.setChecked(default_mode != "auto")
-            self.layout_mode_auto.setChecked(default_mode == "auto")
             self.risk_intraday_drawdown_limit.setValue(int(defaults.get("risk_intraday_drawdown_limit", 0) or 0))
             self.risk_max_portfolio_loss.setValue(int(defaults.get("risk_max_portfolio_loss", 0) or 0))
             self.risk_max_open_positions.setValue(int(defaults.get("risk_max_open_positions", 0) or 0))

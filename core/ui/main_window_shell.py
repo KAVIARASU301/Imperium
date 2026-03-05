@@ -187,17 +187,10 @@ class MainWindowShell:
         layout.setSpacing(0)
         layout.setContentsMargins(3, 3, 3, 3)
 
-        window.center_stack = QStackedWidget()
-        window.center_stack.setContentsMargins(0, 0, 0, 0)
-        window.center_stack.addWidget(window.strike_ladder)
+        # Manual mode only — strike ladder is always the center widget.
+        # No QStackedWidget needed; auto trader panel slot removed.
+        layout.addWidget(window.strike_ladder, 1)
 
-        placeholder = QWidget()
-        placeholder_layout = QVBoxLayout(placeholder)
-        placeholder_layout.setContentsMargins(0, 0, 0, 0)
-        placeholder_layout.setSpacing(0)
-        window.center_stack.addWidget(placeholder)
-
-        layout.addWidget(window.center_stack, 1)
         return layout
 
     @staticmethod

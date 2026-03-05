@@ -31,7 +31,6 @@ from dialogs.option_chain_dialog import OptionChainDialog
 from dialogs.strategy_builder_dialog import StrategyBuilderDialog
 from dialogs.order_confirmation_dialog import OrderConfirmationDialog
 from core.cvd.cvd_engine import CVDEngine
-from core.auto_trader.atr_scanner_panel import AtrScannerPanel
 from core.cvd.cvd_symbol_sets import CVDSymbolSetManager
 from dialogs.cvd_symbol_set_multi_chart_dialog import CVDSetMultiChartDialog
 from core.execution.trade_ledger import TradeLedger
@@ -243,7 +242,6 @@ class ImperiumMainWindow(QMainWindow):
 
         self._apply_dark_theme()
         self._setup_ui()
-        self._apply_layout_mode(str(self.settings.get("layout_mode", "manual")))
         self._setup_position_manager()
         self._connect_signals()
         self._setup_keyboard_shortcuts()
@@ -385,10 +383,6 @@ class ImperiumMainWindow(QMainWindow):
 
         self.position_manager.set_instrument_data(data)
         self.strike_ladder.set_instrument_data(data)
-        panel = getattr(self, "auto_trader_embed", None)
-        if panel and hasattr(panel, "set_instrument_data"):
-            panel.set_instrument_data(data)
-
         symbols = sorted(data.keys())
         self.header.set_symbols(symbols)
         if self.watchlist_dialog:
@@ -406,7 +400,6 @@ class ImperiumMainWindow(QMainWindow):
             self.header.set_lot_size(default_lots)
             logger.info(f"Applied startup settings. Symbol: {default_symbol}, Lots: {default_lots}")
             self._on_settings_changed(self.header.get_current_settings())
-            self._apply_layout_mode(str(self.settings.get("layout_mode", "manual")))
         else:
             logger.error("No valid symbols found in instrument data. Cannot initialize UI.")
 
@@ -643,64 +636,6 @@ class ImperiumMainWindow(QMainWindow):
     # SECTION 6: SETTINGS & CONFIGURATION
     # =========================================================================
 
-    def _ensure_center_auto_trader_widget(self) -> bool:
-        existing = getattr(self, "auto_trader_embed", None)
-        # Use shiboken2/PySide6 isValid if available
-        try:
-            from shiboken6 import isValid
-            if existing is not None and isValid(existing):
-                return True
-        except Exception:
-            if existing is not None:
-                return True
-
-        try:
-            old_widget = None
-            if hasattr(self, "center_stack") and self.center_stack.count() > 1:
-                old_widget = self.center_stack.widget(1)
-                if old_widget:
-                    self.center_stack.removeWidget(old_widget)
-
-            # ── NEW: Use AtrScannerPanel instead of AutoTraderDialog ──────────
-            panel = AtrScannerPanel(
-                kite=self.real_kite_client,
-                parent=self,
-            )
-            panel.set_instrument_data(self.instrument_data)
-            self.center_stack.insertWidget(1, panel)
-            self.auto_trader_embed = panel
-
-            if old_widget:
-                old_widget.deleteLater()
-
-            return True
-
-        except Exception as exc:
-            import logging
-            logging.getLogger(__name__).error("Failed to create ATR Scanner panel: %s", exc)
-            return False
-
-    def _sync_center_auto_trader_symbol(self, symbol: str) -> None:
-        pass  # AtrScannerPanel manages its own watchlist
-    def _apply_layout_mode(self, mode: str):
-        selected_mode = "auto" if str(mode).lower() == "auto" else "manual"
-        self.settings["layout_mode"] = selected_mode
-
-        if not hasattr(self, "center_stack"):
-            return
-
-        if selected_mode == "auto":
-            if self._ensure_center_auto_trader_widget():
-                self.center_stack.setCurrentIndex(1)
-                panel = getattr(self, "auto_trader_embed", None)
-                if panel is not None and hasattr(panel, "resume"):
-                    panel.resume()
-        else:
-            panel = getattr(self, "auto_trader_embed", None)
-            if panel is not None and hasattr(panel, "suspend"):
-                panel.suspend()
-            self.center_stack.setCurrentIndex(0)
-
     def _show_settings(self):
         """
         Correctly instantiates the SettingsDialog with only the parent.
@@ -736,7 +671,6 @@ class ImperiumMainWindow(QMainWindow):
             auto_adjust = self.settings.get('auto_adjust_ladder', True)
             self.strike_ladder.set_auto_adjust(auto_adjust)
 
-        self._apply_layout_mode(str(self.settings.get("layout_mode", "manual")))
         self._on_settings_changed(self.header.get_current_settings())
         self._reload_risk_limits_from_settings()
 
@@ -786,9 +720,6 @@ class ImperiumMainWindow(QMainWindow):
 
             symbol_has_changed = (symbol != self.current_symbol)
             self.current_symbol = symbol
-
-            if symbol_has_changed:
-                self._sync_center_auto_trader_symbol(symbol)
 
             today = datetime.now().date()
 
@@ -1662,50 +1593,11 @@ class ImperiumMainWindow(QMainWindow):
         return round(limit_price / tick_size) * tick_size
 
     # =========================================================================
-    # SECTION 13: CVD ENGINE (automation coordinator removed — using AtrScannerPanel)
+    # SECTION 13: CVD ENGINE
     # =========================================================================
 
-    def _on_cvd_automation_signal(self, payload: dict):
-        pass  # AutoTraderDialog automation removed
-
-    def _on_cvd_automation_market_state(self, payload: dict):
-        pass
-
-    def _is_cvd_auto_cutoff_reached(self) -> bool:
-        return False
-
-    def _enforce_cvd_auto_cutoff_exit(self, reason: str = "AUTO_3PM_CUTOFF"):
-        pass
-
-    def _persist_cvd_automation_state(self):
-        pass
-
-    def _load_cvd_automation_state(self):
-        pass
-
-    def _reconcile_failed_auto_entry(self, token: int, tradingsymbol: str, signal_timestamp: str | None):
-        pass
-
-    def _reconcile_cvd_automation_positions(self):
-        pass
-
-    def _get_atm_contract_for_signal(self, signal_side: str) -> Optional[Contract]:
-        return None
-
-    def _exit_position_automated(self, position: Position, reason: str = "AUTO"):
-        pass
-
     def _update_cvd_chart_symbol(self, symbol: str, cvd_token: int, suffix: str = ""):
-        pass  # No longer needed — AtrScannerPanel manages its own subscriptions
-
-    def _start_cvd_pending_retry(self, token: int):
-        pass
-
-    def _stop_cvd_pending_retry(self, token: int):
-        pass
-
-    def _retry_cvd_pending_order(self, token: int):
-        pass
+        self.subscription_policy.update_cvd_chart_symbol(symbol, cvd_token, suffix)
 
     def _on_cvd_dialog_closed(self, token):
         QTimer.singleShot(0, self._update_market_subscriptions)
@@ -2391,9 +2283,6 @@ class ImperiumMainWindow(QMainWindow):
             self.setWindowState(Qt.WindowMaximized)
 
     def closeEvent(self, event):
-        panel = getattr(self, "auto_trader_embed", None)
-        if panel and hasattr(panel, "cleanup"):
-            panel.cleanup()
         if getattr(self, '_close_in_progress', False):
             event.ignore()
             return
@@ -2427,8 +2316,9 @@ class ImperiumMainWindow(QMainWindow):
             self.update_timer.stop()
         if hasattr(self, 'pending_order_refresh_timer'):
             self.pending_order_refresh_timer.stop()
-        for token in list(getattr(self, '_cvd_pending_retry_timers', {}).keys()):
-            self._stop_cvd_pending_retry(token)
+        for timer in list(getattr(self, '_cvd_pending_retry_timers', {}).values()):
+            timer.stop()
+        self._cvd_pending_retry_timers.clear()
 
         # Background workers
         if hasattr(self, 'market_data_worker') and self.market_data_worker.is_running:

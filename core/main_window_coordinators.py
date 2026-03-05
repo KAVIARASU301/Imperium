@@ -206,10 +206,12 @@ class MarketDataOrchestrator:
         self.main_window = main_window
 
     def on_market_data(self, data: list):
+        """
+        Fanout market ticks to CVD engine and price store.
+        Auto-mode tick handler removed — manual mode only.
+        """
         w = self.main_window
         w.cvd_engine.process_ticks(data)
-        if w.cvd_automation_coordinator:
-            w.cvd_automation_coordinator.handle_tick_data(data)
         for tick in data:
             if 'instrument_token' in tick:
                 w._latest_market_data[tick['instrument_token']] = tick
