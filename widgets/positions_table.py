@@ -59,6 +59,7 @@ class PositionsTable(QWidget):
         self.group_row_map: Dict[str, int] = {}
         self.group_members: Dict[str, List[str]] = {}
         self.group_order: List[str] = []
+        self._last_structure_signature: tuple = ()
         self.group_sl_tp: Dict[str, Dict[str, float]] = {}
         self.group_styles: Dict[str, Dict[str, str]] = {}
         self.individual_sl_tp: Dict[str, Dict[str, Optional[float]]] = {}
@@ -387,6 +388,32 @@ class PositionsTable(QWidget):
     # Data population (UNCHANGED LOGIC)
     # ------------------------------------------------------------------
 
+    def _compute_structure_signature(self) -> tuple:
+        """
+        A cheap hash of the table's *structure* — symbols, groups, order.
+        If this hasn't changed between ticks, we skip the full rebuild.
+        """
+        groups_part = tuple(
+            (g, tuple(self.group_members.get(g, [])))
+            for g in self.group_order
+            if self.group_members.get(g)
+        )
+        # Include group SL/TP presence so row count stays consistent
+        group_sltp_part = tuple(
+            (g, bool(v)) for g, v in self.group_sl_tp.items()
+        )
+        # Individual position SL/TP rows affect row count too
+        sltp_presence = tuple(
+            (
+                sym,
+                bool(self.positions.get(sym, {}).get('stop_loss_price')),
+                bool(self.positions.get(sym, {}).get('target_price')),
+                bool(self.positions.get(sym, {}).get('trailing_stop_loss')),
+            )
+            for sym in self.positions
+        )
+        return (groups_part, group_sltp_part, tuple(self.visual_order), sltp_presence)
+
     def update_positions(self, positions_data: List[dict]):
         self.positions = {p['tradingsymbol']: p for p in positions_data}
         live_symbols = set(self.positions.keys())
@@ -402,7 +429,16 @@ class PositionsTable(QWidget):
                     self.visual_order.append(s)
 
         self._prune_empty_groups()
-        self._rebuild_table_from_order()
+
+        new_sig = self._compute_structure_signature()
+
+        if new_sig != self._last_structure_signature:
+            # Structure changed — full rebuild (positions added/removed, groups changed)
+            self._last_structure_signature = new_sig
+            self._rebuild_table_from_order()
+        else:
+            # Only prices/pnl changed — surgical in-place update, no row destruction
+            self._update_cells_in_place()
 
         if not self._individual_sl_tp_restored:
             self._restore_individual_sl_tp()
@@ -428,6 +464,62 @@ class PositionsTable(QWidget):
         for symbol in self.visual_order:
             if symbol in self.positions:
                 self._add_position_rows(self.positions[symbol])
+
+        self._update_footer()
+        self.table.setUpdatesEnabled(True)
+
+    def _update_cells_in_place(self):
+        """
+        Tick-safe update: only writes to price/pnl/qty cells.
+        No row creation/destruction = no hover flicker, no drag interruption.
+        """
+        self.table.setUpdatesEnabled(False)
+
+        for symbol, pos_data in self.positions.items():
+            row = self.position_row_map.get(symbol)
+            if row is None or row >= self.table.rowCount():
+                continue
+
+            # Qty
+            item = self.table.item(row, self.QUANTITY_COL)
+            new_qty = f"{int(pos_data.get('quantity', 0)):,}"
+            if item and item.text() != new_qty:
+                item.setText(new_qty)
+
+            # Avg Price
+            item = self.table.item(row, self.AVG_PRICE_COL)
+            new_avg = f"{pos_data.get('average_price', 0.0):,.2f}"
+            if item and item.text() != new_avg:
+                item.setText(new_avg)
+
+            # LTP
+            item = self.table.item(row, self.LTP_COL)
+            new_ltp = f"{pos_data.get('last_price', 0.0):,.2f}"
+            if item and item.text() != new_ltp:
+                item.setText(new_ltp)
+
+            # PnL — also update color
+            pnl = pos_data.get('pnl', 0.0)
+            item = self.table.item(row, self.PNL_COL)
+            new_pnl = f"{pnl:,.0f}"
+            if item:
+                if item.text() != new_pnl:
+                    item.setText(new_pnl)
+                item.setForeground(QColor("#1DE9B6") if pnl >= 0 else QColor("#F85149"))
+
+        # Update group header PnL rows in-place too
+        for group_name, group_row in self.group_row_map.items():
+            if group_row >= self.table.rowCount():
+                continue
+            members = self.group_members.get(group_name, [])
+            group_pnl = sum(self.positions.get(s, {}).get('pnl', 0.0) for s in members)
+            # PnL is in column PNL_COL of the group header row
+            item = self.table.item(group_row, self.PNL_COL)
+            new_pnl = f"{group_pnl:,.0f}"
+            if item:
+                if item.text() != new_pnl:
+                    item.setText(new_pnl)
+                item.setForeground(QColor("#1DE9B6") if group_pnl >= 0 else QColor("#F85149"))
 
         self._update_footer()
         self.table.setUpdatesEnabled(True)
