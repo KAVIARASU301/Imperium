@@ -839,39 +839,6 @@ class SettingsDialog(QDialog):
         self.accept()
 
 
-    def _load_inst_settings(self, settings):
-        """Load instrument-universe settings when controls are available."""
-        if hasattr(self, "inst_exchange_mode"):
-            self.inst_exchange_mode.setCurrentText(settings.get("inst_exchange_mode", "NFO_ONLY"))
-        if hasattr(self, "inst_symbol_mode"):
-            self.inst_symbol_mode.setCurrentText(settings.get("inst_symbol_mode", "INDICES_ONLY"))
-        if hasattr(self, "inst_preferred_symbols"):
-            symbols = settings.get("inst_preferred_symbols", ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"])
-            self.inst_preferred_symbols.setText(",".join(symbols) if isinstance(symbols, list) else str(symbols))
-        if hasattr(self, "inst_expiry_depth"):
-            self.inst_expiry_depth.setValue(int(settings.get("inst_expiry_depth", 1) or 1))
-
-    def _get_inst_settings_dict(self):
-        """Return instrument-universe settings from UI controls, with safe fallbacks."""
-        defaults = {
-            "inst_exchange_mode": "NFO_ONLY",
-            "inst_symbol_mode": "INDICES_ONLY",
-            "inst_preferred_symbols": ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"],
-            "inst_expiry_depth": 1,
-        }
-
-        if hasattr(self, "inst_exchange_mode"):
-            defaults["inst_exchange_mode"] = self.inst_exchange_mode.currentText()
-        if hasattr(self, "inst_symbol_mode"):
-            defaults["inst_symbol_mode"] = self.inst_symbol_mode.currentText()
-        if hasattr(self, "inst_preferred_symbols"):
-            raw = self.inst_preferred_symbols.text().strip()
-            defaults["inst_preferred_symbols"] = [s.strip().upper() for s in raw.split(",") if s.strip()]
-        if hasattr(self, "inst_expiry_depth"):
-            defaults["inst_expiry_depth"] = self.inst_expiry_depth.value()
-
-        return defaults
-
     def _reset_to_defaults(self):
         reply = QMessageBox.question(
             self,
