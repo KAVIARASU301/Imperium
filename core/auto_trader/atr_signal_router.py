@@ -97,6 +97,17 @@ class AtrSignalRouter(QObject):
             logger.error("[ROUTER] buy_exit_panel returned empty order_details for %s", event.symbol)
             return
 
+        symbol = order_details.get("symbol") or event.symbol
+        instrument_lot_quantity = 1
+        if symbol and hasattr(w, "instrument_data") and symbol in w.instrument_data:
+            instrument_lot_quantity = w.instrument_data[symbol].get("lot_size", 1)
+        elif hasattr(w.buy_exit_panel, "lot_quantity"):
+            instrument_lot_quantity = w.buy_exit_panel.lot_quantity
+
+        num_lots = order_details.get("lot_size", 1)
+        order_details["total_quantity_per_strike"] = num_lots * instrument_lot_quantity
+        order_details["product"] = w.settings.get("default_product", w.trader.PRODUCT_MIS)
+
         # Tag with strategy metadata for trade ledger
         order_details["trade_status"] = "ALGO"
         order_details["strategy_name"] = f"ATR_REVERSAL_{event.side.upper()}"
