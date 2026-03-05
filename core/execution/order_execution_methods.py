@@ -6,10 +6,10 @@ from typing import Dict, List, Optional
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QMessageBox
 
-from utils.data_models import Contract, Position
+from core.utils.data_models import Contract, Position
 from core.execution.execution_stack import ExecutionRequest
 from core.execution.paper_trading_manager import PaperTradingManager
-from utils.pricing_utils import calculate_smart_limit_price
+from core.utils.pricing_utils import calculate_smart_limit_price
 
 logger = logging.getLogger(__name__)
 

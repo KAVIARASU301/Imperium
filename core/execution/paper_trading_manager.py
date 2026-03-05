@@ -4,7 +4,7 @@ import os
 from datetime import datetime
 from typing import Dict, List
 from PySide6.QtCore import QObject, QTimer, Signal
-from utils.paper_rms import PaperRMS
+from core.utils.paper_rms import PaperRMS
 
 logger = logging.getLogger(__name__)
 

@@ -5,9 +5,9 @@ from typing import Dict, List
 from PySide6.QtCore import QPoint
 from PySide6.QtWidgets import QMessageBox
 
-from dialogs.order_history_dialog import OrderHistoryDialog
-from dialogs.pending_orders_dialog import PendingOrdersDialog
-from widgets.order_status_widget import OrderStatusWidget
+from core.dialogs.order_history_dialog import OrderHistoryDialog
+from core.dialogs.pending_orders_dialog import PendingOrdersDialog
+from core.widgets.order_status_widget import OrderStatusWidget
 
 logger = logging.getLogger(__name__)
 

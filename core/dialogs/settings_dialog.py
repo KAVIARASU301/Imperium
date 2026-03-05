@@ -6,9 +6,9 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, Signal
 
-from utils.config_manager import ConfigManager
+from core.utils.config_manager import ConfigManager
 from core.account.token_manager import TokenManager
-from widgets.ui_kit.close_button import CloseButton
+from core.widgets.ui_kit.close_button import CloseButton
 logger = logging.getLogger(__name__)
 
 

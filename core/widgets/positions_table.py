@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal, QPoint, QTimer, QEvent
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPixmap, QPainter, QPen
 
-from utils.config_manager import ConfigManager
+from core.utils.config_manager import ConfigManager
 
 logger = logging.getLogger(__name__)
 

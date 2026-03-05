@@ -3,15 +3,15 @@ from typing import Dict, List, Optional, Union
 from datetime import date
 
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+    QWidget, QVBoxLayout, QLabel, QPushButton,
     QMenu, QDialog, QFormLayout, QSpinBox, QCheckBox,
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QProgressBar, QStyle
 )
-from PySide6.QtCore import Qt, Signal, QTimer, QPoint, QEvent
+from PySide6.QtCore import Qt, Signal, QTimer, QPoint
 from PySide6.QtGui import QColor, QFont
 from kiteconnect import KiteConnect
 
-from utils.data_models import Contract
+from core.utils.data_models import Contract
 
 logger = logging.getLogger(__name__)
 
@@ -216,8 +216,6 @@ class StrikeLadderWidget(QWidget):
                 background: #2A3350;
             }
         """)
-
-    from PySide6.QtWidgets import QStyle
 
     def _apply_weighted_column_widths(self):
         total_weight = sum(self.COLUMN_WEIGHTS.values())

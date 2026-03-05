@@ -13,8 +13,8 @@ from PySide6.QtCore import Qt, QTimer
 
 from core.cvd.cvd_symbol_sets import CVDSymbolSetManager
 from core.cvd.cvd_chart_widget import CVDChartWidget
-from dialogs.cvd_multi_chart_dialog import DateNavigator
-from dialogs.cvd_symbol_sets_dialog import ManageCVDSymbolSetsDialog
+from core.dialogs.cvd_multi_chart_dialog import DateNavigator
+from core.dialogs.cvd_symbol_sets_dialog import ManageCVDSymbolSetsDialog
 
 logger = logging.getLogger(__name__)
 

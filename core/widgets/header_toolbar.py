@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
     QAbstractSpinBox
 )
 from PySide6.QtCore import Qt, Signal, QPropertyAnimation, QEasingCurve, Property, QByteArray
-from widgets.symbol_picker import SymbolPickerPopup
+from core.widgets.symbol_picker import SymbolPickerPopup
 
 logger = logging.getLogger(__name__)
 

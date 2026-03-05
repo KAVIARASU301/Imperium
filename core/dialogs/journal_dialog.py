@@ -1,4 +1,3 @@
-import json
 import logging
 from datetime import datetime, date
 from typing import Dict, Any, List, Optional
@@ -11,7 +10,7 @@ from PySide6.QtWidgets import (
     QGroupBox, QGridLayout, QCheckBox, QButtonGroup, QStackedWidget, QMessageBox
 )
 
-from utils.config_manager import ConfigManager
+from core.utils.config_manager import ConfigManager
 
 logger = logging.getLogger(__name__)
 

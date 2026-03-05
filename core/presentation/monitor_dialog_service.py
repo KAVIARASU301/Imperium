@@ -1,11 +1,9 @@
 import logging
 
-from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QMessageBox
 
-from dialogs.cvd_multi_chart_dialog import CVDMultiChartDialog
-from dialogs.market_monitor_dialog import MarketMonitorDialog
-from dialogs.watchlist_dialog import WatchlistDialog
+from core.dialogs import MarketMonitorDialog
+from core.dialogs import WatchlistDialog
 
 logger = logging.getLogger(__name__)
 

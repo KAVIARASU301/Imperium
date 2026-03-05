@@ -1,5 +1,5 @@
-from dialogs.performance_dialog import PerformanceDialog
-from dialogs.pnl_history_dialog import PnlHistoryDialog
+from core.dialogs import PerformanceDialog
+from core.dialogs import PnlHistoryDialog
 
 
 class AnalyticsDialogService:

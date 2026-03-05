@@ -4,10 +4,10 @@ from typing import Optional
 
 from PySide6.QtWidgets import QDialog, QMessageBox
 
-from dialogs.journal_dialog import JournalDialog
-from dialogs.market_monitor_dialog import MarketMonitorDialog
-from dialogs.order_history_dialog import OrderHistoryDialog
-from dialogs.watchlist_dialog import WatchlistDialog
+from core.dialogs.journal_dialog import JournalDialog
+from core.dialogs import MarketMonitorDialog
+from core.dialogs.order_history_dialog import OrderHistoryDialog
+from core.dialogs import WatchlistDialog
 
 logger = logging.getLogger(__name__)
 

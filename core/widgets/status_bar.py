@@ -131,7 +131,7 @@ class StatusBarWidget:
         Update network icon with color tint and smooth fade animation
         """
         base_path = os.path.dirname(os.path.abspath(__file__))
-        icons_dir = os.path.join(base_path, "..", "assets", "icons")
+        icons_dir = os.path.join(base_path, "../..", "assets", "icons")
 
         connected_icon = os.path.join(icons_dir, "connected.svg")
         disconnected_icon = os.path.join(icons_dir, "disconnected.svg")
@@ -181,7 +181,7 @@ class StatusBarWidget:
         Update API health icon with color tint (no animation for stability)
         """
         base_path = os.path.dirname(os.path.abspath(__file__))
-        icons_dir = os.path.join(base_path, "..", "assets", "icons")
+        icons_dir = os.path.join(base_path, "../..", "assets", "icons")
         heartbeat_icon = os.path.join(icons_dir, "heart_beat.svg")
 
         if not os.path.exists(heartbeat_icon):

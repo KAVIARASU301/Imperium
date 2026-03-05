@@ -6,7 +6,7 @@ from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QMessageBox
 
 from core.execution.paper_trading_manager import PaperTradingManager
-from utils.data_models import OptionType, Position
+from core.utils.data_models import OptionType, Position
 
 logger = logging.getLogger(__name__)
 

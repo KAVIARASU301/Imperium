@@ -3,45 +3,42 @@ import logging
 from enum import Enum
 from collections import deque
 import time
-from pathlib import Path
 from typing import Dict, List, Optional, Union
 from datetime import datetime, timedelta, time, date
 
-from core.cvd.cvd_mode import CVDMode
-from utils.time_utils import TRADING_DAY_START
+from core.utils.time_utils import TRADING_DAY_START
 from uuid import uuid4
 from PySide6.QtWidgets import (QMainWindow, QMessageBox, QDialog, QSplitter, QLabel, QFrame, QVBoxLayout)
 from PySide6.QtCore import Qt, QTimer, QByteArray
-from shiboken6 import isValid
 from kiteconnect import KiteConnect
 
 # Internal imports
-from utils.config_manager import ConfigManager
+from core.utils.config_manager import ConfigManager
 from core.market_data.market_data_worker import MarketDataWorker
-from utils.data_models import Position, Contract, OptionType
+from core.utils.data_models import Position, Contract, OptionType
 from core.market_data.instrument_loader import InstrumentLoader
-from dialogs.settings_dialog import SettingsDialog
-from dialogs.open_positions_dialog import OpenPositionsDialog
-from dialogs.quick_order_dialog import QuickOrderDialog, QuickOrderMode
+from core.dialogs import SettingsDialog
+from core.dialogs import OpenPositionsDialog
+from core.dialogs import QuickOrderDialog, QuickOrderMode
 from core.positions.position_manager import PositionManager
 from core.config import REFRESH_INTERVAL_MS
-from utils.trade_logger import TradeLogger
+from core.utils.trade_logger import TradeLogger
 from core.execution.paper_trading_manager import PaperTradingManager
-from dialogs.option_chain_dialog import OptionChainDialog
-from dialogs.strategy_builder_dialog import StrategyBuilderDialog
-from dialogs.order_confirmation_dialog import OrderConfirmationDialog
+from core.dialogs.option_chain_dialog import OptionChainDialog
+from core.dialogs import StrategyBuilderDialog
+from core.dialogs.order_confirmation_dialog import OrderConfirmationDialog
 from core.cvd.cvd_engine import CVDEngine
 from core.cvd.cvd_symbol_sets import CVDSymbolSetManager
-from dialogs.cvd_symbol_set_multi_chart_dialog import CVDSetMultiChartDialog
+from core.dialogs import CVDSetMultiChartDialog
 from core.execution.trade_ledger import TradeLedger
-from widgets.title_bar import TitleBar
+from core.widgets.title_bar import TitleBar
 from core.ui.main_window_shell import MainWindowShell
 from core.market_data import APICircuitBreaker
-from utils.about import show_about
-from utils.expiry_days import show_expiry_days
-from utils.shortcuts import show_shortcuts, setup_keyboard_shortcuts
-from dialogs.fii_dii_dialog import FIIDIIDialog
-from utils.network_utils import with_timeout, NetworkError, NetworkMonitor
+from core.utils.about import show_about
+from core.utils.expiry_days import show_expiry_days
+from core.utils.shortcuts import show_shortcuts, setup_keyboard_shortcuts
+from core.dialogs import FIIDIIDialog
+from core.utils.network_utils import with_timeout, NetworkError, NetworkMonitor
 from core.main_window_coordinators import RiskController, DialogCoordinator, MarketDataOrchestrator
 from core.market_data import MarketSubscriptionPolicy
 from core.account import AccountHealthService
@@ -55,7 +52,6 @@ logger = logging.getLogger(__name__)
 # -----------------------------
 # API Health Logger (Production Safe)
 # -----------------------------
-import os
 from pathlib import Path
 
 # Runtime data directory (outside project)
@@ -1721,7 +1717,7 @@ class ImperiumMainWindow(QMainWindow):
 
     def _open_price_cvd_chart_for_symbol(self, symbol: Optional[str]):
         """Open (or focus) Price & CVD chart dialog for a symbol."""
-        from dialogs.price_cvd_chart_dialog import PriceCVDChartDialog
+        from core.dialogs.price_cvd_chart_dialog import PriceCVDChartDialog
 
         try:
             symbol = (symbol or "").upper()
@@ -2251,7 +2247,7 @@ class ImperiumMainWindow(QMainWindow):
 
     def save_window_state(self):
         try:
-            from utils.config_manager import ConfigManager
+            from core.utils.config_manager import ConfigManager
             config_manager = ConfigManager()
             state = {
                 'geometry': self.saveGeometry().toBase64().data().decode('utf-8'),
@@ -2265,7 +2261,7 @@ class ImperiumMainWindow(QMainWindow):
 
     def restore_window_state(self):
         try:
-            from utils.config_manager import ConfigManager
+            from core.utils.config_manager import ConfigManager
             config_manager = ConfigManager()
             state = config_manager.load_window_state()
             if state:

@@ -2,13 +2,12 @@
 
 from typing import Dict, List, Optional, Union
 from datetime import datetime
-from datetime import timedelta
 import logging
 from PySide6.QtCore import QObject, Signal
 from kiteconnect import KiteConnect
 
-from utils.trade_logger import TradeLogger
-from utils.data_models import Position, Contract
+from core.utils.trade_logger import TradeLogger
+from core.utils.data_models import Position, Contract
 from core.execution.paper_trading_manager import PaperTradingManager
 
 logger = logging.getLogger(__name__)

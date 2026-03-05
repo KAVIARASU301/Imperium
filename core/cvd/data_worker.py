@@ -7,7 +7,7 @@ from PySide6.QtCore import QObject, Signal
 
 from core.cvd.cvd_historical import CVDHistoricalBuilder
 from core.account.token_manager import TokenManager
-from utils.cpr_calculator import CPRCalculator
+from core.utils.cpr_calculator import CPRCalculator
 
 logger = logging.getLogger(__name__)
 

@@ -8,8 +8,8 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QMouseEvent
 
-from utils.pricing_utils import calculate_smart_limit_price
-from utils.data_models import Contract, Position
+from core.utils.pricing_utils import calculate_smart_limit_price
+from core.utils.data_models import Contract, Position
 import locale
 
 try:

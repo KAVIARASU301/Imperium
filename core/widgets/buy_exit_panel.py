@@ -12,7 +12,7 @@ from PySide6.QtCore import Signal, QSettings
 from PySide6.QtGui import QCursor, QFont
 from kiteconnect import KiteConnect
 
-from utils.data_models import OptionType, Contract
+from core.utils.data_models import OptionType, Contract
 import locale
 locale.setlocale(locale.LC_ALL, 'en_IN')
 logger = logging.getLogger(__name__)

@@ -6,11 +6,10 @@ from PySide6.QtWidgets import (
     QLabel, QWidget, QFrame
 )
 from PySide6.QtCore import QTimer, Qt, Signal, QByteArray, QEvent
-from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor
 
-from widgets.open_positions_table import OpenPositionsTable
-from utils.data_models import Position
-from utils.config_manager import ConfigManager
+from core.widgets.open_positions_table import OpenPositionsTable
+from core.utils.data_models import Position
+from core.utils.config_manager import ConfigManager
 
 logger = logging.getLogger(__name__)
 

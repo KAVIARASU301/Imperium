@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QFont
-from utils.data_models import Position
+from core.utils.data_models import Position
 import logging
 
 logger = logging.getLogger(__name__)

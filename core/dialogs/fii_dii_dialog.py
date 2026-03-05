@@ -17,8 +17,8 @@ from PySide6.QtCharts import (
     QBarCategoryAxis, QValueAxis
 )
 
-from utils.fii_dii_store import FIIDIIStore
-from dialogs.fii_dii_data_entry_dialog import FIIDIIDataDialog
+from core.utils.fii_dii_store import FIIDIIStore
+from core.dialogs.fii_dii_data_entry_dialog import FIIDIIDataDialog
 
 logger = logging.getLogger(__name__)
 

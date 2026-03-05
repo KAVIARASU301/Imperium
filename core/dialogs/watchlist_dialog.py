@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
     QInputDialog, QMessageBox, QCompleter
 )
 
-from utils.config_manager import ConfigManager
+from core.utils.config_manager import ConfigManager
 
 logger = logging.getLogger(__name__)
 

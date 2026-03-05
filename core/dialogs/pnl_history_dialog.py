@@ -6,7 +6,6 @@ from PySide6.QtWidgets import (
     QTableWidget, QWidget, QHeaderView, QAbstractItemView
 )
 from PySide6.QtCore import Qt
-from utils.pnl_logger import PnlLogger
 from core.execution.trade_ledger import TradeLedger
 
 logger = logging.getLogger(__name__)

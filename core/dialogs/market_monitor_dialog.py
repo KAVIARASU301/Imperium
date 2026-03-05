@@ -1,19 +1,19 @@
 # dialogs/market_monitor_dialog.py
 import logging
 from datetime import datetime, timedelta
-from typing import Dict, List, Set
+from typing import Dict, Set
 import pandas as pd
 import numpy as np
 import pyqtgraph as pg
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QWidget,
-                               QLabel, QLineEdit, QPushButton, QMessageBox, QComboBox,
-                               QSizePolicy, QFrame, QSpacerItem)
+                               QLabel, QLineEdit, QPushButton, QComboBox,
+                               QFrame)
 from PySide6.QtCore import Qt, QByteArray, QTimer, Signal, QEvent
 from PySide6.QtGui import QFont
 from kiteconnect import KiteConnect
 
-from utils.config_manager import ConfigManager
-from utils.cpr_calculator import CPRCalculator
+from core.utils.config_manager import ConfigManager
+from core.utils.cpr_calculator import CPRCalculator
 from core.market_data.market_data_worker import MarketDataWorker
 
 logger = logging.getLogger(__name__)
@@ -782,7 +782,7 @@ class MarketMonitorDialog(QDialog):
         text = self.set_selector_combo.itemText(index)
 
         if text.startswith("➕"):
-            from dialogs.add_symbol_set_dialog import AddSymbolSetDialog
+            from core.dialogs.add_symbol_set_dialog import AddSymbolSetDialog
             dlg = AddSymbolSetDialog(self)
             if dlg.exec() == QDialog.Accepted:
                 data = dlg.get_data()
@@ -793,7 +793,7 @@ class MarketMonitorDialog(QDialog):
             return
 
         if text.startswith("🗑️"):
-            from dialogs.manage_symbol_sets_dialog import ManageSymbolSetsDialog
+            from core.dialogs.manage_symbol_sets_dialog import ManageSymbolSetsDialog
             dlg = ManageSymbolSetsDialog(self.symbol_sets, self)
             dlg.exec()
             self.config_manager.save_market_monitor_sets(self.symbol_sets)

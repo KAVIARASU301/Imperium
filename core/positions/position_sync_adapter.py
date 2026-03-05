@@ -1,7 +1,7 @@
 import logging
 from typing import Callable, List, Optional
 
-from utils.data_models import Position
+from core.utils.data_models import Position
 
 logger = logging.getLogger(__name__)
 

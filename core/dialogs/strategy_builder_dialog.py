@@ -2,7 +2,6 @@ import logging
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional
 
-from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QComboBox,
@@ -22,7 +21,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
 )
 
-from utils.data_models import Contract
+from core.utils.data_models import Contract
 
 logger = logging.getLogger(__name__)
 

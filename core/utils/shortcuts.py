@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from utils.data_models import OptionType
+from core.utils.data_models import OptionType
 
 SHORTCUTS = (
     {

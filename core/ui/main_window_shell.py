@@ -8,18 +8,17 @@ from PySide6.QtWidgets import (
     QApplication,
     QGraphicsOpacityEffect,
     QSplitter,
-    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
-from widgets.account_summary import AccountSummaryWidget
-from widgets.buy_exit_panel import BuyExitPanel
-from widgets.header_toolbar import HeaderToolbar
-from widgets.menu_bar import create_menu_bar
-from widgets.positions_table import PositionsTable
-from widgets.status_bar import StatusBarWidget
-from widgets.strike_ladder import StrikeLadderWidget
+from core.widgets.account_summary import AccountSummaryWidget
+from core.widgets.buy_exit_panel import BuyExitPanel
+from core.widgets.header_toolbar import HeaderToolbar
+from core.widgets import create_menu_bar
+from core.widgets import PositionsTable
+from core.widgets.status_bar import StatusBarWidget
+from core.widgets import StrikeLadderWidget
 
 
 class MainWindowShell:
