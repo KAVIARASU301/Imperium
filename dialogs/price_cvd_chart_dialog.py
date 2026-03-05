@@ -19,10 +19,8 @@ from __future__ import annotations
 import logging
 from contextlib import suppress
 from datetime import datetime, timedelta
-from typing import Optional
 
 import numpy as np
-import pandas as pd
 import pyqtgraph as pg
 from PySide6.QtCore import Qt, QThread, QTimer, QRectF, QPointF
 from PySide6.QtGui import QPicture, QPainter
@@ -32,9 +30,9 @@ from PySide6.QtWidgets import (
 )
 from pyqtgraph import AxisItem
 
-from core.auto_trader.constants import MINUTES_PER_SESSION
-from core.auto_trader.data_worker import _DataFetchWorker
-from core.auto_trader.indicators import calculate_ema, calculate_vwap
+from core.cvd.constants import MINUTES_PER_SESSION
+from core.cvd.data_worker import _DataFetchWorker
+from core.cvd.indicators import calculate_ema, calculate_vwap
 
 logger = logging.getLogger(__name__)
 
