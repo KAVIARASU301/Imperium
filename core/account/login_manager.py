@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QThread, Signal, QTimer
 from kiteconnect import KiteConnect
 from core.account.token_manager import TokenManager
-from core.widgets.ui_kit.styled_message_box import show_message
+from core.ui_kit import show_message
 
 logger = logging.getLogger(__name__)
 

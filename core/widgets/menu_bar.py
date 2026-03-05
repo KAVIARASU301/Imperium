@@ -4,7 +4,7 @@ from PySide6.QtWidgets import QMenuBar
 from PySide6.QtGui import QAction
 from typing import Dict, Tuple
 
-from core.widgets.ui_kit.menu_styles import APP_MENU_STYLESHEET
+from core.ui_kit.menu_styles import APP_MENU_STYLESHEET
 
 
 def create_menu_bar(parent) -> Tuple[QMenuBar, Dict[str, QAction]]:

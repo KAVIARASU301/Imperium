@@ -1,7 +1,7 @@
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtWidgets import QWidget, QBoxLayout, QPushButton, QHBoxLayout, QLabel
 
-from core.widgets.ui_kit.menu_styles import APP_MENU_STYLESHEET
+from core.ui_kit.menu_styles import APP_MENU_STYLESHEET
 
 
 class TitleBar(QWidget):

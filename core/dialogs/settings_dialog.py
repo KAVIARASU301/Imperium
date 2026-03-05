@@ -8,7 +8,7 @@ from PySide6.QtCore import Qt, Signal
 
 from core.utils.config_manager import ConfigManager
 from core.account.token_manager import TokenManager
-from core.widgets.ui_kit.close_button import CloseButton
+from core.ui_kit.close_button import CloseButton
 logger = logging.getLogger(__name__)
 
 
