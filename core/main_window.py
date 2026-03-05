@@ -16,7 +16,7 @@ from kiteconnect import KiteConnect
 from core.utils.config_manager import ConfigManager
 from core.market_data.market_data_worker import MarketDataWorker
 from core.utils.data_models import Position, Contract, OptionType
-from core.market_data.instrument_loader import InstrumentLoader
+from core.market_data.instrument_loader import InstrumentLoader, InstrumentConfig
 from core.dialogs import SettingsDialog
 from core.dialogs import OpenPositionsDialog
 from core.dialogs import QuickOrderDialog, QuickOrderMode
@@ -344,10 +344,7 @@ class ImperiumMainWindow(QMainWindow):
     # =========================================================================
 
     def _init_background_workers(self):
-        self.instrument_loader = InstrumentLoader(self.real_kite_client)
-        self.instrument_loader.instruments_loaded.connect(self._on_instruments_loaded)
-        self.instrument_loader.error_occurred.connect(self._on_api_error)
-        self.instrument_loader.start()
+        self._init_instrument_loader()
 
         self.market_data_worker = MarketDataWorker(self.api_key, self.access_token)
         self.market_data_worker.data_received.connect(self._on_market_data, Qt.QueuedConnection)
@@ -359,6 +356,34 @@ class ImperiumMainWindow(QMainWindow):
         self.update_timer = QTimer(self)
         self.update_timer.timeout.connect(self._update_ui)
         self.update_timer.start(REFRESH_INTERVAL_MS)
+
+    def _init_instrument_loader(self):
+        """Build InstrumentLoader from saved Symbol Universe Config."""
+        inst_config = InstrumentConfig.from_settings(self.settings)
+
+        logger.info(
+            f"Instrument loader config — "
+            f"Exchange: {inst_config.exchange_mode} | "
+            f"Symbols: {inst_config.symbol_mode} | "
+            f"Expiry depth: {inst_config.expiry_depth}"
+        )
+
+        self._last_inst_config = inst_config
+        self.instrument_loader = InstrumentLoader(
+            kite_client=self.real_kite_client,
+            config=inst_config,
+        )
+        self.instrument_loader.instruments_loaded.connect(self._on_instruments_loaded)
+        self.instrument_loader.error_occurred.connect(self._on_instrument_error)
+        self.instrument_loader.progress_update.connect(self._on_instrument_progress)
+        self.instrument_loader.loading_progress.connect(self._on_loading_progress)
+        self.instrument_loader.start()
+
+    def _on_instrument_progress(self, message: str):
+        logger.info(f"Instrument loader: {message}")
+
+    def _on_loading_progress(self, progress: int):
+        logger.debug(f"Instrument loading progress: {progress}%")
 
     def _on_market_data(self, data: list):
         self.market_data_orchestrator.on_market_data(data)
@@ -669,6 +694,32 @@ class ImperiumMainWindow(QMainWindow):
 
         self._on_settings_changed(self.header.get_current_settings())
         self._reload_risk_limits_from_settings()
+        self._maybe_reload_instruments()
+
+    def _maybe_reload_instruments(self):
+        """Prompt user to reload instruments if the instrument config changed."""
+        new_config = InstrumentConfig.from_settings(self.settings)
+        current_config = getattr(self, '_last_inst_config', None)
+
+        if current_config and new_config.cache_key() == current_config.cache_key():
+            return
+
+        self._last_inst_config = new_config
+        reply = QMessageBox.question(
+            self,
+            "Reload Instruments?",
+            "Instrument settings changed.\n\n"
+            "Reload instruments now to apply changes?\n"
+            "(You can also restart the app.)",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        if reply == QMessageBox.Yes:
+            if hasattr(self, 'instrument_loader') and self.instrument_loader.isRunning():
+                self.instrument_loader.stop()
+                self.instrument_loader.wait(2000)
+
+            self._init_instrument_loader()
 
     def _apply_settings(self, new_settings: dict):
         self.settings.update(new_settings)

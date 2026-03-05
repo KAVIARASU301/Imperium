@@ -35,11 +35,16 @@ class ConfigManager:
             'auto_refresh': True,
             'refresh_interval': 2,
             'timeout': 7,
-            # Risk hardening defaults (0 means disabled)
+            # Risk
             'risk_intraday_drawdown_limit': 0,
             'risk_max_portfolio_loss': 0,
             'risk_max_open_positions': 0,
             'risk_max_gross_open_quantity': 0,
+            # ── Instrument loading ─────────────────────────────────────────────────
+            'inst_exchange_mode': 'NFO_ONLY',
+            'inst_symbol_mode': 'INDICES_ONLY',
+            'inst_preferred_symbols': ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY'],
+            'inst_expiry_depth': 1,
         }
 
     # ... (load_settings, save_settings, and other methods remain the same) ...

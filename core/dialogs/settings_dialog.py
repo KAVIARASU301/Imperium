@@ -2,7 +2,8 @@ import logging
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTabWidget,
     QWidget, QGroupBox, QGridLayout, QLabel, QLineEdit,
-    QSpinBox, QDoubleSpinBox, QComboBox, QCheckBox, QPushButton, QMessageBox,
+    QSpinBox, QDoubleSpinBox, QComboBox, QCheckBox, QPushButton,
+    QMessageBox, QListWidget, QListWidgetItem, QAbstractItemView,
 )
 from PySide6.QtCore import Qt, Signal
 
@@ -23,7 +24,8 @@ class SettingsDialog(QDialog):
         self.setWindowTitle("Settings")
         self.setModal(True)
         self.setMinimumWidth(580)
-        self.setFixedHeight(520)  # Prevent vertical stretching
+        self.setMinimumHeight(560)
+        self.setMaximumHeight(640)
 
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
         self.setAttribute(Qt.WA_TranslucentBackground)
@@ -63,6 +65,7 @@ class SettingsDialog(QDialog):
         tabs.addTab(self._create_risk_tab(), "RISK")
         tabs.addTab(self._create_display_tab(), "DISPLAY")
         tabs.addTab(self._create_api_tab(), "API")
+        tabs.addTab(self._create_instruments_tab(), "INSTRUMENTS")
         content_layout.addWidget(tabs)
 
         content_layout.addLayout(self._create_action_buttons())
@@ -347,6 +350,227 @@ class SettingsDialog(QDialog):
         layout.addStretch()
         return tab
 
+    def _create_instruments_tab(self) -> QWidget:
+        """Instrument loading configuration tab."""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(15, 20, 15, 15)
+        layout.setSpacing(12)
+
+        exch_group = QGroupBox("Exchange")
+        exch_layout = QGridLayout(exch_group)
+        exch_layout.setContentsMargins(12, 14, 12, 12)
+        exch_layout.setSpacing(8)
+
+        exch_layout.addWidget(QLabel("Load from:"), 0, 0)
+        self.inst_exchange_mode = QComboBox()
+        self.inst_exchange_mode.addItems([
+            "NFO Only",
+            "NFO + BFO (BSE F&O)",
+        ])
+        self.inst_exchange_mode.setToolTip(
+            "NFO = NSE derivatives (NIFTY/stocks)\n"
+            "BFO = BSE derivatives (SENSEX/BANKEX) — adds load"
+        )
+        exch_layout.addWidget(self.inst_exchange_mode, 0, 1)
+        layout.addWidget(exch_group)
+
+        sym_group = QGroupBox("Symbol Universe")
+        sym_layout = QVBoxLayout(sym_group)
+        sym_layout.setContentsMargins(12, 14, 12, 12)
+        sym_layout.setSpacing(8)
+
+        mode_row = QWidget()
+        mode_row_layout = QGridLayout(mode_row)
+        mode_row_layout.setContentsMargins(0, 0, 0, 0)
+        mode_row_layout.setSpacing(8)
+
+        mode_row_layout.addWidget(QLabel("Symbol mode:"), 0, 0)
+        self.inst_symbol_mode = QComboBox()
+        self.inst_symbol_mode.addItems([
+            "Indices Only (lightest)",
+            "Preferred List (custom)",
+            "All NFO (heaviest)",
+        ])
+        self.inst_symbol_mode.setToolTip(
+            "Indices Only  → 4 index symbols only\n"
+            "Preferred List → your custom symbol list\n"
+            "All NFO        → every tradeable symbol (150 + symbols, slow)"
+        )
+        self.inst_symbol_mode.currentIndexChanged.connect(self._on_inst_symbol_mode_changed)
+        mode_row_layout.addWidget(self.inst_symbol_mode, 0, 1)
+        sym_layout.addWidget(mode_row)
+
+        self.inst_symbols_editor = QWidget()
+        editor_layout = QVBoxLayout(self.inst_symbols_editor)
+        editor_layout.setContentsMargins(0, 4, 0, 0)
+        editor_layout.setSpacing(4)
+
+        editor_layout.addWidget(QLabel("Preferred symbols (one per row):"))
+
+        self.inst_symbols_list = QListWidget()
+        self.inst_symbols_list.setFixedHeight(90)
+        self.inst_symbols_list.setSelectionMode(QAbstractItemView.SingleSelection)
+        editor_layout.addWidget(self.inst_symbols_list)
+
+        btn_row = QHBoxLayout()
+        self.inst_sym_input = QLineEdit()
+        self.inst_sym_input.setPlaceholderText("e.g. SBIN")
+        self.inst_sym_input.setMaximumWidth(100)
+        add_btn = QPushButton("＋ Add")
+        add_btn.setObjectName("secondaryButton")
+        add_btn.setFixedWidth(70)
+        add_btn.clicked.connect(self._add_preferred_symbol)
+        rem_btn = QPushButton("－ Remove")
+        rem_btn.setObjectName("secondaryButton")
+        rem_btn.setFixedWidth(80)
+        rem_btn.clicked.connect(self._remove_preferred_symbol)
+
+        btn_row.addWidget(self.inst_sym_input)
+        btn_row.addWidget(add_btn)
+        btn_row.addWidget(rem_btn)
+        btn_row.addStretch()
+        editor_layout.addLayout(btn_row)
+
+        sym_layout.addWidget(self.inst_symbols_editor)
+        layout.addWidget(sym_group)
+
+        exp_group = QGroupBox("Expiry Depth")
+        exp_layout = QGridLayout(exp_group)
+        exp_layout.setContentsMargins(12, 14, 12, 12)
+        exp_layout.setSpacing(8)
+
+        exp_layout.addWidget(QLabel("Load expiries:"), 0, 0)
+        self.inst_expiry_depth = QComboBox()
+        self.inst_expiry_depth.addItems([
+            "Current expiry only  (fastest)",
+            "Current + 1 expiry",
+            "Current + 2 expiries",
+            "All expiries  (slowest)",
+        ])
+        self.inst_expiry_depth.setToolTip(
+            "For hedging strategies you typically only need Current + 1.\n"
+            "'All expiries' can add thousands of extra strikes."
+        )
+        exp_layout.addWidget(self.inst_expiry_depth, 0, 1)
+
+        self.inst_load_hint = QLabel("")
+        self.inst_load_hint.setObjectName("infoLabel")
+        self.inst_load_hint.setWordWrap(True)
+        exp_layout.addWidget(self.inst_load_hint, 1, 0, 1, 2)
+
+        self.inst_expiry_depth.currentIndexChanged.connect(self._update_load_hint)
+        self.inst_symbol_mode.currentIndexChanged.connect(self._update_load_hint)
+        self.inst_exchange_mode.currentIndexChanged.connect(self._update_load_hint)
+
+        layout.addWidget(exp_group)
+        layout.addStretch()
+
+        return tab
+
+    def _on_inst_symbol_mode_changed(self, index: int) -> None:
+        """Show/hide the custom symbol editor based on mode."""
+        is_custom = index == 1
+        self.inst_symbols_editor.setVisible(is_custom)
+        self._update_load_hint()
+
+    def _add_preferred_symbol(self) -> None:
+        sym = self.inst_sym_input.text().strip().upper()
+        if not sym:
+            return
+
+        existing = [
+            self.inst_symbols_list.item(i).text()
+            for i in range(self.inst_symbols_list.count())
+        ]
+        if sym not in existing:
+            self.inst_symbols_list.addItem(QListWidgetItem(sym))
+        self.inst_sym_input.clear()
+        self._has_changes = True
+        self._update_load_hint()
+
+    def _remove_preferred_symbol(self) -> None:
+        row = self.inst_symbols_list.currentRow()
+        if row >= 0:
+            self.inst_symbols_list.takeItem(row)
+            self._has_changes = True
+            self._update_load_hint()
+
+    def _update_load_hint(self) -> None:
+        """Show a rough load-size description so the user understands the tradeoff."""
+        exch_idx = self.inst_exchange_mode.currentIndex()
+        sym_idx = self.inst_symbol_mode.currentIndex()
+        exp_idx = self.inst_expiry_depth.currentIndex()
+
+        base_counts = {0: "~8,000", 1: "~14,000", 2: "~22,000+"}
+        exp_mult = ["1×", "2×", "3×", "up to 8×"]
+        exch_note = "" if exch_idx == 0 else " + BSE F&O contracts"
+
+        if sym_idx == 2:
+            hint = (
+                f"⚠ All NFO loads 150 + symbols{exch_note}. "
+                f"With expiry depth {exp_mult[exp_idx]} this can be 100,000 + contracts. "
+                "Only use if you need full market coverage."
+            )
+        elif sym_idx == 0:
+            approx = base_counts.get(exp_idx, "varies")
+            hint = (
+                f"✓ Indices only{exch_note}: ~{approx} contracts "
+                f"(expiry depth {exp_mult[exp_idx]}). Recommended for most strategies."
+            )
+        else:
+            count = self.inst_symbols_list.count() if hasattr(self, "inst_symbols_list") else "?"
+            hint = (
+                f"Custom list: {count} symbol(s){exch_note}. "
+                f"Expiry depth {exp_mult[min(exp_idx, 3)]}."
+            )
+
+        if hasattr(self, "inst_load_hint"):
+            self.inst_load_hint.setText(hint)
+
+    def _load_inst_settings(self, settings: dict) -> None:
+        """Load instrument settings into the INSTRUMENTS tab controls."""
+        exch_map = {"NFO_ONLY": 0, "NFO_AND_BFO": 1}
+        self.inst_exchange_mode.setCurrentIndex(
+            exch_map.get(settings.get("inst_exchange_mode", "NFO_ONLY"), 0)
+        )
+
+        sym_map = {"INDICES_ONLY": 0, "CUSTOM": 1, "ALL_NFO": 2}
+        sym_idx = sym_map.get(settings.get("inst_symbol_mode", "INDICES_ONLY"), 0)
+        self.inst_symbol_mode.setCurrentIndex(sym_idx)
+
+        self.inst_symbols_list.clear()
+        for sym in settings.get(
+            "inst_preferred_symbols",
+            ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"],
+        ):
+            self.inst_symbols_list.addItem(QListWidgetItem(sym))
+
+        depth_map = {0: 0, 1: 1, 2: 2, -1: 3}
+        depth_val = settings.get("inst_expiry_depth", 1)
+        self.inst_expiry_depth.setCurrentIndex(depth_map.get(depth_val, 1))
+
+        self._on_inst_symbol_mode_changed(sym_idx)
+        self._update_load_hint()
+
+    def _get_inst_settings_dict(self) -> dict:
+        """Extract instrument settings from UI controls."""
+        exch_vals = ["NFO_ONLY", "NFO_AND_BFO"]
+        sym_vals = ["INDICES_ONLY", "CUSTOM", "ALL_NFO"]
+        depth_vals = [0, 1, 2, -1]
+
+        preferred = [
+            self.inst_symbols_list.item(i).text()
+            for i in range(self.inst_symbols_list.count())
+        ]
+
+        return {
+            "inst_exchange_mode": exch_vals[self.inst_exchange_mode.currentIndex()],
+            "inst_symbol_mode": sym_vals[self.inst_symbol_mode.currentIndex()],
+            "inst_preferred_symbols": preferred,
+            "inst_expiry_depth": depth_vals[self.inst_expiry_depth.currentIndex()],
+        }
+
     def _track_changes(self):
         """Track changes to enable unsaved changes warning."""
         self.default_symbol.currentTextChanged.connect(lambda: setattr(self, '_has_changes', True))
@@ -362,6 +586,11 @@ class SettingsDialog(QDialog):
         self.risk_max_portfolio_loss.valueChanged.connect(lambda: setattr(self, '_has_changes', True))
         self.risk_max_open_positions.valueChanged.connect(lambda: setattr(self, '_has_changes', True))
         self.risk_max_gross_open_quantity.valueChanged.connect(lambda: setattr(self, '_has_changes', True))
+        self.inst_exchange_mode.currentTextChanged.connect(lambda: setattr(self, '_has_changes', True))
+        self.inst_symbol_mode.currentTextChanged.connect(lambda: setattr(self, '_has_changes', True))
+        self.inst_expiry_depth.currentTextChanged.connect(lambda: setattr(self, '_has_changes', True))
+        self.inst_sym_input.textChanged.connect(lambda: setattr(self, '_has_changes', True))
+        self.inst_symbols_list.itemSelectionChanged.connect(lambda: setattr(self, '_has_changes', True))
         self.api_key.textChanged.connect(lambda: setattr(self, '_has_changes', True))
         self.api_secret.textChanged.connect(lambda: setattr(self, '_has_changes', True))
 
@@ -570,6 +799,7 @@ class SettingsDialog(QDialog):
         self.risk_max_portfolio_loss.setValue(int(settings.get("risk_max_portfolio_loss", 0) or 0))
         self.risk_max_open_positions.setValue(int(settings.get("risk_max_open_positions", 0) or 0))
         self.risk_max_gross_open_quantity.setValue(int(settings.get("risk_max_gross_open_quantity", 0) or 0))
+        self._load_inst_settings(settings)
 
         creds = self.token_manager.load_credentials()
         if creds:
@@ -596,6 +826,7 @@ class SettingsDialog(QDialog):
             "risk_max_portfolio_loss": self.risk_max_portfolio_loss.value(),
             "risk_max_open_positions": self.risk_max_open_positions.value(),
             "risk_max_gross_open_quantity": self.risk_max_gross_open_quantity.value(),
+            **self._get_inst_settings_dict(),
         })
 
         self.config_manager.save_settings(settings)
@@ -606,6 +837,40 @@ class SettingsDialog(QDialog):
         self._has_changes = False
         self.settings_changed.emit(settings)
         self.accept()
+
+
+    def _load_inst_settings(self, settings):
+        """Load instrument-universe settings when controls are available."""
+        if hasattr(self, "inst_exchange_mode"):
+            self.inst_exchange_mode.setCurrentText(settings.get("inst_exchange_mode", "NFO_ONLY"))
+        if hasattr(self, "inst_symbol_mode"):
+            self.inst_symbol_mode.setCurrentText(settings.get("inst_symbol_mode", "INDICES_ONLY"))
+        if hasattr(self, "inst_preferred_symbols"):
+            symbols = settings.get("inst_preferred_symbols", ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"])
+            self.inst_preferred_symbols.setText(",".join(symbols) if isinstance(symbols, list) else str(symbols))
+        if hasattr(self, "inst_expiry_depth"):
+            self.inst_expiry_depth.setValue(int(settings.get("inst_expiry_depth", 1) or 1))
+
+    def _get_inst_settings_dict(self):
+        """Return instrument-universe settings from UI controls, with safe fallbacks."""
+        defaults = {
+            "inst_exchange_mode": "NFO_ONLY",
+            "inst_symbol_mode": "INDICES_ONLY",
+            "inst_preferred_symbols": ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"],
+            "inst_expiry_depth": 1,
+        }
+
+        if hasattr(self, "inst_exchange_mode"):
+            defaults["inst_exchange_mode"] = self.inst_exchange_mode.currentText()
+        if hasattr(self, "inst_symbol_mode"):
+            defaults["inst_symbol_mode"] = self.inst_symbol_mode.currentText()
+        if hasattr(self, "inst_preferred_symbols"):
+            raw = self.inst_preferred_symbols.text().strip()
+            defaults["inst_preferred_symbols"] = [s.strip().upper() for s in raw.split(",") if s.strip()]
+        if hasattr(self, "inst_expiry_depth"):
+            defaults["inst_expiry_depth"] = self.inst_expiry_depth.value()
+
+        return defaults
 
     def _reset_to_defaults(self):
         reply = QMessageBox.question(

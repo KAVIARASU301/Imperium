@@ -1,8 +1,8 @@
-# core/utils/instrument_loader.py
+# core/market_data/instrument_loader.py
 
-"""Robust instrument loader for options trading with caching and retry logic.
-
-Supports index and stock derivatives from the NFO exchange.
+"""
+Robust instrument loader for options trading with caching and retry logic.
+Supports index and stock derivatives from NFO/BFO exchanges.
 """
 
 import logging
@@ -10,345 +10,364 @@ import time
 import pickle
 import os
 from datetime import datetime, timedelta
-from typing import Dict, List, Any, Optional
-from PySide6.QtCore import QThread, Signal
-from kiteconnect import KiteConnect
+from dataclasses import dataclass
+from hashlib import md5
+from typing import Dict, List, Any, Optional, Set
+
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+from kiteconnect import KiteConnect
+from PySide6.QtCore import QThread, Signal
 
 logger = logging.getLogger(__name__)
 
-CACHE_SCHEMA_VERSION = 5
+CACHE_SCHEMA_VERSION = 6
 
-INDEX_SYMBOLS = {"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"}
+INDEX_SYMBOLS: Set[str] = {"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"}
 INDEX_EXPIRY_LIMIT = 4
 STOCK_EXPIRY_LIMIT = 2
 
 
+# ─────────────────────────────────────────────────────────────
+# InstrumentConfig
+# ─────────────────────────────────────────────────────────────
+@dataclass(frozen=True)
+class InstrumentConfig:
+    """
+    Configuration describing which instrument universe to load.
+    """
+
+    exchange_mode: str = "NFO_ONLY"
+    symbol_mode: str = "INDICES_ONLY"
+    preferred_symbols: tuple[str, ...] = ("NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY")
+    expiry_depth: int = 1
+
+    @classmethod
+    def from_settings(cls, settings: Dict[str, Any]) -> "InstrumentConfig":
+
+        preferred = settings.get(
+            "inst_preferred_symbols",
+            ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"],
+        )
+
+        if not isinstance(preferred, list):
+            preferred = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"]
+
+        return cls(
+            exchange_mode=settings.get("inst_exchange_mode", "NFO_ONLY"),
+            symbol_mode=settings.get("inst_symbol_mode", "INDICES_ONLY"),
+            preferred_symbols=tuple(str(s).upper() for s in preferred),
+            expiry_depth=int(settings.get("inst_expiry_depth", 1)),
+        )
+
+    def cache_key(self) -> str:
+        payload = {
+            "exchange_mode": self.exchange_mode,
+            "symbol_mode": self.symbol_mode,
+            "preferred_symbols": list(self.preferred_symbols),
+            "expiry_depth": self.expiry_depth,
+            "schema_version": CACHE_SCHEMA_VERSION,
+        }
+        return md5(repr(payload).encode("utf-8")).hexdigest()[:12]
+
+
+# ─────────────────────────────────────────────────────────────
+# InstrumentLoader
+# ─────────────────────────────────────────────────────────────
 class InstrumentLoader(QThread):
-    """Background thread for loading NFO instruments with robust retry logic and caching"""
 
     instruments_loaded = Signal(dict)
     error_occurred = Signal(str)
     progress_update = Signal(str)
     loading_progress = Signal(int)
 
-    def __init__(self, kite_client: KiteConnect, cache_dir: Optional[str] = None):
+    def __init__(
+        self,
+        kite_client: KiteConnect,
+        config: Optional[InstrumentConfig] = None,
+        cache_dir: Optional[str] = None,
+    ):
         super().__init__()
-        self.kite = kite_client
-        self.cache_dir = cache_dir or os.path.expanduser("~/.imperium_desk/cache")
-        self.cache_file = os.path.join(self.cache_dir, "options_instruments_cache.pkl")
-        self.cache_info_file = os.path.join(self.cache_dir, "options_cache_info.pkl")
-        self._stop_requested = False
 
-        # Create cache directory if it doesn't exist
+        self.kite = kite_client
+        self.config = config or InstrumentConfig()
+
+        self.cache_dir = cache_dir or os.path.expanduser("~/.imperium_desk/cache")
         os.makedirs(self.cache_dir, exist_ok=True)
 
-        # Configure requests session with retry strategy
+        cache_key = self.config.cache_key()
+
+        self.cache_file = os.path.join(self.cache_dir, f"instruments_{cache_key}.pkl")
+        self.cache_info_file = os.path.join(
+            self.cache_dir, f"instruments_{cache_key}_info.pkl"
+        )
+
+        self._stop_requested = False
+
         self.session = requests.Session()
         retry_strategy = Retry(
             total=3,
             status_forcelist=[429, 500, 502, 503, 504],
             backoff_factor=1,
-            allowed_methods=["HEAD", "GET", "OPTIONS"]
+            allowed_methods=["HEAD", "GET", "OPTIONS"],
         )
+
         adapter = HTTPAdapter(max_retries=retry_strategy)
         self.session.mount("https://", adapter)
+        self.session.mount("http://", adapter)
 
-    def stop(self) -> None:
-        """Request the thread to stop"""
+    # ─────────────────────────────────────────────────────────
+
+    def stop(self):
         self._stop_requested = True
-        logger.info("Stop requested for InstrumentLoader")
+
+    # ─────────────────────────────────────────────────────────
+    # Cache
+    # ─────────────────────────────────────────────────────────
 
     def is_cache_valid(self) -> bool:
-        """Check if cached instruments are still valid (within 12 hours for options)"""
         try:
-            if not os.path.exists(self.cache_file) or not os.path.exists(self.cache_info_file):
+
+            if not os.path.exists(self.cache_file):
                 return False
 
-            with open(self.cache_info_file, 'rb') as f:
-                cache_info: Dict[str, Any] = pickle.load(f)
-
-            cache_time = cache_info.get('timestamp')
-            if not cache_time:
+            if not os.path.exists(self.cache_info_file):
                 return False
 
-            cache_version = cache_info.get('schema_version', 1)
-            if cache_version != CACHE_SCHEMA_VERSION:
-                logger.info(
-                    f"Cache schema mismatch ({cache_version} != {CACHE_SCHEMA_VERSION}), refreshing"
-                )
+            with open(self.cache_info_file, "rb") as f:
+                info = pickle.load(f)
+
+            if info.get("schema_version") != CACHE_SCHEMA_VERSION:
                 return False
 
-            # Check if cache is less than 12 hours old
-            cache_age = datetime.now() - cache_time
-            is_valid = cache_age < timedelta(hours=12)
-
-            if is_valid:
-                logger.info(f"Using cached instruments (age: {cache_age})")
-            else:
-                logger.info(f"Cache expired (age: {cache_age})")
-
-            return is_valid
+            age = datetime.now() - info["timestamp"]
+            return age < timedelta(hours=12)
 
         except Exception as e:
-            logger.error(f"Error checking cache validity: {e}")
+            logger.error(f"Cache validation failed: {e}")
             return False
 
-    def load_cached_instruments(self) -> Optional[Dict[str, Any]]:
-        """Load processed instruments from cache"""
-        try:
-            with open(self.cache_file, 'rb') as f:
-                symbol_data: Dict[str, Any] = pickle.load(f)
+    def load_cached_instruments(self):
 
-            total_instruments = sum(len(data['instruments']) for data in symbol_data.values())
-            logger.info(f"Loaded {len(symbol_data)} symbols with {total_instruments} instruments from cache")
-            return symbol_data
+        try:
+            with open(self.cache_file, "rb") as f:
+                return pickle.load(f)
 
         except Exception as e:
-            logger.error(f"Error loading cached instruments: {e}")
+            logger.error(f"Cache load failed: {e}")
             return None
 
-    def save_instruments_to_cache(self, symbol_data: Dict[str, Any]) -> None:
-        """Save processed instruments to cache with timestamp"""
+    def save_instruments_to_cache(self, symbol_data):
+
         try:
-            with open(self.cache_file, 'wb') as f:
+
+            with open(self.cache_file, "wb") as f:
                 pickle.dump(symbol_data, f, protocol=pickle.HIGHEST_PROTOCOL)
 
-            total_instruments = sum(len(data['instruments']) for data in symbol_data.values())
-            cache_info: Dict[str, Any] = {
-                'timestamp': datetime.now(),
-                'schema_version': CACHE_SCHEMA_VERSION,
-                'symbols_count': len(symbol_data),
-                'instruments_count': total_instruments
+            info = {
+                "timestamp": datetime.now(),
+                "schema_version": CACHE_SCHEMA_VERSION,
+                "symbols_count": len(symbol_data),
             }
-            with open(self.cache_info_file, 'wb') as f:
-                pickle.dump(cache_info, f, protocol=pickle.HIGHEST_PROTOCOL)
 
-            logger.info(f"Cached {len(symbol_data)} symbols with {total_instruments} instruments")
+            with open(self.cache_info_file, "wb") as f:
+                pickle.dump(info, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+            logger.info("Instrument cache saved")
 
         except Exception as e:
-            logger.error(f"Error saving instruments to cache: {e}")
+            logger.error(f"Cache save failed: {e}")
 
-    def process_instruments(self, instruments: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Process raw exchange instruments into organized symbol data."""
-        self.progress_update.emit("Processing instruments...")
-        self.loading_progress.emit(70)
+    # ─────────────────────────────────────────────────────────
+    # Fetch
+    # ─────────────────────────────────────────────────────────
 
-        symbol_data: Dict[str, Any] = {}
-        total_instruments = len(instruments)
-        processed_count = 0
+    def fetch_instruments_with_retry(self, exchange: str):
 
-        for inst in instruments:
-            if self._stop_requested:
-                raise Exception("Operation cancelled by user")
-
-            symbol_name = inst.get("name")
-
-
-            # 🔥 Initialize symbol FIRST (critical fix)
-            if symbol_name not in symbol_data:
-                symbol_data[symbol_name] = {
-                    "lot_size": inst["lot_size"],
-                    "tick_size": inst["tick_size"],
-                    "expiries": set(),
-                    "strikes": set(),
-                    "instruments": [],
-                    "futures": [],
-                    "exchange": inst["exchange"],
-                    "instrument_token": None,  # index token if present
-                }
-
-            # 🔥 Capture index instrument token safely
-            if inst.get("segment") == "INDICES":
-                symbol_data[symbol_name]["instrument_token"] = inst["instrument_token"]
-                continue
-
-            inst_type = inst.get("instrument_type")
-
-            # 🔥 Options
-            if inst_type in ("CE", "PE"):
-                symbol_data[symbol_name]["expiries"].add(inst["expiry"])
-                symbol_data[symbol_name]["strikes"].add(inst["strike"])
-                symbol_data[symbol_name]["instruments"].append(inst)
-
-            # 🔥 Futures
-            elif inst_type == "FUT":
-                symbol_data[symbol_name]["futures"].append({
-                    "instrument_token": inst["instrument_token"],
-                    "expiry": inst["expiry"]
-                })
-
-            processed_count += 1
-
-            # Progress update (cheap & smooth)
-            if processed_count % 1000 == 0:
-                progress = 70 + int((processed_count / total_instruments) * 20)
-                self.loading_progress.emit(min(progress, 90))
-
-        # 🔥 Finalize sets → sorted lists
-        self.progress_update.emit("Finalizing instruments...")
-        self.loading_progress.emit(90)
-
-        pre_prune_count = sum(len(data["instruments"]) for data in symbol_data.values())
-
-        for symbol, data in symbol_data.items():
-            if self._stop_requested:
-                raise Exception("Operation cancelled by user")
-
-            sorted_expiries = sorted(data["expiries"])
-            expiry_limit = INDEX_EXPIRY_LIMIT if symbol in INDEX_SYMBOLS else STOCK_EXPIRY_LIMIT
-            filtered_expiries = sorted_expiries[:expiry_limit]
-            allowed_expiries = set(filtered_expiries)
-
-            data["expiries"] = filtered_expiries
-            data["instruments"] = [
-                inst for inst in data["instruments"] if inst.get("expiry") in allowed_expiries
-            ]
-            data["strikes"] = sorted({inst["strike"] for inst in data["instruments"]})
-            # Keep futures independent from option expiry pruning.
-            # Weekly option expiries can push the monthly futures expiry
-            # outside the capped option-expiry list, which would wrongly
-            # drop all futures for symbols like NIFTY and break token lookup.
-            data["futures"] = sorted(data["futures"], key=lambda item: item["expiry"])
-
-        post_prune_count = sum(len(data["instruments"]) for data in symbol_data.values())
-        logger.info(
-            f"Processed {len(symbol_data)} symbols from {total_instruments} instruments "
-            f"options kept after expiry cap: {post_prune_count}/{pre_prune_count}"
-        )
-
-        return symbol_data
-
-    def fetch_instruments_with_retry(self, exchange: str) -> List[Dict[str, Any]]:
-        """Fetch instruments from specified exchange with robust retry logic"""
         max_retries = 5
         base_delay = 2
 
-        for attempt in range(max_retries):
-            if self._stop_requested:
-                logger.info(f"Stop requested, aborting {exchange} instrument fetch")
-                raise Exception("Operation cancelled by user")
+        for attempt in range(1, max_retries + 1):
 
             try:
-                progress_msg = f"Attempt {attempt + 1}/{max_retries}: Fetching {exchange} instruments..."
-                self.progress_update.emit(progress_msg)
-                logger.info(f"Attempt {attempt + 1}: Loading {exchange} instruments...")
-
-                # Update progress based on exchange
-                base_progress = 10 if exchange == "NFO" else 40
-                self.loading_progress.emit(base_progress + (attempt * 5))
-
-                # Set increasing timeout for each retry
-                original_timeout = getattr(self.kite, 'timeout', 7)
-                self.kite.timeout = min(45, original_timeout + (attempt * 8))
-
-                # Fetch instruments
-                instruments = self.kite.instruments(exchange)
-
-                if not instruments:
-                    raise Exception(f"No {exchange} instruments received from API")
-
-                logger.info(f"Successfully fetched {len(instruments)} {exchange} instruments")
-                return instruments
+                return self.kite.instruments(exchange)
 
             except Exception as e:
-                error_msg = str(e)
-                logger.error(f"Attempt {attempt + 1} failed for {exchange}: {error_msg}")
 
-                if self._stop_requested:
-                    raise e
-
-                if attempt < max_retries - 1:
-                    # Exponential backoff with jitter
-                    delay = base_delay * (2 ** attempt) + (attempt * 2)
-                    delay = min(delay, 45)
-
-                    logger.info(f"Retrying {exchange} fetch in {delay} seconds...")
-                    self.progress_update.emit(f"Retry in {delay}s... ({error_msg})")
-
-                    for i in range(int(delay)):
-                        if self._stop_requested:
-                            raise Exception("Operation cancelled by user")
-                        time.sleep(1)
+                if attempt < max_retries:
+                    delay = base_delay * attempt
+                    logger.warning(
+                        f"{exchange} fetch failed (attempt {attempt}/{max_retries}): {e}"
+                    )
+                    time.sleep(delay)
                 else:
-                    logger.error(f"All {exchange} fetch retries failed")
-                    # Don't fail completely if one exchange fails
-                    logger.warning(f"Continuing without {exchange} data")
+                    logger.error(f"All retries failed for {exchange}")
                     return []
 
         return []
 
-    def run(self) -> None:
-        """Load full NFO instruments with caching and retry safeguards."""
+    # ─────────────────────────────────────────────────────────
+    # Processing
+    # ─────────────────────────────────────────────────────────
+
+    def process_instruments(self, instruments):
+
+        symbol_data = {}
+        total_instruments = len(instruments)
+        processed_count = 0
+
+        for inst in instruments:
+
+            if self._stop_requested:
+                raise Exception("Cancelled")
+
+            symbol_name = inst.get("name")
+
+            if not symbol_name:
+                continue
+
+            if symbol_name not in symbol_data:
+                symbol_data[symbol_name] = {
+                    "lot_size": inst["lot_size"],
+                    "tick_size": inst["tick_size"],
+                    "exchange": inst["exchange"],
+                    "instrument_token": None,
+                    "expiries": set(),
+                    "strikes": set(),
+                    "instruments": [],
+                    "futures": [],
+                }
+
+            inst_type = inst.get("instrument_type")
+
+            if inst_type in ("CE", "PE"):
+
+                symbol_data[symbol_name]["expiries"].add(inst["expiry"])
+                symbol_data[symbol_name]["strikes"].add(inst["strike"])
+                symbol_data[symbol_name]["instruments"].append(inst)
+
+            elif inst_type == "FUT":
+
+                symbol_data[symbol_name]["futures"].append(
+                    {
+                        "instrument_token": inst["instrument_token"],
+                        "expiry": inst["expiry"],
+                    }
+                )
+
+            processed_count += 1
+
+            if processed_count % 1000 == 0:
+
+                progress = 70 + int((processed_count / total_instruments) * 20)
+                self.loading_progress.emit(min(progress, 90))
+
+        # ── expiry pruning ──
+
+        for symbol, data in symbol_data.items():
+
+            sorted_expiries = sorted(data["expiries"])
+
+            if self.config.expiry_depth < 0:
+
+                expiry_limit = (
+                    INDEX_EXPIRY_LIMIT
+                    if symbol in INDEX_SYMBOLS
+                    else STOCK_EXPIRY_LIMIT
+                )
+
+            else:
+                expiry_limit = self.config.expiry_depth + 1
+
+            filtered_expiries = sorted_expiries[:expiry_limit]
+
+            allowed = set(filtered_expiries)
+
+            data["expiries"] = filtered_expiries
+
+            data["instruments"] = [
+                inst for inst in data["instruments"] if inst.get("expiry") in allowed
+            ]
+
+            data["strikes"] = sorted({inst["strike"] for inst in data["instruments"]})
+
+            data["futures"] = sorted(
+                data["futures"], key=lambda item: item["expiry"]
+            )
+
+        return symbol_data
+
+    # ─────────────────────────────────────────────────────────
+    # Thread
+    # ─────────────────────────────────────────────────────────
+
+    def run(self):
+
         try:
+
             self.loading_progress.emit(0)
 
-            # 1️⃣ Use cache if valid
             if self.is_cache_valid():
-                self.progress_update.emit("Loading cached instruments...")
-                self.loading_progress.emit(60)
 
-                cached_symbol_data = self.load_cached_instruments()
-                if cached_symbol_data:
+                self.progress_update.emit("Loading cached instruments")
+
+                cached = self.load_cached_instruments()
+
+                if cached:
                     self.loading_progress.emit(100)
-                    self.instruments_loaded.emit(cached_symbol_data)
+                    self.instruments_loaded.emit(cached)
                     return
 
-            # 2️⃣ Fetch ONLY NFO
-            self.progress_update.emit("Fetching NFO instruments...")
-            self.loading_progress.emit(10)
+            # fetch exchanges
 
-            nfo_instruments = self.fetch_instruments_with_retry("NFO")
-            if not nfo_instruments:
-                raise Exception("Failed to load NFO instruments")
+            exchanges = ["NFO"] if self.config.exchange_mode == "NFO_ONLY" else ["NFO", "BFO"]
+
+            all_instruments = []
+
+            for ex in exchanges:
+                data = self.fetch_instruments_with_retry(ex)
+                all_instruments.extend(data)
+
+            if not all_instruments:
+                raise Exception("Failed to load instruments")
 
             self.loading_progress.emit(60)
 
-            # 3️⃣ Process
-            symbol_data = self.process_instruments(nfo_instruments)
+            symbol_data = self.process_instruments(all_instruments)
 
-            # 4️⃣ Cache & emit
+            # symbol filtering
+
+            if self.config.symbol_mode == "INDICES_ONLY":
+
+                symbol_data = {
+                    k: v for k, v in symbol_data.items() if k in INDEX_SYMBOLS
+                }
+
+            elif self.config.symbol_mode == "CUSTOM":
+
+                preferred = set(self.config.preferred_symbols)
+
+                symbol_data = {
+                    k: v for k, v in symbol_data.items() if k in preferred
+                }
+
             self.save_instruments_to_cache(symbol_data)
+
             self.loading_progress.emit(100)
+
             self.instruments_loaded.emit(symbol_data)
 
         except Exception as e:
+
             if not self._stop_requested:
+
                 logger.error(f"InstrumentLoader failed: {e}")
 
                 cached = self.load_cached_instruments()
+
                 if cached:
                     logger.warning("Using expired cache fallback")
                     self.instruments_loaded.emit(cached)
                 else:
                     self.error_occurred.emit(str(e))
-
-    def clear_cache(self) -> None:
-        """Clear the instrument cache"""
-        try:
-            if os.path.exists(self.cache_file):
-                os.remove(self.cache_file)
-            if os.path.exists(self.cache_info_file):
-                os.remove(self.cache_info_file)
-            logger.info("Instrument cache cleared")
-        except Exception as e:
-            logger.error(f"Error clearing cache: {e}")
-
-    def get_cache_info(self) -> Optional[Dict[str, Any]]:
-        """Get information about the current cache"""
-        try:
-            if os.path.exists(self.cache_info_file):
-                with open(self.cache_info_file, 'rb') as f:
-                    cache_info: Dict[str, Any] = pickle.load(f)
-                    return cache_info
-        except Exception as e:
-            logger.error(f"Error reading cache info: {e}")
-        return None
-
-    def force_refresh(self) -> None:
-        """Force refresh by clearing cache and reloading"""
-        self.clear_cache()
-        if not self.isRunning():
-            self.start()
