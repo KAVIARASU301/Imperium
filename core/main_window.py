@@ -866,6 +866,9 @@ class ImperiumMainWindow(QMainWindow):
     # =========================================================================
 
     def _on_positions_updated(self, positions: List[Position]):
+        # Ensure market-data subscriptions always include currently open
+        # position tokens across symbols (e.g., NIFTY + BANKNIFTY together).
+        self._update_market_subscriptions()
         self.position_sync_adapter.on_positions_updated(positions)
 
     def _on_position_added(self, position: Position):

@@ -36,6 +36,17 @@ class MarketSubscriptionPolicy:
 
         required_tokens.update(w.active_cvd_tokens)
 
+        # Keep live updates flowing for all open positions, even when their
+        # strikes are outside the currently visible strike ladder symbol.
+        if hasattr(w, "position_manager") and w.position_manager is not None:
+            for position in w.position_manager.get_all_positions() or []:
+                contract = getattr(position, "contract", None)
+                token = getattr(contract, "instrument_token", 0) if contract else 0
+                if not token:
+                    token = getattr(position, "instrument_token", 0)
+                if token:
+                    required_tokens.add(int(token))
+
         if required_tokens == w._last_subscription_set:
             logger.debug("Subscription set unchanged. Skipping update.")
             return
