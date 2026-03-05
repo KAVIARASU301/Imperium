@@ -17,6 +17,7 @@ from core.utils.config_manager import ConfigManager
 from core.market_data.market_data_worker import MarketDataWorker
 from core.utils.data_models import Position, Contract, OptionType
 from core.market_data.instrument_loader import InstrumentLoader, InstrumentConfig
+from core.market_data.instrument_index import InstrumentIndex
 from core.dialogs import SettingsDialog
 from core.dialogs import OpenPositionsDialog
 from core.dialogs import QuickOrderDialog, QuickOrderMode
@@ -373,6 +374,12 @@ class ImperiumMainWindow(QMainWindow):
             kite_client=self.real_kite_client,
             config=inst_config,
         )
+
+        index = InstrumentIndex(self.instrument_loader.cache_dir)
+        if index.load():
+            logger.info("Loaded fast instrument index for startup")
+            self._on_instruments_loaded(index.to_symbol_data_stub())
+
         self.instrument_loader.instruments_loaded.connect(self._on_instruments_loaded)
         self.instrument_loader.error_occurred.connect(self._on_instrument_error)
         self.instrument_loader.progress_update.connect(self._on_instrument_progress)

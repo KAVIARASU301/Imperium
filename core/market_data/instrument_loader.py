@@ -20,6 +20,8 @@ from urllib3.util.retry import Retry
 from kiteconnect import KiteConnect
 from PySide6.QtCore import QThread, Signal
 
+from core.market_data.instrument_index import InstrumentIndex
+
 logger = logging.getLogger(__name__)
 
 CACHE_SCHEMA_VERSION = 6
@@ -353,6 +355,9 @@ class InstrumentLoader(QThread):
                 }
 
             self.save_instruments_to_cache(symbol_data)
+
+            index = InstrumentIndex(self.cache_dir)
+            index.build_from_symbol_data(symbol_data)
 
             self.loading_progress.emit(100)
 
