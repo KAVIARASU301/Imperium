@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog,
 from scipy.stats import norm
 
 from kiteconnect import KiteConnect
+from core.market_data.strike_ladder import StrikeLadder
 
 logger = logging.getLogger(__name__)
 
@@ -173,10 +174,19 @@ def _format_greek(value: float, decimal_places: int = 2) -> str:
 class OptionChainDialog(QDialog):
     """Premium Option Chain dialog with enhanced readability"""
 
-    def __init__(self, real_kite_client: KiteConnect, instrument_data: Dict, parent: Optional[QWidget] = None):
+    def __init__(
+        self,
+        real_kite_client: KiteConnect,
+        instrument_data: Dict,
+        strike_ladder: Optional[StrikeLadder] = None,
+        parent: Optional[QWidget] = None,
+    ):
         super().__init__(parent)
         self.kite = real_kite_client
         self.instrument_data = instrument_data
+        self.strike_ladder = strike_ladder or StrikeLadder()
+        if strike_ladder is None:
+            self.strike_ladder.build(instrument_data)
         self.contracts_data: Dict[float, Dict[str, dict]] = {}
         self._contracts_cache_key: Optional[tuple[str, date]] = None
         self._cached_quote_symbols: list[str] = []
@@ -362,27 +372,37 @@ class OptionChainDialog(QDialog):
             return
 
         symbol_data = self.instrument_data.get(symbol, {})
-        instruments = symbol_data.get('instruments', [])
+        ladder = self.strike_ladder.ladders.get(symbol, {})
 
         self.contracts_data.clear()
         self._cached_quote_symbols.clear()
 
-        for inst in instruments:
-            if inst.get('expiry') != expiry_date:
+        strikes = ladder.get('strikes', symbol_data.get('strikes', []))
+        ce_inst_map = ladder.get('ce_inst_map', {})
+        pe_inst_map = ladder.get('pe_inst_map', {})
+
+        for strike in strikes:
+            ce_inst = ce_inst_map.get((expiry_date, strike))
+            pe_inst = pe_inst_map.get((expiry_date, strike))
+
+            if not ce_inst and not pe_inst:
                 continue
 
-            strike = inst.get('strike')
-            opt_type = inst.get('instrument_type')
-            tradingsymbol = inst.get('tradingsymbol')
-            if not strike or not opt_type:
-                continue
+            strike_data = {}
 
-            if strike not in self.contracts_data:
-                self.contracts_data[strike] = {}
-            self.contracts_data[strike][opt_type] = inst
+            if ce_inst:
+                strike_data['CE'] = ce_inst
+                ce_symbol = ce_inst.get('tradingsymbol')
+                if ce_symbol:
+                    self._cached_quote_symbols.append(f"NFO:{ce_symbol}")
 
-            if tradingsymbol:
-                self._cached_quote_symbols.append(f"NFO:{tradingsymbol}")
+            if pe_inst:
+                strike_data['PE'] = pe_inst
+                pe_symbol = pe_inst.get('tradingsymbol')
+                if pe_symbol:
+                    self._cached_quote_symbols.append(f"NFO:{pe_symbol}")
+
+            self.contracts_data[strike] = strike_data
 
         self._contracts_cache_key = cache_key
         logger.info(f"Loaded {len(self.contracts_data)} strikes for {symbol} {expiry_str}")

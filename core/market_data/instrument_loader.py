@@ -21,6 +21,7 @@ from kiteconnect import KiteConnect
 from PySide6.QtCore import QThread, Signal
 
 from core.market_data.instrument_index import InstrumentIndex
+from core.market_data.strike_ladder import StrikeLadder
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +107,7 @@ class InstrumentLoader(QThread):
         )
 
         self._stop_requested = False
+        self.strike_ladder = StrikeLadder()
 
         self.session = requests.Session()
         retry_strategy = Retry(
@@ -317,6 +319,7 @@ class InstrumentLoader(QThread):
                 cached = self.load_cached_instruments()
 
                 if cached:
+                    self.strike_ladder.build(cached)
                     self.loading_progress.emit(100)
                     self.instruments_loaded.emit(cached)
                     return
@@ -355,6 +358,7 @@ class InstrumentLoader(QThread):
                 }
 
             self.save_instruments_to_cache(symbol_data)
+            self.strike_ladder.build(symbol_data)
 
             index = InstrumentIndex(self.cache_dir)
             index.build_from_symbol_data(symbol_data)
@@ -373,6 +377,7 @@ class InstrumentLoader(QThread):
 
                 if cached:
                     logger.warning("Using expired cache fallback")
+                    self.strike_ladder.build(cached)
                     self.instruments_loaded.emit(cached)
                 else:
                     self.error_occurred.emit(str(e))

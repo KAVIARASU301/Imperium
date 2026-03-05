@@ -406,6 +406,9 @@ class ImperiumMainWindow(QMainWindow):
 
     def _on_instruments_loaded(self, data: dict):
         self.instrument_data = data
+        if hasattr(self, "instrument_loader") and hasattr(self.instrument_loader, "strike_ladder"):
+            if self.option_chain_dialog is not None:
+                self.option_chain_dialog.strike_ladder = self.instrument_loader.strike_ladder
         if isinstance(self.trader, PaperTradingManager):
             self.trader.set_instrument_data(data)
 
@@ -1846,6 +1849,7 @@ class ImperiumMainWindow(QMainWindow):
             self.option_chain_dialog = OptionChainDialog(
                 self.real_kite_client,
                 self.instrument_data,
+                strike_ladder=getattr(self.instrument_loader, "strike_ladder", None),
                 parent=None
             )
             self.option_chain_dialog.finished.connect(lambda: setattr(self, 'option_chain_dialog', None))
