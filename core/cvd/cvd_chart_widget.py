@@ -9,6 +9,7 @@ from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QColor
 
 from core.cvd.cvd_historical import CVDHistoricalBuilder
+from core.cvd.live_refresh_controller import MinuteAlignedPoller
 
 
 class CVDChartWidget(QWidget):
@@ -56,6 +57,7 @@ class CVDChartWidget(QWidget):
         self.live_mode = True
         self._historical_loaded = False
         self._historical_failed = False
+        self._last_live_refresh_minute: datetime | None = None
 
         # --- Live dot pulse state ---
         self._pulse_size = 6
@@ -330,8 +332,8 @@ class CVDChartWidget(QWidget):
             # LIVE MODE - restart ALL timers
             self.live_mode = True
 
-            if hasattr(self, "timer") and not self.timer.isActive():
-                self.timer.start(self.REFRESH_INTERVAL_MS)
+            if hasattr(self, "_poller") and not self._poller.is_active():
+                self._poller.start()
 
             # Restart pulse and blink timers
             if hasattr(self, "pulse_timer") and not self.pulse_timer.isActive():
@@ -341,8 +343,8 @@ class CVDChartWidget(QWidget):
             # HISTORICAL MODE
             self.live_mode = False
 
-            if hasattr(self, "timer"):
-                self.timer.stop()
+            if hasattr(self, "_poller"):
+                self._poller.stop()
 
         self._load_historical()
 
@@ -581,15 +583,35 @@ class CVDChartWidget(QWidget):
     # ------------------------------------------------------------------
 
     def _start_refresh_timer(self):
-        """Start auto-refresh timer (only in live mode)."""
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self._refresh_if_live)
-        self.timer.start(self.REFRESH_INTERVAL_MS)
+        """
+        Replace flat 3-second QTimer with minute-boundary-aligned poller.
+        WebSocket drives intra-bar updates; this only fires on completed candles.
+        """
+        self._poller = MinuteAlignedPoller(
+            callback=self._refresh_if_live,
+            interval_minutes=1,
+            parent=self,
+        )
+        if self.live_mode:
+            self._poller.start()
 
     def _refresh_if_live(self):
-        """Refresh only if in live mode."""
-        if self.live_mode and self._is_refresh_allowed():
-            self._load_historical()
+        """
+        Historical reload gate — runs at most once per completed minute.
+        Belt-and-suspenders guard against any double-fire edge cases.
+        """
+        if not self.live_mode or not self._is_refresh_allowed():
+            return
+
+        current_minute = datetime.now().replace(second=0, microsecond=0)
+        if (
+            self._last_live_refresh_minute is not None
+            and current_minute <= self._last_live_refresh_minute
+        ):
+            return
+
+        self._last_live_refresh_minute = current_minute
+        self._load_historical()
 
     def _is_refresh_allowed(self) -> bool:
         if not self.isVisible():
@@ -600,24 +622,21 @@ class CVDChartWidget(QWidget):
         return window.isActiveWindow()
 
     def refresh_if_live(self, force: bool = False):
-        """External refresh hook for shared timers."""
+        """External refresh hook (used by shared timers / date nav)."""
         if not self.live_mode:
             return
         if force or self._is_refresh_allowed():
             self._load_historical()
 
     def stop_updates(self):
-        """Stop timer (called on cleanup)."""
-        if hasattr(self, "timer"):
-            self.timer.stop()
+        if hasattr(self, "_poller"):
+            self._poller.stop()
         if hasattr(self, "pulse_timer"):
             self.pulse_timer.stop()
 
-
     def start_updates(self):
-        """Start all timers (called when activating widget)."""
-        if self._auto_refresh and hasattr(self, "timer") and not self.timer.isActive():
-            self.timer.start(self.REFRESH_INTERVAL_MS)
+        if self._auto_refresh and hasattr(self, "_poller") and not self._poller.is_active():
+            self._poller.start()
         if hasattr(self, "pulse_timer") and not self.pulse_timer.isActive():
             self.pulse_timer.start(40)
 

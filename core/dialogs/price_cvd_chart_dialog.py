@@ -34,6 +34,7 @@ from pyqtgraph import AxisItem
 from core.cvd.constants import MINUTES_PER_SESSION
 from core.cvd.data_worker import _DataFetchWorker
 from core.cvd.indicators import calculate_ema, calculate_vwap
+from core.cvd.live_refresh_controller import MinuteAlignedPoller
 
 logger = logging.getLogger(__name__)
 
@@ -377,6 +378,7 @@ class PriceCVDChartDialog(QDialog):
         self._session_x_break = None
         self._price_last_value = None
         self._cvd_last_value   = None
+        self._last_live_refresh_minute: datetime | None = None
 
         self._fetch_worker = None
         self._fetch_thread = None
@@ -402,9 +404,13 @@ class PriceCVDChartDialog(QDialog):
         self._update_date_label()
         self._load_and_plot()
 
-        self._refresh_timer = QTimer(self)
-        self._refresh_timer.timeout.connect(self._on_live_refresh)
-        self._refresh_timer.start(self.REFRESH_INTERVAL_MS)
+        self._poller = MinuteAlignedPoller(
+            callback=self._on_live_refresh,
+            interval_minutes=1,
+            parent=self,
+        )
+        if self.live_mode:
+            self._poller.start()
 
     # ------------------------------------------------------------------ UI ---
 
@@ -716,6 +722,7 @@ class PriceCVDChartDialog(QDialog):
     def _go_back(self):
         if not self.current_date: return
         self.live_mode     = False
+        self._poller.stop()
         self.current_date  = self._prev_trading_day(self.current_date)
         self.previous_date = self._prev_trading_day(self.current_date)
         self._update_date_label()
@@ -728,6 +735,10 @@ class PriceCVDChartDialog(QDialog):
         if nxt > today: return
         self.current_date  = nxt
         self.live_mode     = (nxt >= today)
+        if self.live_mode:
+            self._poller.start()
+        else:
+            self._poller.stop()
         self.previous_date = self._prev_trading_day(self.current_date)
         self._update_date_label()
         self._load_and_plot()
@@ -878,8 +889,27 @@ class PriceCVDChartDialog(QDialog):
         logger.warning("[PriceCVDChart] fetch error: %s", msg)
 
     def _on_live_refresh(self):
-        if self.isVisible() and self.live_mode:
-            self._load_and_plot()
+        """
+        Historical reload at minute boundary only.
+
+        WebSocket ticks (via CVDEngine → cvd_updated signal) already update
+        the current bar in real time. This method fires once per completed
+        candle to commit the closed bar and seed the next bar's open.
+        """
+        if not self.isVisible() or not self.live_mode:
+            return
+
+        # Guard: skip if already refreshed this minute (safety net for any
+        # edge case where poller fires twice near a boundary).
+        current_minute = datetime.now().replace(second=0, microsecond=0)
+        if (
+            self._last_live_refresh_minute is not None
+            and current_minute <= self._last_live_refresh_minute
+        ):
+            return
+
+        self._last_live_refresh_minute = current_minute
+        self._load_and_plot()
 
     # ------------------------------------------------------------ rendering --
 
@@ -1288,7 +1318,8 @@ class PriceCVDChartDialog(QDialog):
         else: super().keyPressEvent(event)
 
     def closeEvent(self, event):
-        self._refresh_timer.stop()
+        if hasattr(self, "_poller"):
+            self._poller.stop()
         if self._fetch_worker:
             with suppress(Exception):
                 self._fetch_worker.cancel()
