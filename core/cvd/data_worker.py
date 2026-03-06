@@ -165,10 +165,12 @@ class _DataFetchWorker(QObject):
         to_dt,
         timeframe_minutes,
         focus_mode,
+        price_instrument_token=None,
     ):
         super().__init__()
         self.kite               = kite
         self.instrument_token   = instrument_token
+        self.price_instrument_token = price_instrument_token or instrument_token
         self.from_dt            = from_dt
         self.to_dt              = to_dt
         self.timeframe_minutes  = timeframe_minutes
@@ -184,7 +186,7 @@ class _DataFetchWorker(QObject):
 
     # ── Internal helpers ────────────────────────────────────────────────────
 
-    def _fetch_historical_with_retry(self, from_dt, to_dt):
+    def _fetch_historical_with_retry(self, instrument_token, from_dt, to_dt):
         max_attempts      = 3
         base_delay_seconds = 0.25
 
@@ -193,7 +195,7 @@ class _DataFetchWorker(QObject):
                 return []
             try:
                 return self.kite.historical_data(
-                    self.instrument_token,
+                    instrument_token,
                     from_dt,
                     to_dt,
                     interval="minute",
@@ -248,7 +250,7 @@ class _DataFetchWorker(QObject):
         while (self.to_dt - range_start).days <= max_lookback_days:
             if self._cancelled:
                 return pd.DataFrame()
-            hist = self._fetch_historical_with_retry(range_start, range_end)
+            hist = self._fetch_historical_with_retry(self.instrument_token, range_start, range_end)
 
             if hist:
                 chunk_df = pd.DataFrame(hist)
@@ -267,6 +269,42 @@ class _DataFetchWorker(QObject):
 
         return aggregate_df
 
+    def _load_price_minute_history(self):
+        required_sessions = 2
+        max_lookback_days = 30
+        chunk_days = 5
+
+        aggregate_df = pd.DataFrame()
+        range_end = self.to_dt
+        range_start = self.from_dt
+
+        while (self.to_dt - range_start).days <= max_lookback_days:
+            if self._cancelled:
+                return pd.DataFrame()
+
+            hist = self._fetch_historical_with_retry(
+                self.price_instrument_token,
+                range_start,
+                range_end,
+            )
+
+            if hist:
+                chunk_df = pd.DataFrame(hist)
+                if not chunk_df.empty:
+                    chunk_df["date"] = pd.to_datetime(chunk_df["date"])
+                    chunk_df.set_index("date", inplace=True)
+                    aggregate_df = pd.concat([chunk_df, aggregate_df])
+                    aggregate_df = aggregate_df[~aggregate_df.index.duplicated(keep="last")]
+                    aggregate_df.sort_index(inplace=True)
+                    sessions_count = aggregate_df.index.normalize().nunique()
+                    if sessions_count >= required_sessions:
+                        return aggregate_df
+
+            range_end = range_start
+            range_start = range_start - pd.Timedelta(days=chunk_days)
+
+        return aggregate_df
+
     # ── Main run ─────────────────────────────────────────────────────────────
 
     def run(self):
@@ -276,9 +314,10 @@ class _DataFetchWorker(QObject):
 
             # ── Step 1: Always fetch at 1-minute granularity ─────────────────
             df = self._load_minute_history()
+            price_df_1m = self._load_price_minute_history()
             if self._cancelled:
                 return
-            if df.empty:
+            if df.empty or price_df_1m.empty:
                 self.error.emit("empty_df")
                 return
 
@@ -295,15 +334,15 @@ class _DataFetchWorker(QObject):
             if self.timeframe_minutes > 1:
                 rule = f"{self.timeframe_minutes}min"
 
-                df = df.resample(rule).agg(
+                price_df = price_df_1m.resample(rule).agg(
                     open   = ("open",   "first"),
                     high   = ("high",   "max"),
                     low    = ("low",    "min"),
                     close  = ("close",  "last"),
                     volume = ("volume", "sum"),
                 )
-                df["volume"] = df["volume"].fillna(0)
-                df = df.dropna(subset=["open", "high", "low", "close"])
+                price_df["volume"] = price_df["volume"].fillna(0)
+                price_df = price_df.dropna(subset=["open", "high", "low", "close"])
 
                 # Resample CVD from 1m OHLC.
                 # CVD is a running cumsum: first/max/min/last correctly captures
@@ -333,6 +372,7 @@ class _DataFetchWorker(QObject):
             else:
                 # 1m: CVDHistoricalBuilder already produces gapless candles.
                 cvd_df = cvd_1m
+                price_df = price_df_1m.copy()
 
             # ── Step 4: Session filtering and output ──────────────────────────
             sessions = sorted(cvd_df["session"].unique())
@@ -348,17 +388,17 @@ class _DataFetchWorker(QObject):
                 if not prev_data.empty:
                     prev_close = float(prev_data["close"].iloc[-1])
 
-            df["session"] = df.index.date
+            price_df["session"] = price_df.index.date
 
             if self.focus_mode:
                 cvd_out   = cvd_df[cvd_df["session"] == sessions[-1]].copy()
-                price_out = df[df["session"] == sessions[-1]].copy()
+                price_out = price_df[price_df["session"] == sessions[-1]].copy()
             else:
                 cvd_out   = cvd_df[cvd_df["session"].isin(sessions[-2:])].copy()
-                price_out = df[df["session"].isin(sessions[-2:])].copy()
+                price_out = price_df[price_df["session"].isin(sessions[-2:])].copy()
 
             if len(sessions) >= 2:
-                prev_day_price   = df[df["session"] == sessions[-2]]
+                prev_day_price   = price_df[price_df["session"] == sessions[-2]]
                 previous_day_cpr = CPRCalculator.get_previous_day_cpr(prev_day_price)
 
             if self._cancelled:

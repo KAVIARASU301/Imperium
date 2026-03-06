@@ -1795,6 +1795,11 @@ class ImperiumMainWindow(QMainWindow):
                 QMessageBox.warning(self, "Price & CVD Chart", f"No futures token found for {symbol}.")
                 return
 
+            symbol_info = self.instrument_data.get(symbol, {})
+            # Price leg uses index spot when available (e.g., NIFTY/BANKNIFTY indices),
+            # while CVD continues to use futures token for volume-led flow.
+            price_token = symbol_info.get("instrument_token") or cvd_token
+
             full_symbol = f"{symbol}{suffix}"
 
             # Reuse an already-open dialog for the same token if one exists
@@ -1816,6 +1821,7 @@ class ImperiumMainWindow(QMainWindow):
                 instrument_token=cvd_token,
                 symbol=full_symbol,
                 cvd_engine=self.cvd_engine,
+                price_instrument_token=price_token,
                 parent=self,
             )
 

@@ -349,11 +349,12 @@ class _SetupPanel(QWidget):
 class PriceCVDChartDialog(QDialog):
     REFRESH_INTERVAL_MS = 3000
 
-    def __init__(self, kite, instrument_token: int, symbol: str, cvd_engine=None, parent=None):
+    def __init__(self, kite, instrument_token: int, symbol: str, cvd_engine=None, parent=None, price_instrument_token: int | None = None):
         super().__init__(parent)
 
         self.kite             = kite
         self.instrument_token = instrument_token
+        self.price_instrument_token = price_instrument_token or instrument_token
         self.symbol           = symbol
         self._cvd_engine      = cvd_engine   # CVDEngine — drives live bar updates
 
@@ -842,6 +843,7 @@ class PriceCVDChartDialog(QDialog):
             self.kite, self.instrument_token,
             from_dt, to_dt,
             self._selected_tf, False,
+            price_instrument_token=self.price_instrument_token,
         )
         self._fetch_worker.moveToThread(self._fetch_thread)
         self._fetch_thread.started.connect(self._fetch_worker.run)
