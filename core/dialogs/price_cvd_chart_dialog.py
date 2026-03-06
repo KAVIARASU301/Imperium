@@ -21,7 +21,7 @@ from datetime import datetime, timedelta
 
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import Qt, QThread, QTimer, QRectF, QPointF
+from PySide6.QtCore import Qt, QThread, QTimer, QRectF, QPointF, QEvent
 from PySide6.QtGui import QPicture, QPainter, QColor
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout,
@@ -310,6 +310,8 @@ class PriceCVDChartDialog(QDialog):
         self._all_cvd_high    = []
         self._all_cvd_low     = []
         self._session_x_break = None
+        self._price_last_value = None
+        self._cvd_last_value = None
 
         self._fetch_worker = None
         self._fetch_thread = None
@@ -523,20 +525,15 @@ class PriceCVDChartDialog(QDialog):
         self.price_plot.addItem(self._price_vline, ignoreBounds=True)
         self.price_plot.addItem(self._price_hline, ignoreBounds=True)
 
-        self._price_last_line = pg.InfiniteLine(
-            angle=0,
-            movable=False,
-            pen=pg.mkPen(_C["price"], width=1.0, style=Qt.DashLine),
-            label="",
-            labelOpts={
-                "position": 0.995,
-                "anchors": [(1, 0.5), (1, 0.5)],
-                "color": "#0A0F17",
-                "fill": pg.mkBrush(_C["price"]),
-            },
-        )
-        self._price_last_line.hide()
-        self.price_plot.addItem(self._price_last_line, ignoreBounds=True)
+        self._price_level_badge = QLabel(self.price_plot)
+        self._price_level_badge.hide()
+        self._price_level_badge.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self._price_level_badge.setAlignment(Qt.AlignCenter)
+        self._price_level_badge.setStyleSheet(
+            f"background:{_C['price']};color:#0A0F17;border:1px solid {_C['price']};"
+            "font-size:11px;font-weight:700;padding:1px 4px;")
+        self.price_plot.getViewBox().sigRangeChanged.connect(self._position_level_badges)
+        self.price_plot.installEventFilter(self)
         root.addWidget(self.price_plot, 3)
 
         # ── CVD chart ──────────────────────────────────────────────────────
@@ -592,20 +589,15 @@ class PriceCVDChartDialog(QDialog):
         self.cvd_plot.addItem(self._cvd_vline, ignoreBounds=True)
         self.cvd_plot.addItem(self._cvd_hline, ignoreBounds=True)
 
-        self._cvd_last_line = pg.InfiniteLine(
-            angle=0,
-            movable=False,
-            pen=pg.mkPen(_C["cvd"], width=1.0, style=Qt.DashLine),
-            label="",
-            labelOpts={
-                "position": 0.995,
-                "anchors": [(1, 0.5), (1, 0.5)],
-                "color": "#0A0F17",
-                "fill": pg.mkBrush(_C["cvd"]),
-            },
-        )
-        self._cvd_last_line.hide()
-        self.cvd_plot.addItem(self._cvd_last_line, ignoreBounds=True)
+        self._cvd_level_badge = QLabel(self.cvd_plot)
+        self._cvd_level_badge.hide()
+        self._cvd_level_badge.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self._cvd_level_badge.setAlignment(Qt.AlignCenter)
+        self._cvd_level_badge.setStyleSheet(
+            f"background:{_C['cvd']};color:#0A0F17;border:1px solid {_C['cvd']};"
+            "font-size:11px;font-weight:700;padding:1px 4px;")
+        self.cvd_plot.getViewBox().sigRangeChanged.connect(self._position_level_badges)
+        self.cvd_plot.installEventFilter(self)
         root.addWidget(self.cvd_plot, 2)
 
         self.price_plot.setXLink(self.cvd_plot)
@@ -763,6 +755,8 @@ class PriceCVDChartDialog(QDialog):
         self._all_cvd_high   = []
         self._all_cvd_low    = []
         self._session_x_break = None
+        self._price_last_value = None
+        self._cvd_last_value = None
 
         for i, sess in enumerate(sessions):
             cvd_s   = cvd_df[cvd_df["session"] == sess]
@@ -1012,19 +1006,66 @@ class PriceCVDChartDialog(QDialog):
     def _update_last_value_markers(self, px_values, cvd_values):
         if px_values:
             last_px = float(px_values[-1])
-            self._price_last_line.setValue(last_px)
-            self._price_last_line.label.setFormat(_fmt_axis_marker(last_px, for_cvd=False))
-            self._price_last_line.show()
+            self._price_last_value = last_px
+            self._price_level_badge.setText(_fmt_axis_marker(last_px, for_cvd=False))
+            self._price_level_badge.adjustSize()
+            self._price_level_badge.show()
         else:
-            self._price_last_line.hide()
+            self._price_last_value = None
+            self._price_level_badge.hide()
 
         if cvd_values:
             last_cvd = float(cvd_values[-1])
-            self._cvd_last_line.setValue(last_cvd)
-            self._cvd_last_line.label.setFormat(_fmt_axis_marker(last_cvd, for_cvd=True))
-            self._cvd_last_line.show()
+            self._cvd_last_value = last_cvd
+            self._cvd_level_badge.setText(_fmt_axis_marker(last_cvd, for_cvd=True))
+            self._cvd_level_badge.adjustSize()
+            self._cvd_level_badge.show()
         else:
-            self._cvd_last_line.hide()
+            self._cvd_last_value = None
+            self._cvd_level_badge.hide()
+
+        self._position_level_badges()
+
+    def eventFilter(self, watched, event):
+        if watched in (self.price_plot, self.cvd_plot) and event.type() == QEvent.Resize:
+            self._position_level_badges()
+        return super().eventFilter(watched, event)
+
+    def _position_level_badges(self, *_):
+        self._position_badge(
+            plot=self.price_plot,
+            axis=self.price_plot.getAxis("right"),
+            value=self._price_last_value,
+            badge=self._price_level_badge,
+        )
+        self._position_badge(
+            plot=self.cvd_plot,
+            axis=self.cvd_plot.getAxis("right"),
+            value=self._cvd_last_value,
+            badge=self._cvd_level_badge,
+        )
+
+    def _position_badge(self, plot, axis, value, badge):
+        if value is None or not np.isfinite(value) or not badge.isVisible():
+            return
+
+        vb = plot.getViewBox()
+        vr = vb.viewRange()
+        if not vr or len(vr) < 2:
+            return
+        y_min, y_max = vr[1]
+        if y_max <= y_min:
+            return
+
+        clamped_value = min(max(value, y_min), y_max)
+        scene_pt = vb.mapViewToScene(QPointF(vr[0][1], clamped_value))
+        local_pt = plot.mapFromScene(scene_pt)
+
+        axis_rect = plot.mapFromScene(axis.sceneBoundingRect()).boundingRect()
+        x = int(axis_rect.left() + 1)
+        y = int(local_pt.y() - badge.height() / 2)
+        y = max(int(axis_rect.top()), min(y, int(axis_rect.bottom() - badge.height())))
+        badge.move(x, y)
 
     def _render_overlays(self):
         if not self._all_timestamps: return
