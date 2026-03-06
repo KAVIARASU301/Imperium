@@ -129,7 +129,7 @@ def _fmt_axis_marker(value: float, for_cvd: bool = False) -> str:
     if not np.isfinite(value):
         return ""
     if not for_cvd:
-        return f"{value:.2f}"
+        return f"{value:.0f}"
     if abs(value) >= 1_000_000:
         return f"{value / 1_000_000:.2f}M"
     if abs(value) >= 1_000:
@@ -1064,7 +1064,7 @@ class PriceCVDChartDialog(QDialog):
         local_pt = plot.mapFromScene(scene_pt)
 
         axis_rect = plot.mapFromScene(axis.sceneBoundingRect()).boundingRect()
-        x = int(axis_rect.left() + 1)
+        x = int(axis_rect.right() - badge.width() - 1)
         y = int(local_pt.y() - badge.height() / 2)
         y = max(int(axis_rect.top()), min(y, int(axis_rect.bottom() - badge.height())))
         badge.move(x, y)
