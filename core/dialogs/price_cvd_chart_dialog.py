@@ -1013,8 +1013,10 @@ class PriceCVDChartDialog(QDialog):
             bar_slot = int(elapsed_min // tf) * tf
             x = bar_slot + tf / 2.0   # candle center
         else:
-            # 2D mode: next slot after last historical bar
-            x = len(self._all_timestamps) + tf / 2.0
+            # 2D mode: next slot after last historical bar.
+            # Keep the same x-center convention used in _render_from_cache()
+            # (OHLC bars centered at i + 0.5 regardless of timeframe).
+            x = len(self._all_timestamps) + (0.5 if self._use_ohlc else 0.0)
 
         # ── Paint live price bar ─────────────────────────────────────────────
         if self._use_ohlc and self._live_price_open is not None:

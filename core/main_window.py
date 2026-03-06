@@ -1818,10 +1818,26 @@ class ImperiumMainWindow(QMainWindow):
                 cvd_engine=self.cvd_engine,
                 parent=self,
             )
-            dlg.destroyed.connect(
-                lambda obj=dlg: self._price_cvd_chart_dialogs.remove(obj)
-                if obj in self._price_cvd_chart_dialogs else None
-            )
+
+            def _on_dialog_destroyed(obj=None, token=cvd_token):
+                if dlg in self._price_cvd_chart_dialogs:
+                    self._price_cvd_chart_dialogs.remove(dlg)
+
+                # Keep websocket subscription only while at least one
+                # Price & CVD dialog for this token remains open.
+                still_open_for_token = any(
+                    getattr(open_dlg, "instrument_token", None) == token
+                    and not open_dlg.isHidden()
+                    for open_dlg in self._price_cvd_chart_dialogs
+                )
+                if not still_open_for_token and token in self.active_cvd_tokens:
+                    self.active_cvd_tokens.discard(token)
+                    self._update_market_subscriptions()
+
+            dlg.destroyed.connect(_on_dialog_destroyed)
+
+            self.active_cvd_tokens.add(cvd_token)
+            self._update_market_subscriptions()
 
             self._price_cvd_chart_dialogs.append(dlg)
             dlg.show()
