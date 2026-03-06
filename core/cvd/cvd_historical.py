@@ -6,10 +6,15 @@ class CVDHistoricalBuilder:
     """
     Builds TradingView-style CVD candles from historical OHLCV data.
 
-    This approximates requestVolumeDelta() using candle direction:
-    - close > open  → buy volume
-    - close < open  → sell volume
-    - close == open → neutral
+    Approximates requestVolumeDelta() using candle direction:
+      close > open  → +volume (buy pressure)
+      close < open  → -volume (sell pressure)
+      close == open → 0 (neutral)
+
+    INSTITUTIONAL RULE — NO CVD GAPS:
+      CVD is a continuous cumulative sum. The open of every bar equals
+      the close of the previous bar within the same session.
+      Session-start bars open at 0 (anchored reset).
     """
 
     @staticmethod
@@ -28,7 +33,7 @@ class CVDHistoricalBuilder:
 
         Returns
         -------
-        DataFrame with columns: open, high, low, close (CVD candles)
+        DataFrame with columns: open, high, low, close (CVD candles, no gaps)
         """
 
         if df.empty:
@@ -40,12 +45,11 @@ class CVDHistoricalBuilder:
 
         data = df.copy()
 
-        # --------------------------------------------------------------
-        # Step 1: Approximate delta per candle (SAFE vectorized logic)
-        # --------------------------------------------------------------
+        # ── Step 1: Delta per candle ─────────────────────────────────────────
+        # Vectorized: full-bar net delta approximation
         data["delta"] = np.where(
             data["close"] > data["open"],
-            data["volume"],
+             data["volume"],
             np.where(
                 data["close"] < data["open"],
                 -data["volume"],
@@ -53,23 +57,34 @@ class CVDHistoricalBuilder:
             )
         )
 
-        # --------------------------------------------------------------
-        # Step 2: Anchor logic (session reset)
-        # --------------------------------------------------------------
+        # ── Step 2: Session-anchored cumsum (resets daily) ───────────────────
         if anchor == "1D":
             data["anchor"] = data.index.date
-            data["cvd"] = data.groupby("anchor")["delta"].cumsum()
         else:
             raise NotImplementedError("Only daily anchor (1D) is supported")
 
-        # --------------------------------------------------------------
-        # Step 3: Build CVD OHLC candles
-        # --------------------------------------------------------------
-        cvd_ohlc = data.groupby(data.index).agg(
-            open=("cvd", "first"),
-            high=("cvd", "max"),
-            low=("cvd", "min"),
-            close=("cvd", "last"),
+        # cvd_close = cumulative delta up to and including this bar
+        data["cvd_close"] = data.groupby("anchor")["delta"].cumsum()
+
+        # ── Step 3: Gapless OHLC — open = previous bar's close ──────────────
+        # Key insight: CVD is a running total. There is NO economic gap between
+        # consecutive bars. open[i] must equal close[i-1]; session open = 0.
+        data["cvd_open"] = (
+            data.groupby("anchor")["cvd_close"]
+            .shift(1)
+            .fillna(0.0)           # first bar of each session opens at 0
         )
+
+        # Intra-bar direction is monotonic (one net delta per OHLCV bar),
+        # so high = max(open, close), low = min(open, close).
+        data["cvd_high"] = np.maximum(data["cvd_open"], data["cvd_close"])
+        data["cvd_low"]  = np.minimum(data["cvd_open"], data["cvd_close"])
+
+        cvd_ohlc = pd.DataFrame({
+            "open":  data["cvd_open"],
+            "high":  data["cvd_high"],
+            "low":   data["cvd_low"],
+            "close": data["cvd_close"],
+        }, index=data.index)
 
         return cvd_ohlc
