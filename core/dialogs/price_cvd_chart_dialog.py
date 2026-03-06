@@ -23,7 +23,7 @@ from datetime import datetime, timedelta
 import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import Qt, QThread, QTimer, QRectF, QPointF
-from PySide6.QtGui import QPicture, QPainter
+from PySide6.QtGui import QPicture, QPainter, QColor
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout,
     QWidget,
@@ -130,19 +130,45 @@ def _y_range(values: list, padding: float = 0.04) -> tuple[float, float]:
 # OHLC Candlestick — QPicture based (single paint replay, zero per-bar cost)
 # ---------------------------------------------------------------------------
 class _OHLCItem(pg.GraphicsObject):
-    def __init__(self, bull_color: str, bear_color: str):
+    """
+    Institutional-grade OHLC renderer.
+
+    Visual rules (same as high-quality HTML canvas charts):
+    ─ Wick   : 1 px, full height, center-aligned
+    ─ Body   : 82% of allocated slot width (16% gap between candles)
+    ─ Fill   : solid color with slight alpha for depth
+    ─ Border : 1 px outline, same hue, no extra width
+    ─ Doji   : horizontal tick across full body width (no invisible rect)
+    ─ AA     : ON  → smooth wick tips, clean diagonal sub-pixels
+    """
+
+    def __init__(self, bull_color: str, bear_color: str, alpha: int = 225):
         super().__init__()
-        self._bull_pen   = pg.mkPen(bull_color, width=1.0)
-        self._bear_pen   = pg.mkPen(bear_color, width=1.0)
-        self._bull_brush = pg.mkBrush(bull_color)
-        self._bear_brush = pg.mkBrush(bear_color)
+
+        bull_qc = QColor(bull_color)
+        bear_qc = QColor(bear_color)
+
+        bull_fill = QColor(bull_qc)
+        bull_fill.setAlpha(alpha)
+        bear_fill = QColor(bear_qc)
+        bear_fill.setAlpha(alpha)
+
+        self._bull_wick = pg.mkPen(bull_qc, width=1)
+        self._bear_wick = pg.mkPen(bear_qc, width=1)
+
+        self._bull_body_pen = pg.mkPen(bull_qc, width=1)
+        self._bear_body_pen = pg.mkPen(bear_qc, width=1)
+
+        self._bull_brush = pg.mkBrush(bull_fill)
+        self._bear_brush = pg.mkBrush(bear_fill)
+
         self._data: list = []
         self._half_w: float = 0.35
         self._picture = None
-        self._bounds  = QRectF()
+        self._bounds = QRectF()
 
     def setData(self, data: list, half_width: float = 0.35):
-        """data: list of (x, open, high, low, close)"""
+        """data: list of (x, open, high, low, close)  — x in chart units"""
         self._data   = data
         self._half_w = half_width
         self._build()
@@ -160,7 +186,7 @@ class _OHLCItem(pg.GraphicsObject):
         if self._picture:
             self._picture.play(painter)
 
-    def boundingRect(self):
+    def boundingRect(self) -> QRectF:
         return self._bounds
 
     def _build(self):
@@ -171,23 +197,35 @@ class _OHLCItem(pg.GraphicsObject):
 
         pic = QPicture()
         p   = QPainter(pic)
-        p.setRenderHint(QPainter.Antialiasing, False)
-        hw = self._half_w
+        p.setRenderHint(QPainter.Antialiasing, True)
 
-        all_x, all_h, all_l = [], [], []
+        body_hw = self._half_w * 0.82
+
+        all_x: list = []
+        all_h: list = []
+        all_l: list = []
         for x, o, h, l, c in self._data:
-            bull  = c >= o
-            p.setPen(self._bull_pen   if bull else self._bear_pen)
+            bull = c >= o
+            wick_pen = self._bull_wick if bull else self._bear_wick
+            body_pen = self._bull_body_pen if bull else self._bear_body_pen
             brush = self._bull_brush if bull else self._bear_brush
 
+            p.setPen(wick_pen)
             p.drawLine(QPointF(x, l), QPointF(x, h))
-            all_x.append(x); all_h.append(h); all_l.append(l)
 
-            bt = max(o, c); bb = min(o, c); bh = bt - bb
+            all_x.append(x)
+            all_h.append(h)
+            all_l.append(l)
+
+            bt = max(o, c)
+            bb = min(o, c)
+            bh = bt - bb
+
+            p.setPen(body_pen)
             if bh < 1e-9:
-                p.drawLine(QPointF(x - hw, c), QPointF(x + hw, c))
+                p.drawLine(QPointF(x - body_hw, c), QPointF(x + body_hw, c))
             else:
-                rect = QRectF(x - hw, bb, hw * 2, bh)
+                rect = QRectF(x - body_hw, bb, body_hw * 2, bh)
                 p.fillRect(rect, brush)
                 p.drawRect(rect)
 
@@ -195,9 +233,11 @@ class _OHLCItem(pg.GraphicsObject):
         self._picture = pic
 
         if all_x:
+            fw = self._half_w
             self._bounds = QRectF(
-                min(all_x) - hw, min(all_l),
-                max(all_x) - min(all_x) + hw * 2,
+                min(all_x) - fw,
+                min(all_l),
+                max(all_x) - min(all_x) + fw * 2,
                 max(all_h) - min(all_l),
             )
 
@@ -418,7 +458,7 @@ class PriceCVDChartDialog(QDialog):
 
         self.price_plot = pg.PlotWidget(axisItems={"bottom": self._price_axis})
         self.price_plot.setBackground(_C["chart_bg"])
-        self.price_plot.showGrid(x=True, y=True, alpha=0.06)
+        self.price_plot.showGrid(x=True, y=True, alpha=0.09)
         self.price_plot.setMenuEnabled(False)
         self.price_plot.setMinimumHeight(200)
         # Disable pyqtgraph's auto-range — we compute and set it explicitly
@@ -464,7 +504,7 @@ class PriceCVDChartDialog(QDialog):
         self._cvd_axis = _TimeAxis("bottom")
         self.cvd_plot  = pg.PlotWidget(axisItems={"bottom": self._cvd_axis})
         self.cvd_plot.setBackground(_C["chart_bg"])
-        self.cvd_plot.showGrid(x=True, y=True, alpha=0.06)
+        self.cvd_plot.showGrid(x=True, y=True, alpha=0.09)
         self.cvd_plot.setMenuEnabled(False)
         self.cvd_plot.setMinimumHeight(150)
         self.cvd_plot.getViewBox().disableAutoRange()
