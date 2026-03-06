@@ -1027,7 +1027,9 @@ class PriceCVDChartDialog(QDialog):
         self._position_level_badges()
 
     def eventFilter(self, watched, event):
-        if watched in (self.price_plot, self.cvd_plot) and event.type() == QEvent.Resize:
+        price_plot = getattr(self, "price_plot", None)
+        cvd_plot = getattr(self, "cvd_plot", None)
+        if watched in (price_plot, cvd_plot) and event.type() == QEvent.Resize:
             self._position_level_badges()
         return super().eventFilter(watched, event)
 
