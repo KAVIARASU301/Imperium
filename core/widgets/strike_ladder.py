@@ -824,15 +824,27 @@ class StrikeLadderWidget(QWidget):
         return tokens
 
     def get_visible_contract_tokens(self) -> set[int]:
-        if not hasattr(self, "table") or self.table.rowCount() == 0:
+        table = getattr(self, "table", None)
+        if table is None:
             return set()
-        viewport = self.table.viewport()
-        top_row = self.table.rowAt(0)
-        bottom_row = self.table.rowAt(max(0, viewport.height() - 1))
+
+        try:
+            if table.rowCount() == 0:
+                return set()
+            viewport = table.viewport()
+            top_row = table.rowAt(0)
+            bottom_row = table.rowAt(max(0, viewport.height() - 1))
+        except RuntimeError:
+            # During shutdown Qt may destroy child widgets before this object.
+            return set()
+
         if top_row < 0:
             top_row = 0
         if bottom_row < 0:
-            bottom_row = self.table.rowCount() - 1
+            try:
+                bottom_row = table.rowCount() - 1
+            except RuntimeError:
+                return set()
         tokens: set[int] = set()
         for row in range(top_row, bottom_row + 1):
             strike = self._get_strike_from_row(row)
