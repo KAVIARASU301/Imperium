@@ -1063,10 +1063,13 @@ class PriceCVDChartDialog(QDialog):
         scene_pt = vb.mapViewToScene(QPointF(vr[0][1], clamped_value))
         local_pt = plot.mapFromScene(scene_pt)
 
-        axis_rect = plot.mapFromScene(axis.sceneBoundingRect()).boundingRect()
-        x = int(axis_rect.right() - badge.width() - 1)
+        axis_width = max(0, int(axis.width()))
+        axis_left = max(0, plot.width() - axis_width)
+        x = axis_left + max(0, (axis_width - badge.width()) // 2)
+        x = max(0, min(x, plot.width() - badge.width()))
+
         y = int(local_pt.y() - badge.height() / 2)
-        y = max(int(axis_rect.top()), min(y, int(axis_rect.bottom() - badge.height())))
+        y = max(0, min(y, plot.height() - badge.height()))
         badge.move(x, y)
 
     def _render_overlays(self):
