@@ -1815,6 +1815,7 @@ class ImperiumMainWindow(QMainWindow):
                 kite=self.real_kite_client,
                 instrument_token=cvd_token,
                 symbol=full_symbol,
+                cvd_engine=self.cvd_engine,
                 parent=self,
             )
             dlg.destroyed.connect(

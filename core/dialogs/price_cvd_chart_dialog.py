@@ -349,12 +349,13 @@ class _SetupPanel(QWidget):
 class PriceCVDChartDialog(QDialog):
     REFRESH_INTERVAL_MS = 3000
 
-    def __init__(self, kite, instrument_token: int, symbol: str, parent=None):
+    def __init__(self, kite, instrument_token: int, symbol: str, cvd_engine=None, parent=None):
         super().__init__(parent)
 
         self.kite             = kite
         self.instrument_token = instrument_token
         self.symbol           = symbol
+        self._cvd_engine      = cvd_engine   # CVDEngine — drives live bar updates
 
         self.live_mode        = True
         self._two_day         = True          # default: 2D
@@ -379,6 +380,20 @@ class PriceCVDChartDialog(QDialog):
         self._price_last_value = None
         self._cvd_last_value   = None
         self._last_live_refresh_minute: datetime | None = None
+
+        # Live bar state — updated on every WebSocket tick via _on_cvd_tick.
+        # These represent the CURRENT incomplete candle (intra-bar motion).
+        # open is seeded from the last historical close and stays fixed until
+        # the next minute reload; close/high/low update on every tick.
+        self._live_price_open:  float | None = None
+        self._live_price_close: float | None = None
+        self._live_price_high:  float | None = None
+        self._live_price_low:   float | None = None
+        self._live_cvd_open:    float | None = None
+        self._live_cvd_close:   float | None = None
+        self._live_cvd_high:    float | None = None
+        self._live_cvd_low:     float | None = None
+        self._session_base_ts:  datetime | None = None   # 09:15 of current session
 
         self._fetch_worker = None
         self._fetch_thread = None
@@ -411,6 +426,17 @@ class PriceCVDChartDialog(QDialog):
         )
         if self.live_mode:
             self._poller.start()
+
+        # 33 ms single-shot throttle for live-bar repaints (~30 fps cap).
+        # WebSocket can fire hundreds of ticks/sec — we batch them here.
+        self._tick_flush_timer = QTimer(self)
+        self._tick_flush_timer.setSingleShot(True)
+        self._tick_flush_timer.timeout.connect(self._flush_live_bar)
+
+        # Wire the CVD engine — this is what makes the chart live.
+        if self._cvd_engine is not None:
+            self._cvd_engine.register_token(self.instrument_token)
+            self._cvd_engine.cvd_updated.connect(self._on_cvd_tick)
 
     # ------------------------------------------------------------------ UI ---
 
@@ -578,13 +604,14 @@ class PriceCVDChartDialog(QDialog):
         self._price_today      = pg.PlotCurveItem(pen=pg.mkPen(_C["price"],      width=2.0))
         self._price_ohlc_prev  = _OHLCItem(_C["bull_prev"], _C["bear_prev"])
         self._price_ohlc_today = _OHLCItem(_C["bull"],      _C["bear"])
+        self._price_ohlc_live  = _OHLCItem(_C["bull"],      _C["bear"], alpha=180)   # current incomplete bar
         self._price_ema10      = pg.PlotCurveItem(pen=pg.mkPen(_C["ema10"], width=1.5))
         self._price_ema21      = pg.PlotCurveItem(pen=pg.mkPen(_C["ema21"], width=1.5))
         self._price_ema51      = pg.PlotCurveItem(pen=pg.mkPen(_C["ema51"], width=1.6))
         self._price_vwap       = pg.PlotCurveItem(pen=pg.mkPen(_C["vwap"],  width=1.4, style=Qt.DashDotLine))
 
         for item in (self._price_prev, self._price_today,
-                     self._price_ohlc_prev, self._price_ohlc_today,
+                     self._price_ohlc_prev, self._price_ohlc_today, self._price_ohlc_live,
                      self._price_ema10, self._price_ema21, self._price_ema51,
                      self._price_vwap):
             self.price_plot.addItem(item)
@@ -645,12 +672,13 @@ class PriceCVDChartDialog(QDialog):
         self._cvd_today      = pg.PlotCurveItem(pen=pg.mkPen(_C["cvd"],      width=2.0))
         self._cvd_ohlc_prev  = _OHLCItem(_C["bull_prev"], _C["bear_prev"])
         self._cvd_ohlc_today = _OHLCItem(_C["cvd_bull"],  _C["cvd_bear"])
+        self._cvd_ohlc_live  = _OHLCItem(_C["cvd_bull"],  _C["cvd_bear"], alpha=180)  # current incomplete bar
         self._cvd_ema10      = pg.PlotCurveItem(pen=pg.mkPen(_C["ema10"], width=1.4))
         self._cvd_ema21      = pg.PlotCurveItem(pen=pg.mkPen(_C["ema21"], width=1.4))
         self._cvd_ema51      = pg.PlotCurveItem(pen=pg.mkPen(_C["ema51"], width=1.5))
 
         for item in (self._cvd_prev, self._cvd_today,
-                     self._cvd_ohlc_prev, self._cvd_ohlc_today,
+                     self._cvd_ohlc_prev, self._cvd_ohlc_today, self._cvd_ohlc_live,
                      self._cvd_ema10, self._cvd_ema21, self._cvd_ema51):
             self.cvd_plot.addItem(item)
 
@@ -883,33 +911,126 @@ class PriceCVDChartDialog(QDialog):
 
         self._render_from_cache()
 
+        # After historical load: seed the live bar so WebSocket ticks
+        # continue from the correct level immediately.
+        if self.live_mode:
+            self._seed_live_bar()
+
     def _on_fetch_error(self, msg: str):
         self._is_loading = False
         self._set_status("error")
         logger.warning("[PriceCVDChart] fetch error: %s", msg)
 
     def _on_live_refresh(self):
-        """
-        Historical reload at minute boundary only.
-
-        WebSocket ticks (via CVDEngine → cvd_updated signal) already update
-        the current bar in real time. This method fires once per completed
-        candle to commit the closed bar and seed the next bar's open.
-        """
+        """Fires at minute boundary — reloads historical to commit the closed bar."""
         if not self.isVisible() or not self.live_mode:
             return
-
-        # Guard: skip if already refreshed this minute (safety net for any
-        # edge case where poller fires twice near a boundary).
         current_minute = datetime.now().replace(second=0, microsecond=0)
-        if (
-            self._last_live_refresh_minute is not None
-            and current_minute <= self._last_live_refresh_minute
-        ):
+        if (self._last_live_refresh_minute is not None
+                and current_minute <= self._last_live_refresh_minute):
+            return
+        self._last_live_refresh_minute = current_minute
+        # Clear live bar during reload to avoid ghost candle
+        self._price_ohlc_live.clear()
+        self._cvd_ohlc_live.clear()
+        self._live_cvd_open = None
+        self._load_and_plot()
+
+    # ── WebSocket live bar ────────────────────────────────────────────────────
+
+    def _seed_live_bar(self):
+        """
+        Called after each historical load. Sets live bar open = last historical
+        close, and seeds CVDEngine so live ticks continue from the right level.
+        """
+        if not self._all_cvd or not self._all_price or not self._all_timestamps:
             return
 
-        self._last_live_refresh_minute = current_minute
-        self._load_and_plot()
+        self._live_price_open  = float(self._all_price[-1])
+        self._live_price_close = self._live_price_open
+        self._live_price_high  = self._live_price_open
+        self._live_price_low   = self._live_price_open
+
+        self._live_cvd_open  = float(self._all_cvd[-1])
+        self._live_cvd_close = self._live_cvd_open
+        self._live_cvd_high  = self._live_cvd_open
+        self._live_cvd_low   = self._live_cvd_open
+
+        # Session base timestamp for x-coordinate calculation (1D mode)
+        today = datetime.now().date()
+        today_ts = [ts for ts in self._all_timestamps if ts.date() == today]
+        if today_ts:
+            self._session_base_ts = today_ts[0].replace(
+                hour=9, minute=15, second=0, microsecond=0)
+
+        # Seed CVDEngine so ticks continue from historical level
+        if self._cvd_engine is not None:
+            cum_vol = int(sum(v for v in self._all_volume if v == v))
+            self._cvd_engine.seed_from_historical(
+                token=self.instrument_token,
+                cvd_value=float(self._all_cvd[-1]),
+                last_price=float(self._all_price[-1]),
+                cumulative_volume=cum_vol,
+                session_day=today,
+            )
+
+    def _on_cvd_tick(self, token: int, cvd_value: float, last_price: float):
+        """Receives every WebSocket tick. Updates live bar state, arms repaint."""
+        if token != self.instrument_token:
+            return
+        if not self.live_mode or self._live_cvd_open is None:
+            return
+
+        # Update CVD live bar (open is fixed; close/high/low track live)
+        self._live_cvd_close = float(cvd_value)
+        self._live_cvd_high  = max(self._live_cvd_open, self._live_cvd_close)
+        self._live_cvd_low   = min(self._live_cvd_open, self._live_cvd_close)
+
+        # Update price live bar
+        p = float(last_price)
+        self._live_price_close = p
+        if self._live_price_open is not None:
+            self._live_price_high = max(self._live_price_open, p)
+            self._live_price_low  = min(self._live_price_open, p)
+
+        # Arm 33 ms throttled repaint (fires at most ~30 fps)
+        if not self._tick_flush_timer.isActive():
+            self._tick_flush_timer.start(33)
+
+    def _flush_live_bar(self):
+        """Renders the current incomplete candle on both price and CVD charts."""
+        if self._live_cvd_open is None or not self._all_timestamps:
+            return
+
+        tf = self._selected_tf
+        hw = tf * 0.40
+
+        # ── Compute x position of the live bar ───────────────────────────────
+        if not self._two_day and self._session_base_ts is not None:
+            # 1D mode: align to the current bar's slot in minute-space
+            now = datetime.now()
+            elapsed_min = (now.replace(tzinfo=None) - self._session_base_ts.replace(tzinfo=None)).total_seconds() / 60.0
+            bar_slot = int(elapsed_min // tf) * tf
+            x = bar_slot + tf / 2.0   # candle center
+        else:
+            # 2D mode: next slot after last historical bar
+            x = len(self._all_timestamps) + tf / 2.0
+
+        # ── Paint live price bar ─────────────────────────────────────────────
+        if self._use_ohlc and self._live_price_open is not None:
+            self._price_ohlc_live.setData(
+                [(x, self._live_price_open, self._live_price_high,
+                  self._live_price_low, self._live_price_close)], hw)
+        else:
+            self._price_ohlc_live.clear()
+
+        # ── Paint live CVD bar ───────────────────────────────────────────────
+        if self._use_ohlc:
+            self._cvd_ohlc_live.setData(
+                [(x, self._live_cvd_open, self._live_cvd_high,
+                  self._live_cvd_low, self._live_cvd_close)], hw)
+        else:
+            self._cvd_ohlc_live.clear()
 
     # ------------------------------------------------------------ rendering --
 
@@ -1320,6 +1441,13 @@ class PriceCVDChartDialog(QDialog):
     def closeEvent(self, event):
         if hasattr(self, "_poller"):
             self._poller.stop()
+        if hasattr(self, "_tick_flush_timer"):
+            self._tick_flush_timer.stop()
+        if self._cvd_engine is not None:
+            try:
+                self._cvd_engine.cvd_updated.disconnect(self._on_cvd_tick)
+            except Exception:
+                pass
         if self._fetch_worker:
             with suppress(Exception):
                 self._fetch_worker.cancel()
