@@ -932,10 +932,9 @@ class PriceCVDChartDialog(QDialog):
                 and current_minute <= self._last_live_refresh_minute):
             return
         self._last_live_refresh_minute = current_minute
-        # Clear live bar during reload to avoid ghost candle
-        self._price_ohlc_live.clear()
-        self._cvd_ohlc_live.clear()
-        self._live_cvd_open = None
+        # NOTE: do NOT clear live bar here. Ticks continue flowing during the
+        # async reload (~1-2s). The bar gets properly reseeded once fetch completes.
+        # Clearing _live_cvd_open would silently drop all ticks during that window.
         self._load_and_plot()
 
     # ── WebSocket live bar ────────────────────────────────────────────────────
@@ -944,19 +943,25 @@ class PriceCVDChartDialog(QDialog):
         """
         Called after each historical load. Sets live bar open = last historical
         close, and seeds CVDEngine so live ticks continue from the right level.
+        This is called AFTER fetch completes — the live bar resets cleanly for
+        the new bar while ticks during the reload window are not lost.
         """
         if not self._all_cvd or not self._all_price or not self._all_timestamps:
             return
 
         self._live_price_open  = float(self._all_price[-1])
         self._live_price_close = self._live_price_open
-        self._live_price_high  = self._live_price_open
+        self._live_price_high  = self._live_price_open   # reset — new bar starts
         self._live_price_low   = self._live_price_open
 
         self._live_cvd_open  = float(self._all_cvd[-1])
         self._live_cvd_close = self._live_cvd_open
-        self._live_cvd_high  = self._live_cvd_open
+        self._live_cvd_high  = self._live_cvd_open       # reset — new bar starts
         self._live_cvd_low   = self._live_cvd_open
+
+        # Clear the live bar graphic so old ghost candle is removed
+        self._price_ohlc_live.clear()
+        self._cvd_ohlc_live.clear()
 
         # Session base timestamp for x-coordinate calculation (1D mode)
         today = datetime.now().date()
@@ -980,20 +985,42 @@ class PriceCVDChartDialog(QDialog):
         """Receives every WebSocket tick. Updates live bar state, arms repaint."""
         if token != self.instrument_token:
             return
-        if not self.live_mode or self._live_cvd_open is None:
+        if not self.live_mode:
             return
 
-        # Update CVD live bar (open is fixed; close/high/low track live)
-        self._live_cvd_close = float(cvd_value)
-        self._live_cvd_high  = max(self._live_cvd_open, self._live_cvd_close)
-        self._live_cvd_low   = min(self._live_cvd_open, self._live_cvd_close)
+        # If live bar hasn't been seeded yet (e.g. still loading), auto-seed from tick.
+        # This eliminates the blackout window during minute-boundary reloads.
+        if self._live_cvd_open is None:
+            if self._all_cvd:
+                # Seed from last known historical close
+                self._live_cvd_open  = float(self._all_cvd[-1])
+                self._live_cvd_close = self._live_cvd_open
+                self._live_cvd_high  = self._live_cvd_open
+                self._live_cvd_low   = self._live_cvd_open
+            else:
+                # No historical data yet — use current CVD value as open
+                self._live_cvd_open  = float(cvd_value)
+                self._live_cvd_close = self._live_cvd_open
+                self._live_cvd_high  = self._live_cvd_open
+                self._live_cvd_low   = self._live_cvd_open
 
-        # Update price live bar
+        if self._live_price_open is None and self._all_price:
+            self._live_price_open  = float(self._all_price[-1])
+            self._live_price_close = self._live_price_open
+            self._live_price_high  = self._live_price_open
+            self._live_price_low   = self._live_price_open
+
+        # ── CVD: open fixed, running max/min for wick accuracy ───────────────
+        self._live_cvd_close = float(cvd_value)
+        self._live_cvd_high  = max(self._live_cvd_high,  self._live_cvd_close)
+        self._live_cvd_low   = min(self._live_cvd_low,   self._live_cvd_close)
+
+        # ── Price: same — running max/min, NOT open-relative ─────────────────
         p = float(last_price)
         self._live_price_close = p
         if self._live_price_open is not None:
-            self._live_price_high = max(self._live_price_open, p)
-            self._live_price_low  = min(self._live_price_open, p)
+            self._live_price_high = max(self._live_price_high, p)
+            self._live_price_low  = min(self._live_price_low,  p)
 
         # Arm 33 ms throttled repaint (fires at most ~30 fps)
         if not self._tick_flush_timer.isActive():
@@ -1004,20 +1031,19 @@ class PriceCVDChartDialog(QDialog):
         if self._live_cvd_open is None or not self._all_timestamps:
             return
 
-        tf = self._selected_tf
-        hw = tf * 0.40
-
-        # ── Compute x position of the live bar ───────────────────────────────
+        # ── Compute x position + half-width of the live bar ──────────────────
+        # CRITICAL: x-axis scale differs per mode.
+        #   1D mode → minute-space  (1 unit = 1 minute, bar width = tf minutes)
+        #   2D mode → index-space   (1 unit = 1 bar, bar width = ~0.76)
         if not self._two_day and self._session_base_ts is not None:
-            # 1D mode: align to the current bar's slot in minute-space
+            tf = self._selected_tf
+            hw = tf * 0.40   # minute-space: tf units wide
             now = datetime.now()
             elapsed_min = (now.replace(tzinfo=None) - self._session_base_ts.replace(tzinfo=None)).total_seconds() / 60.0
             bar_slot = int(elapsed_min // tf) * tf
-            x = bar_slot + tf / 2.0   # candle center
+            x = bar_slot + tf / 2.0
         else:
-            # 2D mode: next slot after last historical bar.
-            # Keep the same x-center convention used in _render_from_cache()
-            # (OHLC bars centered at i + 0.5 regardless of timeframe).
+            hw = 0.38        # index-space: matches historical bars exactly
             x = len(self._all_timestamps) + (0.5 if self._use_ohlc else 0.0)
 
         # ── Paint live price bar ─────────────────────────────────────────────
