@@ -5,8 +5,7 @@ Standalone dialog showing Price (top) + CVD (bottom) with:
   • Date navigator  (previous / next trading day)
   • 1D / 2D toggle
   • Timeframe selector: 1m | 3m | 5m | 15m | 30m
-    - 1m  → classic line chart (unchanged)
-    - >1m → OHLC candlestick bars (bull/bear coloured)
+  • Chart type toggle: line ↔ candlestick (for any timeframe)
   • EMA 10 / 21 / 51 toggles  (both charts, always on close)
   • VWAP toggle               (price chart)
   • Auto-refresh (live mode, every 3 s)
@@ -283,6 +282,8 @@ class PriceCVDChartDialog(QDialog):
         self._two_day         = False
         self._cvd_rebased     = True
         self._selected_tf     = 1
+        self._use_ohlc        = False
+        self._chart_style_overridden = False
         self.current_date     = None
         self.previous_date    = None
 
@@ -416,6 +417,12 @@ class PriceCVDChartDialog(QDialog):
             self.cb_tf.addItem(tf_label, tf_min)
         self.cb_tf.currentIndexChanged.connect(self._on_tf_combo_changed)
         right.addWidget(self.cb_tf)
+
+        self.btn_chart_style = _btn("Line", fg=_C["text_1"], mw=78, checkable=True,
+                                    chk_bg="#26A69A", chk_fg="#000")
+        self.btn_chart_style.setToolTip("Toggle between line and candlestick charts")
+        self.btn_chart_style.toggled.connect(self._on_chart_style_toggled)
+        right.addWidget(self.btn_chart_style)
 
         right.addWidget(_sep())
 
@@ -630,7 +637,23 @@ class PriceCVDChartDialog(QDialog):
     def _on_tf_changed(self, tf_minutes: int):
         if tf_minutes == self._selected_tf: return
         self._selected_tf = tf_minutes
+        if not self._chart_style_overridden:
+            self._set_chart_style(tf_minutes > 1)
         self._load_and_plot()
+
+    def _set_chart_style(self, use_ohlc: bool):
+        self._use_ohlc = use_ohlc
+        with suppress(Exception):
+            self.btn_chart_style.blockSignals(True)
+            self.btn_chart_style.setChecked(use_ohlc)
+            self.btn_chart_style.blockSignals(False)
+        self.btn_chart_style.setText("Candles" if use_ohlc else "Line")
+
+    def _on_chart_style_toggled(self, checked: bool):
+        self._chart_style_overridden = True
+        self._set_chart_style(checked)
+        if self._all_timestamps:
+            self._render_from_cache()
 
     def _on_tf_combo_changed(self, index: int):
         tf_minutes = self.cb_tf.itemData(index)
@@ -743,7 +766,7 @@ class PriceCVDChartDialog(QDialog):
             return
 
         tf       = self._selected_tf
-        use_ohlc = (tf > 1)
+        use_ohlc = self._use_ohlc
         sessions = sorted({ts.date() for ts in self._all_timestamps})
         has_two  = len(sessions) == 2
 
@@ -936,7 +959,7 @@ class PriceCVDChartDialog(QDialog):
     def _render_overlays(self):
         if not self._all_timestamps: return
         tf       = self._selected_tf
-        use_ohlc = tf > 1
+        use_ohlc = self._use_ohlc
         sessions = sorted({ts.date() for ts in self._all_timestamps})
         has_two  = len(sessions) == 2
 
