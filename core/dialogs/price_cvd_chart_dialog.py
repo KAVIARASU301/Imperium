@@ -125,6 +125,18 @@ def _y_range(values: list, padding: float = 0.04) -> tuple[float, float]:
     return ymin - pad, ymax + pad
 
 
+def _fmt_axis_marker(value: float, for_cvd: bool = False) -> str:
+    if not np.isfinite(value):
+        return ""
+    if not for_cvd:
+        return f"{value:.2f}"
+    if abs(value) >= 1_000_000:
+        return f"{value / 1_000_000:.2f}M"
+    if abs(value) >= 1_000:
+        return f"{value / 1_000:.1f}K"
+    return f"{value:.0f}"
+
+
 # ---------------------------------------------------------------------------
 # OHLC Candlestick — QPicture based (single paint replay, zero per-bar cost)
 # ---------------------------------------------------------------------------
@@ -472,10 +484,15 @@ class PriceCVDChartDialog(QDialog):
         self.price_plot.getViewBox().disableAutoRange()
 
         py_ax = self.price_plot.getAxis("left")
-        py_ax.setWidth(72)
-        py_ax.setTextPen(pg.mkPen(_C["price"]))
+        py_ax.setStyle(showValues=False)
         py_ax.setPen(pg.mkPen(_C["border"]))
-        py_ax.enableAutoSIPrefix(False)
+
+        self.price_plot.showAxis("right", show=True)
+        py_right = self.price_plot.getAxis("right")
+        py_right.setWidth(72)
+        py_right.setTextPen(pg.mkPen(_C["price"]))
+        py_right.setPen(pg.mkPen(_C["border"]))
+        py_right.enableAutoSIPrefix(False)
 
         self._price_prev       = pg.PlotCurveItem(pen=pg.mkPen(_C["price_prev"], width=1.8, style=Qt.DashLine))
         self._price_today      = pg.PlotCurveItem(pen=pg.mkPen(_C["price"],      width=2.2))
@@ -505,6 +522,21 @@ class PriceCVDChartDialog(QDialog):
         self._price_vline.hide(); self._price_hline.hide()
         self.price_plot.addItem(self._price_vline, ignoreBounds=True)
         self.price_plot.addItem(self._price_hline, ignoreBounds=True)
+
+        self._price_last_line = pg.InfiniteLine(
+            angle=0,
+            movable=False,
+            pen=pg.mkPen(_C["price"], width=1.0, style=Qt.DashLine),
+            label="",
+            labelOpts={
+                "position": 0.995,
+                "anchors": [(1, 0.5), (1, 0.5)],
+                "color": "#0A0F17",
+                "fill": pg.mkBrush(_C["price"]),
+            },
+        )
+        self._price_last_line.hide()
+        self.price_plot.addItem(self._price_last_line, ignoreBounds=True)
         root.addWidget(self.price_plot, 3)
 
         # ── CVD chart ──────────────────────────────────────────────────────
@@ -517,11 +549,16 @@ class PriceCVDChartDialog(QDialog):
         self.cvd_plot.getViewBox().disableAutoRange()
 
         cy_ax = self.cvd_plot.getAxis("left")
-        cy_ax.setWidth(72)
-        cy_ax.setTextPen(pg.mkPen(_C["cvd"]))
+        cy_ax.setStyle(showValues=False)
         cy_ax.setPen(pg.mkPen(_C["border"]))
-        cy_ax.enableAutoSIPrefix(False)
-        cy_ax.tickStrings = self._cvd_y_tick_strings
+
+        self.cvd_plot.showAxis("right", show=True)
+        cy_right = self.cvd_plot.getAxis("right")
+        cy_right.setWidth(72)
+        cy_right.setTextPen(pg.mkPen(_C["cvd"]))
+        cy_right.setPen(pg.mkPen(_C["border"]))
+        cy_right.enableAutoSIPrefix(False)
+        cy_right.tickStrings = self._cvd_y_tick_strings
 
         cx_ax = self.cvd_plot.getAxis("bottom")
         cx_ax.setHeight(28)
@@ -554,6 +591,21 @@ class PriceCVDChartDialog(QDialog):
         self._cvd_vline.hide(); self._cvd_hline.hide()
         self.cvd_plot.addItem(self._cvd_vline, ignoreBounds=True)
         self.cvd_plot.addItem(self._cvd_hline, ignoreBounds=True)
+
+        self._cvd_last_line = pg.InfiniteLine(
+            angle=0,
+            movable=False,
+            pen=pg.mkPen(_C["cvd"], width=1.0, style=Qt.DashLine),
+            label="",
+            labelOpts={
+                "position": 0.995,
+                "anchors": [(1, 0.5), (1, 0.5)],
+                "color": "#0A0F17",
+                "fill": pg.mkBrush(_C["cvd"]),
+            },
+        )
+        self._cvd_last_line.hide()
+        self.cvd_plot.addItem(self._cvd_last_line, ignoreBounds=True)
         root.addWidget(self.cvd_plot, 2)
 
         self.price_plot.setXLink(self.cvd_plot)
@@ -955,6 +1007,24 @@ class PriceCVDChartDialog(QDialog):
             _xs_ov  = list(xs_all)
 
         self._render_overlays_with(_xs_ov, _px_ov, _vol_ov, _cvd_ov, _ts_ov)
+        self._update_last_value_markers(_px_ov, _cvd_ov)
+
+    def _update_last_value_markers(self, px_values, cvd_values):
+        if px_values:
+            last_px = float(px_values[-1])
+            self._price_last_line.setValue(last_px)
+            self._price_last_line.label.setFormat(_fmt_axis_marker(last_px, for_cvd=False))
+            self._price_last_line.show()
+        else:
+            self._price_last_line.hide()
+
+        if cvd_values:
+            last_cvd = float(cvd_values[-1])
+            self._cvd_last_line.setValue(last_cvd)
+            self._cvd_last_line.label.setFormat(_fmt_axis_marker(last_cvd, for_cvd=True))
+            self._cvd_last_line.show()
+        else:
+            self._cvd_last_line.hide()
 
     def _render_overlays(self):
         if not self._all_timestamps: return
