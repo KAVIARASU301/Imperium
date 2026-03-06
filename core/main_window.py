@@ -2,7 +2,7 @@
 import logging
 from enum import Enum
 from collections import deque
-import time
+import time as pytime
 from typing import Dict, List, Optional, Union
 from datetime import datetime, timedelta, time, date
 
@@ -1232,8 +1232,7 @@ class ImperiumMainWindow(QMainWindow):
                 logger.debug(f"Order {order_id} not in allowed status or not found yet. Retry {i + 1}/{retries}")
             except Exception as e:
                 logger.warning(f"Error fetching order status for {order_id} on retry {i + 1}: {e}")
-            import time
-            time.sleep(delay)
+            pytime.sleep(delay)
         logger.error(f"Order {order_id} confirmation failed after {retries} retries.")
         return None
 
@@ -1507,7 +1506,7 @@ class ImperiumMainWindow(QMainWindow):
                         f"Network error attempt {attempt + 1}/{max_retries} for {symbol}: {e}. "
                         f"Retrying in {sleep_time}s..."
                     )
-                    time.sleep(sleep_time)
+                    pytime.sleep(sleep_time)
                 else:
                     logger.error(
                         f"Network timeout for {symbol} after {max_retries} attempts: {e}"
@@ -1524,7 +1523,7 @@ class ImperiumMainWindow(QMainWindow):
                         f"Attempt {attempt + 1}/{max_retries} failed for {symbol}: {e}. "
                         f"Retrying in {sleep_time}s..."
                     )
-                    time.sleep(sleep_time)
+                    pytime.sleep(sleep_time)
                 else:
                     logger.error(
                         f"Failed to get current price for {symbol} after {max_retries} attempts: {e}"
