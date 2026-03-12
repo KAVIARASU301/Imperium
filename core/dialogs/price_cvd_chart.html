@@ -774,6 +774,27 @@ window.__reloadPriceCvdData = () => {
   loadData();
 };
 
+window.__applyPriceCvdLiveTick = (tick) => {
+  if (!tick || !Number.isFinite(Number(tick.price)) || !Number.isFinite(Number(tick.cvd))) return;
+  if (!Array.isArray(state.bars) || state.bars.length === 0) return;
+
+  const last = state.bars[state.bars.length - 1];
+  const px = Number(tick.price);
+  const cvd = Number(tick.cvd);
+
+  last.c = px;
+  last.h = Math.max(Number(last.h), px);
+  last.l = Math.min(Number(last.l), px);
+
+  if (Number.isFinite(Number(last.cvdO))) {
+    last.cvd = cvd;
+    last.cvdH = Math.max(Number(last.cvdH ?? cvd), cvd, Number(last.cvdO));
+    last.cvdL = Math.min(Number(last.cvdL ?? cvd), cvd, Number(last.cvdO));
+  }
+
+  render();
+};
+
 // ═══════════════════════════════════════════════════════════════════════════
 //  INDICATOR MATH
 // ═══════════════════════════════════════════════════════════════════════════

@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 import json
 
-from PySide6.QtCore import Qt, QUrl, QSettings, QByteArray
+from PySide6.QtCore import Qt, QUrl, QSettings, QByteArray, QTimer
 from PySide6.QtWidgets import QDialog, QLabel, QVBoxLayout
 
 logger = logging.getLogger(__name__)
@@ -37,6 +37,14 @@ class PriceCVDChartDialog(QDialog):
         self.symbol = symbol
         self.cvd_engine = cvd_engine
         self.price_instrument_token = price_instrument_token or instrument_token
+        self._web_ready = False
+        self._latest_price: float | None = None
+        self._latest_cvd: float | None = None
+        self._latest_tick_ts = datetime.now()
+        self._live_flush_timer = QTimer(self)
+        self._live_flush_timer.setSingleShot(True)
+        self._live_flush_timer.setInterval(120)
+        self._live_flush_timer.timeout.connect(self._flush_live_tick)
 
         # Promote to a full top-level window so the OS decorates it with
         # Minimize / Maximize / Close buttons in the native title bar.
@@ -80,6 +88,15 @@ class PriceCVDChartDialog(QDialog):
             root.addWidget(web_view)
             self._web_view = web_view
             logger.info("[PriceCVDChart] Loaded HTML chart from %s", html_path)
+
+            if self.cvd_engine is not None:
+                self.cvd_engine.cvd_updated.connect(self._on_cvd_updated)
+
+            if parent is not None and hasattr(parent, "market_data_worker"):
+                try:
+                    parent.market_data_worker.data_received.connect(self._on_market_ticks)
+                except Exception:
+                    logger.debug("[PriceCVDChart] Could not connect to market tick stream", exc_info=True)
         except Exception:
             logger.exception("[PriceCVDChart] Failed to initialise web view")
             err = QLabel("Unable to initialize embedded chart view.")
@@ -105,8 +122,23 @@ class PriceCVDChartDialog(QDialog):
         logger.debug("[PriceCVDChart] Geometry saved for %s", self.symbol)
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
+        self._disconnect_live_feeds()
         self._save_geometry()
         super().closeEvent(event)
+
+    def _disconnect_live_feeds(self) -> None:
+        if self.cvd_engine is not None:
+            try:
+                self.cvd_engine.cvd_updated.disconnect(self._on_cvd_updated)
+            except Exception:
+                pass
+
+        parent = self.parent()
+        if parent is not None and hasattr(parent, "market_data_worker"):
+            try:
+                parent.market_data_worker.data_received.disconnect(self._on_market_ticks)
+            except Exception:
+                pass
 
     # ── Historical data ──────────────────────────────────────────────────
     def _fetch_historical(self, token: int, from_dt: datetime, to_dt: datetime) -> list[dict]:
@@ -149,6 +181,7 @@ class PriceCVDChartDialog(QDialog):
             logger.warning("[PriceCVDChart] Web view failed to load for %s", self.symbol)
             return
 
+        self._web_ready = True
         try:
             to_dt = datetime.now()
             from_dt = to_dt - timedelta(days=8)
@@ -173,3 +206,55 @@ class PriceCVDChartDialog(QDialog):
             )
         except Exception:
             logger.exception("[PriceCVDChart] Failed to inject real chart data for %s", self.symbol)
+
+    def _on_cvd_updated(self, instrument_token: int, cvd_value: float, last_price: float) -> None:
+        if instrument_token != self.instrument_token:
+            return
+
+        self._latest_cvd = float(cvd_value)
+        if self.price_instrument_token == self.instrument_token:
+            self._latest_price = float(last_price)
+        self._latest_tick_ts = datetime.now()
+        self._schedule_live_flush()
+
+    def _on_market_ticks(self, ticks: list[dict]) -> None:
+        saw_relevant = False
+        for tick in ticks:
+            token = tick.get("instrument_token")
+            if token == self.price_instrument_token:
+                price = tick.get("last_price")
+                if price is not None:
+                    self._latest_price = float(price)
+                    saw_relevant = True
+
+            if token == self.instrument_token:
+                ts = tick.get("exchange_timestamp") or tick.get("last_trade_time")
+                if hasattr(ts, "replace"):
+                    self._latest_tick_ts = ts
+
+        if saw_relevant:
+            self._schedule_live_flush()
+
+    def _schedule_live_flush(self) -> None:
+        if not self._web_ready:
+            return
+        if not self._live_flush_timer.isActive():
+            self._live_flush_timer.start()
+
+    def _flush_live_tick(self) -> None:
+        if not self._web_ready or self._latest_price is None or self._latest_cvd is None:
+            return
+
+        payload = {
+            "price": self._latest_price,
+            "cvd": self._latest_cvd,
+            "timestamp": self._latest_tick_ts.isoformat(),
+        }
+        js = (
+            f"if (typeof window.__applyPriceCvdLiveTick === 'function') "
+            f"window.__applyPriceCvdLiveTick({json.dumps(payload)});"
+        )
+        try:
+            self._web_view.page().runJavaScript(js)
+        except Exception:
+            logger.debug("[PriceCVDChart] Failed to push live tick for %s", self.symbol, exc_info=True)
