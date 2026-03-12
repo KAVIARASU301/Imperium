@@ -544,21 +544,14 @@ function buildBarsFromRealPayload(payload) {
   rows.sort((a, b) => a.dt - b.dt);
   if (!rows.length) return { bars: [], labels: [] };
 
-  // Build minute-level cumulative CVD with daily reset.
-  let currentDate = null;
-  let cvdClose = 0;
+  // Python pre-computes CVD OHLC via CVDHistoricalBuilder.
+  // The cvd payload rows carry CVD values directly in o/h/l/c —
+  // no need to recompute from candle direction × volume.
   for (const row of rows) {
-    if (row.dateKey !== currentDate) {
-      currentDate = row.dateKey;
-      cvdClose = 0;
-    }
-    const delta = row.cvd.c > row.cvd.o ? row.cvd.v : (row.cvd.c < row.cvd.o ? -row.cvd.v : 0);
-    const cvdOpen = cvdClose;
-    cvdClose += delta;
-    row.cvdOpen = cvdOpen;
-    row.cvdClose = cvdClose;
-    row.cvdHigh = Math.max(cvdOpen, cvdClose);
-    row.cvdLow = Math.min(cvdOpen, cvdClose);
+    row.cvdOpen  = row.cvd.o;
+    row.cvdClose = row.cvd.c;
+    row.cvdHigh  = row.cvd.h;
+    row.cvdLow   = row.cvd.l;
   }
 
   // Aggregate minute rows to timeframe buckets per day.

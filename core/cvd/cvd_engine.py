@@ -55,12 +55,20 @@ class CVDEngine(QObject):
         cumulative_volume: int,
         session_day: date,
     ):
-        """Seed state from historical minute candles so live ticks continue seamlessly."""
+        """Seed state from historical minute candles so live ticks continue seamlessly.
+
+        last_volume is intentionally set to None so the engine's first-tick
+        initialisation path handles it: it stores the current cumulative
+        session volume as the baseline and emits the already-seeded cvd_value
+        without computing a delta.  Passing cumulative_volume=0 here would
+        cause the next tick to compute delta = full_session_volume - 0, which
+        is a massive incorrect spike.
+        """
         self.register_token(token)
         state = self._states[token]
         state.cvd = float(cvd_value)
         state.last_price = float(last_price)
-        state.last_volume = int(max(cumulative_volume, 0))
+        state.last_volume = None   # first-tick handler sets the correct baseline
         state.session_date = session_day
 
     def process_ticks(self, ticks: Iterable[dict]):

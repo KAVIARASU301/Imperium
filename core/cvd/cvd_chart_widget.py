@@ -57,6 +57,7 @@ class CVDChartWidget(QWidget):
         self.live_mode = True
         self._historical_loaded = False
         self._historical_failed = False
+        self._last_hist_range = None          # guard: poller can fire before set_instrument()
         self._last_live_refresh_minute: datetime | None = None
 
         # --- Live dot pulse state ---
