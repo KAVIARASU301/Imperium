@@ -338,6 +338,7 @@ class ImperiumMainWindow(QMainWindow):
         self.position_manager.position_removed.connect(self._on_position_removed)
         self.position_manager.refresh_completed.connect(self._on_refresh_completed)
         self.position_manager.api_error_occurred.connect(self._on_api_error)
+        self.position_manager.position_exiting.connect(self._on_position_exiting)
         self.position_manager.portfolio_exit_triggered.connect(self._on_portfolio_exit_triggered)
 
     # =========================================================================
@@ -876,6 +877,31 @@ class ImperiumMainWindow(QMainWindow):
 
     def _on_position_removed(self, symbol: str):
         self.position_sync_adapter.on_position_removed(symbol)
+
+    def _on_position_exiting(self, position) -> None:
+        """
+        Called by PositionManager.position_exiting signal BEFORE a position is
+        popped from the internal dict.
+
+        For live mode this caches the Position snapshot so that
+        _check_live_completed_orders() can match the completed SELL order to
+        the original entry data even if the broker has already removed the
+        position from its API response by the time the 1-second poll fires.
+
+        Safe to call unconditionally — the snapshot dict is keyed by symbol so
+        duplicate writes are idempotent, and existing manual-exit paths that
+        already write the snapshot (exit_execution_methods.py) will simply
+        overwrite with the same object.
+        """
+        if self.trading_mode != "live":
+            return
+        if position is None:
+            return
+        symbol = getattr(position, "tradingsymbol", None)
+        if not symbol:
+            return
+        self._position_snapshots_for_exit[symbol] = position
+        logger.debug(f"[Snapshot] Cached position for {symbol} via position_exiting signal")
 
     def _on_refresh_completed(self, success: bool):
         self.position_sync_adapter.on_refresh_completed(success)

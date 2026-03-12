@@ -1,4 +1,6 @@
 import logging
+from copy import copy
+from datetime import datetime
 from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
@@ -37,6 +39,8 @@ class ExecutionFacade:
         self._update_account_summary_widget = update_account_summary_widget
         self._refresh_positions = refresh_positions
         self._publish_status = publish_status
+        # Symbol -> FIFO list of entry snapshots used to map exits deterministically
+        self._paper_entry_ledger: dict[str, list] = {}
 
     def place_order(self, *, order_details_from_panel: dict, auto_confirm: bool) -> bool:
         """Validate/place order through confirmation flow; returns whether execution was triggered."""
@@ -90,15 +94,32 @@ class ExecutionFacade:
 
         if order_data and order_data.get("status") == "COMPLETE":
             tradingsymbol = order_data.get("tradingsymbol")
-            exit_qty = order_data.get("exit_qty", 0)
+            exit_qty = int(order_data.get("exit_qty", 0) or 0)
+            entry_qty = int(order_data.get("entry_qty", 0) or 0)
+
+            if entry_qty > 0:
+                self._capture_paper_entry_snapshot(order_data=order_data, qty=entry_qty)
 
             if exit_qty > 0:
                 if order_data.get("_ledger_recorded"):
                     return
 
+                confirmed_order = {**order_data, "filled_quantity": exit_qty}
+                matched_entries = self._consume_paper_entry_snapshots(order_data=order_data, exit_qty=exit_qty)
+
+                for entry in matched_entries:
+                    self._record_completed_exit_trade(
+                        confirmed_order={**confirmed_order, "filled_quantity": abs(int(entry.quantity))},
+                        original_position=entry,
+                        trading_mode="PAPER",
+                    )
+
+                if matched_entries:
+                    order_data["_ledger_recorded"] = True
+                    return
+
                 original_position = self._get_position(tradingsymbol)
                 if original_position:
-                    confirmed_order = {**order_data, "filled_quantity": exit_qty}
                     self._record_completed_exit_trade(
                         confirmed_order=confirmed_order,
                         original_position=original_position,
@@ -111,6 +132,77 @@ class ExecutionFacade:
             self._update_account_info()
             self._update_account_summary_widget()
             self._refresh_positions()
+
+    def _capture_paper_entry_snapshot(self, *, order_data: dict, qty: int) -> None:
+        tradingsymbol = str(order_data.get("tradingsymbol") or "").strip()
+        if not tradingsymbol or qty <= 0:
+            return
+
+        current_position = self._get_position(tradingsymbol)
+        if not current_position:
+            return
+
+        txn = str(order_data.get("transaction_type") or "").upper()
+        signed_qty = qty if txn == "BUY" else -qty
+
+        entry_time_raw = (
+            order_data.get("exchange_timestamp")
+            or order_data.get("order_timestamp")
+            or datetime.now().isoformat()
+        )
+        try:
+            entry_time = datetime.fromisoformat(str(entry_time_raw).replace("Z", "+00:00"))
+        except Exception:
+            entry_time = datetime.now()
+
+        snapshot = copy(current_position)
+        snapshot.quantity = signed_qty
+        snapshot.average_price = float(order_data.get("average_price") or current_position.average_price)
+        snapshot.order_id = order_data.get("order_id") or current_position.order_id
+        snapshot.entry_time = entry_time
+
+        self._paper_entry_ledger.setdefault(tradingsymbol, []).append(snapshot)
+
+    def _consume_paper_entry_snapshots(self, *, order_data: dict, exit_qty: int) -> list:
+        tradingsymbol = str(order_data.get("tradingsymbol") or "").strip()
+        if not tradingsymbol or exit_qty <= 0:
+            return []
+
+        entries = self._paper_entry_ledger.get(tradingsymbol, [])
+        if not entries:
+            return []
+
+        exit_txn = str(order_data.get("transaction_type") or "").upper()
+        expected_sign = 1 if exit_txn == "SELL" else -1
+
+        remaining = exit_qty
+        matched: list = []
+        idx = 0
+
+        while idx < len(entries) and remaining > 0:
+            entry = entries[idx]
+            entry_sign = 1 if int(entry.quantity) > 0 else -1
+            if entry_sign != expected_sign:
+                idx += 1
+                continue
+
+            available_qty = abs(int(entry.quantity))
+            take_qty = min(available_qty, remaining)
+            consumed = copy(entry)
+            consumed.quantity = expected_sign * take_qty
+            matched.append(consumed)
+
+            remaining -= take_qty
+            if take_qty == available_qty:
+                entries.pop(idx)
+            else:
+                entry.quantity = expected_sign * (available_qty - take_qty)
+                idx += 1
+
+        if not entries:
+            self._paper_entry_ledger.pop(tradingsymbol, None)
+
+        return matched
 
     def on_paper_order_rejected(self, *, data: dict, show_modal: Callable[[str, str], None]) -> None:
         reason = data.get("reason", "Order rejected by RMS")

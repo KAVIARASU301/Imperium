@@ -24,6 +24,7 @@ class PositionManager(QObject):
     api_error_occurred = Signal(str)
     position_added = Signal(object)
     position_removed = Signal(str)
+    position_exiting = Signal(object)
     portfolio_exit_triggered = Signal(str, float)
 
     # args: reason ("STOP_LOSS" / "TARGET"), pnl
@@ -396,6 +397,10 @@ class PositionManager(QObject):
             self._exit_in_progress.discard(symbol)
             return
         try:
+            # Emit snapshot signal before placing exit order so callers can cache
+            # position context even if broker-side state updates immediately.
+            self.position_exiting.emit(position)
+
             self.trader.place_order(
                 variety=self.trader.VARIETY_REGULAR,
                 exchange=position.exchange,
