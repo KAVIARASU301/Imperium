@@ -13,11 +13,11 @@ class TitleBar(QWidget):
         self.dragging = False
         self.drag_position = QPoint()
 
-        self.setFixedHeight(32)
+        self.setFixedHeight(30)
         self.setStyleSheet("""
             QWidget {
-                background-color: #161A25;
-                border-bottom: 1px solid #2A3140;
+                background-color: #07090E;
+                border-bottom: 1px solid #1C2333;
             }
         """)
 
@@ -33,10 +33,12 @@ class TitleBar(QWidget):
         self.title_label = QLabel("Imperium Desk")
         self.title_label.setStyleSheet("""
             QLabel {
-                color: #29C7C9;
-                font-size: 13px;
+                color: #00C4C6;
+                font-size: 12px;
                 font-weight: 700;
-                letter-spacing: 0.5px;
+                letter-spacing: 0.06em;
+                background: transparent;
+                border: none;
             }
         """)
 
@@ -74,28 +76,37 @@ class TitleBar(QWidget):
             QPushButton {
                 background-color: transparent;
                 border: none;
-                color: #E0E0E0;
-                font-size: 16px;
-                font-weight: bold;
-                width: 42px;
-                height: 28px;
+                border-radius: 0px;
+                color: #7A8799;
+                font-size: 14px;
+                font-weight: 400;
+                width: 38px;
+                height: 30px;
             }
             QPushButton:hover {
-                background-color: rgba(255, 255, 255, 0.1);
+                background-color: #111520;
+                color: #C8D0DC;
             }
-            QPushButton:pressed {
-                background-color: rgba(255, 255, 255, 0.2);
-            }
+            QPushButton:pressed { background-color: #1C2333; }
         """
-
-        close_button_style = button_style + """
+        close_button_style = """
+            QPushButton {
+                background-color: transparent;
+                border: none;
+                border-radius: 0px;
+                color: #7A8799;
+                font-size: 16px;
+                font-weight: 400;
+                width: 38px;
+                height: 30px;
+            }
             QPushButton:hover {
-                background-color: #e74c3c;
-                color: white;
+                background-color: #1A0709;
+                color: #E0424A;
             }
             QPushButton:pressed {
-                background-color: #c0392b;
-                color: white;
+                background-color: #2A1215;
+                color: #E0424A;
             }
         """
 

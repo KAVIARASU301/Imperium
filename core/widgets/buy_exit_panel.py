@@ -252,214 +252,161 @@ class BuyExitPanel(QWidget):
         return layout
 
     def _apply_styles(self):
-        """Applies a premium, metallic, and modern dark theme stylesheet."""
         self.setStyleSheet("""
             #buyExitPanel {
-                background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                                                  stop:0 #2A3140, stop:1 #161A25);
-                border: 1px solid #3A4458;
-                border-radius: 12px;
-                font-family: 'Segoe UI', 'Roboto Mono', monospace;
-            }
-            #panelTitleCall, #panelTitlePut {
-                font-size: 22px; font-weight: 600; padding: 6px;
-                border-radius: 8px;
-                border: 1px solid transparent;
+                background-color: #0C0F17;
+                border: 1px solid #1C2333;
+                border-radius: 2px;
+                font-family: "Inter", "Segoe UI", sans-serif;
             }
             #panelTitleCall {
-                background-color: rgba(41, 199, 201, 0.1); color: #29C7C9;
-                border-color: rgba(41, 199, 201, 0.3);
+                font-size: 18px;
+                font-weight: 700;
+                padding: 4px;
+                letter-spacing: 0.08em;
+                background-color: #071214;
+                color: #00C4C6;
+                border: none;
+                border-bottom: 2px solid #00C4C6;
+                border-radius: 0px;
             }
             #panelTitlePut {
-                background-color: rgba(248, 81, 73, 0.1); color: #F85149;
-                border-color: rgba(248, 81, 73, 0.3);
+                font-size: 18px;
+                font-weight: 700;
+                padding: 4px;
+                letter-spacing: 0.08em;
+                background-color: #1A0709;
+                color: #E0424A;
+                border: none;
+                border-bottom: 2px solid #E0424A;
+                border-radius: 0px;
             }
             #selectionGroup {
-                color: #A9B1C3; border: 1px solid #2A3140; border-radius: 8px;
-                font-size: 11px; margin-top: 8px; padding-top: 12px; font-weight: bold;
+                color: #7A8799;
+                border: 1px solid #1C2333;
+                border-radius: 2px;
+                font-size: 10px;
+                font-weight: 700;
+                letter-spacing: 0.08em;
+                margin-top: 6px;
+                padding-top: 10px;
             }
-            #selectionGroup::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }
-            #infoTitle {font-size: 12px;color: #A9B1C3;}
-            #infoFrame { background-color: rgba(13, 17, 23, 0.5); border-radius: 8px; }
-            #divider { background-color: #3A4458; height: 1px; border: none; }
-            QLabel { color: #A9B1C3;  }
-            #infoValue { color: #E0E0E0; }
-            #marginValue { color: #FFFFFF; font-weight: bold; }
-            
-            /* ---------------- SPINBOX ---------------- */
-
+            #selectionGroup::title {
+                subcontrol-origin: margin;
+                left: 8px;
+                padding: 0 4px;
+                background-color: #0C0F17;
+            }
+            #infoTitle {
+                font-size: 10px;
+                font-weight: 700;
+                letter-spacing: 0.07em;
+                color: #7A8799;
+            }
+            #infoFrame {
+                background-color: #111520;
+                border: 1px solid #1C2333;
+                border-radius: 0px;
+            }
+            #divider { background-color: #1C2333; height: 1px; border: none; }
+            QLabel { color: #7A8799; background: transparent; }
+            #infoValue {
+                color: #C8D0DC;
+                font-family: "Cascadia Code", "Consolas", monospace;
+                font-size: 13px;
+                font-weight: 600;
+            }
+            #marginValue {
+                color: #C8D0DC;
+                font-family: "Cascadia Code", "Consolas", monospace;
+                font-weight: 600;
+            }
             QSpinBox {
-                background-color: qlineargradient(
-                    x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #242A3A,
-                    stop:1 #1A1F2B
-                );
-            
-                color: #E8EAF0;
-                border: 1.2px solid #3A4458;
-                border-radius: 8px;
-            
+                background-color: #0A0D14;
+                color: #C8D0DC;
+                border: 1px solid #1C2333;
+                border-radius: 2px;
                 padding: 4px 6px;
                 font-weight: 600;
-                selection-background-color: #29C7C9;
-                selection-color: #0B0F14;
+                selection-background-color: #253047;
+                selection-color: #C8D0DC;
             }
-
-            QSpinBox QLineEdit {
-                background: transparent;
-                border: none;
-                color: #E8EAF0;
-                selection-background-color: transparent;
-            }
-            
-            /* Hover = subtle readiness */
-            QSpinBox:hover {
-                border-color: #6C7386;
-            }
-            
-            /* Focus = decisive but calm */
-            QSpinBox:focus {
-                border-color: #29C7C9;
-                background-color: #1E2535;
-            }
-            QSpinBox::selection {
-                background: transparent;
-                color: inherit;
-            }
-
-            /* Disabled state (important for trust) */
-            QSpinBox:disabled {
-                color: #6C7386;
-                background-color: #161A25;
-                border-color: #2A3140;
-            }
-
-            /* ---------------- ORDER TYPE COMBO ---------------- */
-
+            QSpinBox QLineEdit { background: transparent; border: none; color: #C8D0DC; selection-background-color: transparent; }
+            QSpinBox:hover  { border-color: #253047; }
+            QSpinBox:focus  { border-color: #00C4C6; background-color: #0C0F17; }
+            QSpinBox:disabled { color: #3A4458; background-color: #080B11; border-color: #141A24; }
             QComboBox {
-                background-color: qlineargradient(
-                    x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #242A3A,
-                    stop:1 #1A1F2B
-                );
-                color: #E8EAF0;
-                border: 1.2px solid #3A4458;
-                border-radius: 8px;
+                background-color: #0A0D14;
+                color: #C8D0DC;
+                border: 1px solid #1C2333;
+                border-radius: 2px;
                 padding: 4px 8px;
-                font-weight: 600;
+                font-weight: 500;
             }
-
-            QComboBox:hover {
-                border-color: #6C7386;
-            }
-
-            QComboBox:focus {
-                border-color: #29C7C9;
-                background-color: #1E2535;
-            }
-
-            QComboBox::drop-down {
-                border: none;
-                width: 20px;
-                background: transparent;
-            }
-
+            QComboBox:hover { border-color: #253047; }
+            QComboBox:focus { border-color: #00C4C6; }
+            QComboBox::drop-down { border: none; width: 18px; background: transparent; }
             QComboBox::down-arrow {
-                image: none;
                 border-left: 4px solid transparent;
                 border-right: 4px solid transparent;
-                border-top: 6px solid #A9B1C3;
-                margin-right: 6px;
+                border-top: 5px solid #7A8799;
+                margin-right: 5px;
             }
-
             QComboBox QAbstractItemView {
-                background-color: #1A1F2B;
-                color: #E8EAF0;
-                border: 1px solid #3A4458;
-                selection-background-color: #29C7C9;
-                selection-color: #0B0F14;
+                background-color: #0C0F17;
+                color: #C8D0DC;
+                border: 1px solid #253047;
+                selection-background-color: #161C28;
+                selection-color: #00C4C6;
                 outline: none;
             }
-
-            
-            /* ---------------- RADIO BUTTON ---------------- */
-
             QRadioButton {
-                color: #A9B1C3;
-                spacing: 8px;
+                color: #7A8799;
+                spacing: 7px;
                 font-weight: 600;
+                font-size: 12px;
             }
-            
-            /* Base indicator */
             QRadioButton::indicator {
-                width: 14px;
-                height: 14px;
-                border-radius: 7px;
-            
-                background-color: #1E2433;
-                border: 1.5px solid #3A4458;
+                width: 13px;
+                height: 13px;
+                border-radius: 2px;
+                background-color: #0A0D14;
+                border: 1px solid #253047;
             }
-            
-            /* Hover feedback */
-            QRadioButton::indicator:hover {
-                border-color: #6C7386;
-            }
-            
-            /* Checked base (inner dot illusion) */
-            QRadioButton::indicator:checked {
-                background-color: #0F131D;
-                border-width: 2px;
-            }
-            
-            /* CALL (teal) */
+            QRadioButton::indicator:hover { border-color: #7A8799; }
             #callRadio::indicator:checked {
-                border-color: #29C7C9;
-                background-color: #0F2C30;
+                background-color: #071214;
+                border: 2px solid #00C4C6;
             }
-            
-            /* PUT (red) */
             #putRadio::indicator:checked {
-                border-color: #F85149;
-                background-color: #2A1212;
+                background-color: #1A0709;
+                border: 2px solid #E0424A;
             }
-            
-            /* Optional: subtle focus ring (keyboard users) */
-            QRadioButton::indicator:checked:focus {
-                border-color: #FFFFFF;
-            }
-
-            /* --- MODIFIED BUTTON STYLES --- */
             QPushButton {
-                font-weight: bold;
-                border-radius: 6px;
+                font-weight: 700;
+                border-radius: 2px;
                 padding: 8px;
-                font-size: 14px;
-                background-color: #1A1F2B;
-                color: #A9B1C3;
-                border: 1px solid #313B4D;
+                font-size: 13px;
+                background-color: #111520;
+                color: #7A8799;
+                border: 1px solid #1C2333;
+                letter-spacing: 0.06em;
             }
-            #primaryButton { /* BUY button */
-                background-color: #1A1F2B;
-                color: #A9B1C3;
-                border: 1px solid #313B4D;
+            #primaryButton {
+                background-color: #00A8AA;
+                color: #07090E;
+                border: 1px solid #00C4C6;
+                font-weight: 700;
             }
-            #primaryButton:hover {
-                background: #244233;
-                color: #D9F5E4;
-                border: 1px solid #2F7F56;
+            #primaryButton:hover { background-color: #00C4C6; border-color: #00C4C6; }
+            #primaryButton:pressed { background-color: #008F91; }
+            #dangerButton {
+                background-color: #1A0709;
+                color: #E0424A;
+                border: 1px solid #3D1517;
             }
-
-            #dangerButton { /* EXIT button */
-                background-color: #1A1F2B;
-                color: #A9B1C3;
-                border: 1px solid #313B4D;
-            }
-            #dangerButton:hover {
-                background: #3A2628;
-                color: #F5DFE0;
-                border: 1px solid #8E4A4E;
-            }
-            
+            #dangerButton:hover { background-color: #2A1215; border-color: #E0424A; }
+            #dangerButton:pressed { background-color: #0F0305; }
         """)
 
     def toggle_option_type(self):

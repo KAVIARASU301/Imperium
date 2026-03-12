@@ -1805,8 +1805,15 @@ class ImperiumMainWindow(QMainWindow):
         symbol = current_settings.get("symbol")
         self._open_price_cvd_chart_for_symbol(symbol)
 
-    def _open_price_cvd_chart_for_symbol(self, symbol: Optional[str]):
-        """Open (or focus) Price & CVD chart dialog for a symbol."""
+    def _open_price_cvd_chart_for_symbol(
+        self,
+        symbol: Optional[str],
+        *,
+        cvd_token_override: Optional[int] = None,
+        price_token_override: Optional[int] = None,
+        display_symbol_override: Optional[str] = None,
+    ):
+        """Open (or focus) Price & CVD chart dialog for a symbol/token."""
         from core.dialogs.price_cvd_chart_dialog import PriceCVDChartDialog
 
         try:
@@ -1817,6 +1824,8 @@ class ImperiumMainWindow(QMainWindow):
                 return
 
             cvd_token, _, suffix = self._get_cvd_token(symbol)
+            if cvd_token_override:
+                cvd_token = int(cvd_token_override)
             if not cvd_token:
                 from PySide6.QtWidgets import QMessageBox
                 QMessageBox.warning(self, "Price & CVD Chart", f"No futures token found for {symbol}.")
@@ -1825,9 +1834,9 @@ class ImperiumMainWindow(QMainWindow):
             symbol_info = self.instrument_data.get(symbol, {})
             # Price leg uses index spot when available (e.g., NIFTY/BANKNIFTY indices),
             # while CVD continues to use futures token for volume-led flow.
-            price_token = symbol_info.get("instrument_token") or cvd_token
+            price_token = price_token_override or symbol_info.get("instrument_token") or cvd_token
 
-            full_symbol = f"{symbol}{suffix}"
+            full_symbol = display_symbol_override or f"{symbol}{suffix}"
 
             # Reuse an already-open dialog for the same token if one exists
             for dlg in list(self._price_cvd_chart_dialogs):
@@ -2023,7 +2032,12 @@ class ImperiumMainWindow(QMainWindow):
         """Open Price & CVD chart from a Strike Ladder chart-icon click."""
         if not contract:
             return
-        self._open_price_cvd_chart_for_symbol(contract.symbol)
+        self._open_price_cvd_chart_for_symbol(
+            contract.symbol,
+            cvd_token_override=contract.instrument_token,
+            price_token_override=contract.instrument_token,
+            display_symbol_override=contract.tradingsymbol,
+        )
     # =========================================================================
     # SECTION 15: QUICK ORDER & SINGLE STRIKE
     # =========================================================================
@@ -2202,17 +2216,9 @@ class ImperiumMainWindow(QMainWindow):
     # =========================================================================
 
     def _update_ui(self):
-        self._update_account_summary_widget()
+        # Keep this timer focused on lightweight periodic chores.
+        # High-frequency visual updates are handled by _update_throttled_ui().
         self._evaluate_risk_locks()
-
-        ladder_data = self.strike_ladder.get_ladder_data()
-        if ladder_data:
-            atm_strike = self.strike_ladder.atm_strike
-            interval = self.strike_ladder.get_strike_interval()
-            self.buy_exit_panel.update_strike_ladder(atm_strike, interval, ladder_data)
-
-        if self.performance_dialog and self.performance_dialog.isVisible():
-            self._update_performance()
 
         now = datetime.now()
         market_open_time = time(9, 15)

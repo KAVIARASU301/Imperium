@@ -9,27 +9,28 @@ class PerformanceWidget(QGroupBox):
 
     def __init__(self):
         super().__init__()
-        self.setTitle("📊 Today's Performance")
-        self.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
+        self.setTitle("TODAY'S PERFORMANCE")
+        self.setFont(QFont("Inter", 9, QFont.Weight.Bold))
         self.setStyleSheet("""
             QGroupBox {
-                color: #fff;
-                border: 2px solid #333;
-                border-radius: 8px;
-                margin-top: 15px;
-                background-color: #1a1a1a;
-                padding-top: 15px;
+                color: #7A8799;
+                border: 1px solid #1C2333;
+                border-radius: 2px;
+                margin-top: 10px;
+                background-color: #0C0F17;
+                padding-top: 10px;
+                font-size: 10px;
+                font-weight: 700;
+                letter-spacing: 0.08em;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
                 subcontrol-position: top left;
-                padding: 0 10px;
-                background-color: #1a1a1a;
+                padding: 0 6px;
+                background-color: #0C0F17;
             }
         """)
-        # Increased height to accommodate the content properly
         self.setFixedHeight(180)
-
         self._setup_ui()
 
     def _setup_ui(self):
@@ -72,19 +73,18 @@ class PerformanceWidget(QGroupBox):
             container_layout.setContentsMargins(5, 8, 5, 8)
             container_layout.setSpacing(3)
 
-            # Value label - reduced font size slightly to fit better
+            # Value label
             value_label = QLabel("0")
             value_label.setAlignment(Qt.AlignCenter)
-            value_label.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
+            value_label.setFont(QFont("Cascadia Code", 11, QFont.Weight.Bold))
             value_label.setObjectName("value")
-            # Set minimum height to ensure a text is not clipped
             value_label.setMinimumHeight(20)
 
             # Title label
             title_label = QLabel(label_text)
             title_label.setAlignment(Qt.AlignCenter)
-            title_label.setFont(QFont("Segoe UI", 8))
-            title_label.setStyleSheet("color: #888;")
+            title_label.setFont(QFont("Inter", 8))
+            title_label.setStyleSheet("color: #7A8799;")
             title_label.setMinimumHeight(15)
 
             container_layout.addWidget(value_label)
@@ -92,12 +92,12 @@ class PerformanceWidget(QGroupBox):
 
             container.setStyleSheet("""
                 QWidget {
-                    background-color: #2a2a2a;
-                    border: 1px solid #333;
-                    border-radius: 6px;
+                    background-color: #111520;
+                    border: 1px solid #1C2333;
+                    border-radius: 2px;
                 }
                 QLabel#value {
-                    color: #fff;
+                    color: #C8D0DC;
                     padding: 2px;
                 }
             """)
@@ -115,29 +115,32 @@ class PerformanceWidget(QGroupBox):
         """Update displayed metrics"""
         self.metrics.update(metrics)
 
+        MONO = "font-family:'Cascadia Code','Consolas',monospace;padding:2px;"
+        PROFIT = "#1DB87E"
+        LOSS   = "#E0424A"
+        HI     = "#C8D0DC"
+
         for key, value in self.metrics.items():
             if key not in self.labels:
                 continue
-
             label = self.labels[key]
-
             if key == 'total_pnl':
-                color = "#4CAF50" if value >= 0 else "#F44336"
+                color = PROFIT if value >= 0 else LOSS
                 label.setText(f"₹{value:+,.0f}")
-                label.setStyleSheet(f"color: {color}; font-weight: bold; padding: 2px;")
+                label.setStyleSheet(f"color:{color};font-weight:700;{MONO}")
             elif key == 'win_rate':
-                color = "#4CAF50" if value >= 50 else "#F44336"
+                color = PROFIT if value >= 50 else LOSS
                 label.setText(f"{value:.1f}%")
-                label.setStyleSheet(f"color: {color}; font-weight: bold; padding: 2px;")
+                label.setStyleSheet(f"color:{color};font-weight:700;{MONO}")
             elif key in ['avg_profit', 'avg_loss', 'max_profit']:
                 label.setText(f"₹{value:,.0f}")
-                label.setStyleSheet("color: #fff; font-weight: bold; padding: 2px;")
+                label.setStyleSheet(f"color:{HI};font-weight:700;{MONO}")
             elif key == 'winning_trades':
                 label.setText(str(int(value)))
-                label.setStyleSheet("color: #4CAF50; font-weight: bold; padding: 2px;")
+                label.setStyleSheet(f"color:{PROFIT};font-weight:700;{MONO}")
             elif key == 'losing_trades':
                 label.setText(str(int(value)))
-                label.setStyleSheet("color: #F44336; font-weight: bold; padding: 2px;")
+                label.setStyleSheet(f"color:{LOSS};font-weight:700;{MONO}")
             else:
                 label.setText(str(int(value)))
-                label.setStyleSheet("color: #fff; font-weight: bold; padding: 2px;")
+                label.setStyleSheet(f"color:{HI};font-weight:700;{MONO}")

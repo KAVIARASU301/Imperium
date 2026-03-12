@@ -2,6 +2,7 @@
 
 import logging
 from typing import Set, Optional
+import threading
 from PySide6.QtCore import QObject, Signal, QTimer, Qt
 from kiteconnect import KiteTicker
 from datetime import datetime, timedelta, time
@@ -25,7 +26,7 @@ class MarketDataWorker(QObject):
     # Internal signals: KiteTicker callbacks arrive from a non-Qt thread.
     # We fan-in through queued Qt signals so QTimer operations happen on this
     # QObject's thread only.
-    _ticks_received = Signal(list)
+    _drain_ticks = Signal()
     _ws_connected = Signal(object)
     _ws_closed = Signal(int, str)
     _ws_error = Signal(int, str)
@@ -52,9 +53,12 @@ class MarketDataWorker(QObject):
         self._kite_ticker_logger = logging.getLogger("kiteconnect.ticker")
         self._kite_ticker_log_level_before_stop: Optional[int] = None
         self._qt_signals_active = True
+        self._pending_ticks: list[dict] = []
+        self._pending_ticks_lock = threading.Lock()
+        self._drain_scheduled = False
 
         # Ensure websocket callback handling runs on the worker's thread.
-        self._ticks_received.connect(self._handle_ticks, Qt.QueuedConnection)
+        self._drain_ticks.connect(self._handle_pending_ticks, Qt.QueuedConnection)
         self._ws_connected.connect(self._handle_connect, Qt.QueuedConnection)
         self._ws_closed.connect(self._handle_close, Qt.QueuedConnection)
         self._ws_error.connect(self._handle_error, Qt.QueuedConnection)
@@ -235,8 +239,33 @@ class MarketDataWorker(QObject):
                     self._heartbeat_stale_reported = True
 
     def _on_ticks(self, _, ticks):
-        """Callback for receiving ticks."""
-        self._safe_emit(self._ticks_received, ticks, signal_name="_ticks_received")
+        """Callback for receiving ticks.
+
+        KiteTicker can dispatch bursts at high frequency. Queue ticks and drain
+        on the Qt thread to reduce cross-thread signal pressure.
+        """
+        if not ticks:
+            return
+
+        should_schedule_drain = False
+        with self._pending_ticks_lock:
+            self._pending_ticks.extend(ticks)
+            if not self._drain_scheduled:
+                self._drain_scheduled = True
+                should_schedule_drain = True
+
+        if should_schedule_drain:
+            self._safe_emit(self._drain_ticks, signal_name="_drain_ticks")
+
+    def _handle_pending_ticks(self):
+        """Drain queued ticks on Qt thread in one batch."""
+        with self._pending_ticks_lock:
+            ticks = self._pending_ticks
+            self._pending_ticks = []
+            self._drain_scheduled = False
+
+        if ticks:
+            self._handle_ticks(ticks)
 
     def _on_connect(self, _, response):
         self._safe_emit(self._ws_connected, response, signal_name="_ws_connected")
@@ -458,6 +487,9 @@ class MarketDataWorker(QObject):
         self._qt_signals_active = False
         self.reconnect_timer.stop()
         self.heartbeat_timer.stop()
+        with self._pending_ticks_lock:
+            self._pending_ticks.clear()
+            self._drain_scheduled = False
 
         if self.kws:
             try:

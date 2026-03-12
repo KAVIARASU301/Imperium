@@ -115,82 +115,70 @@ class AccountSummaryWidget(QWidget):
                        used_margin=0.0, available_margin=0.0,
                        win_rate=0.0, trade_count=0):
         """Public method to update all widget labels with new data."""
-        profit_color = "#1DE9B6"
-        loss_color = "#FF4081"
-        neutral_color = "#B0BEC5"
-        margin_color = "#00B0FF"
+        MONO = "font-family:'Cascadia Code','Consolas',monospace;"
+        profit_color  = "#1DB87E"
+        loss_color    = "#E0424A"
+        neutral_color = "#7A8799"
+        hi_color      = "#C8D0DC"
 
-        # P&L Breakdown
         self.labels['unrealized_pnl'].setText(format_indian_currency(unrealized_pnl))
-        self.labels['unrealized_pnl'].setStyleSheet(f"color: {profit_color if unrealized_pnl >= 0 else loss_color};")
-
+        self.labels['unrealized_pnl'].setStyleSheet(
+            f"color:{profit_color if unrealized_pnl >= 0 else loss_color};{MONO}")
         self.labels['realized_pnl'].setText(format_indian_currency(realized_pnl))
-        self.labels['realized_pnl'].setStyleSheet(f"color: {profit_color if realized_pnl >= 0 else loss_color};")
-
-        # Margin Details
+        self.labels['realized_pnl'].setStyleSheet(
+            f"color:{profit_color if realized_pnl >= 0 else loss_color};{MONO}")
         self.labels['used_margin'].setText(format_indian_currency(used_margin))
-        self.labels['used_margin'].setStyleSheet(f"color: {margin_color};")
-
+        self.labels['used_margin'].setStyleSheet(f"color:{hi_color};{MONO}")
         self.labels['available_margin'].setText(format_indian_currency(available_margin))
-        self.labels['available_margin'].setStyleSheet(f"color: {margin_color};")
-
-        # Performance Metrics
-        win_rate_color = profit_color if win_rate >= 60 else "#FFB74D" if win_rate >= 40 else loss_color if trade_count > 0 else neutral_color
+        self.labels['available_margin'].setStyleSheet(f"color:{hi_color};{MONO}")
+        win_rate_color = (
+            profit_color if win_rate >= 60
+            else "#C89B3C" if win_rate >= 40
+            else loss_color if trade_count > 0
+            else neutral_color
+        )
         self.labels['win_rate'].setText(f"{win_rate:.0f}%")
-        self.labels['win_rate'].setStyleSheet(f"color: {win_rate_color};")
-
+        self.labels['win_rate'].setStyleSheet(f"color:{win_rate_color};{MONO}")
         self.labels['trade_count'].setText(str(trade_count))
-        self.labels['trade_count'].setStyleSheet(f"color: {neutral_color};")
+        self.labels['trade_count'].setStyleSheet(f"color:{neutral_color};{MONO}")
 
     def _apply_styles(self):
-        """Applies a high-contrast dark theme for a modern table presentation."""
         self.setStyleSheet("""
             #accountSummary {
-                background: qlineargradient(
-                    x1: 0, y1: 0, x2: 1, y2: 1,
-                    stop: 0 rgba(2, 13, 20, 0.93),
-                    stop: 1 rgba(6, 26, 35, 0.93)
-                );
-                border: 1px solid rgba(23, 156, 168, 0.65);
-                border-radius: 12px;
+                background-color: #0C0F17;
+                border: 1px solid #1C2333;
+                border-radius: 2px;
             }
-
             #tableTitle {
-                color: #EAF6FF;
-                font-size: 13px;
-                font-weight: 800;
-                letter-spacing: 1.2px;
-                padding: 1px 0 2px 0;
-            }
-
-            #tableFrame {
-                background: rgba(4, 25, 38, 0.75);
-                border: 1px solid rgba(13, 115, 119, 0.55);
-                border-radius: 6px;
-            }
-
-            QLabel[class~="metricRow"] {
-                padding: 6px 10px;
+                color: #7A8799;
+                font-size: 10px;
+                font-weight: 700;
+                letter-spacing: 0.09em;
+                padding: 2px 0 3px 0;
                 background: transparent;
             }
-
+            #tableFrame {
+                background-color: #0C0F17;
+                border: none;
+                border-radius: 0px;
+            }
+            QLabel[class~="metricRow"] {
+                padding: 5px 8px;
+                background: transparent;
+            }
             QLabel[class~="metricRowBorder"] {
-                border-top: 1px solid rgba(91, 141, 153, 0.28);
+                border-top: 1px solid #1C2333;
             }
-
             #metricTitleLabel {
-                color: #D1E9F5;
+                color: #7A8799;
                 font-size: 11px;
-                font-weight: 700;
-                letter-spacing: 0.5px;
-                text-transform: uppercase;
+                font-weight: 500;
             }
-
             #metricValueLabel {
-                color: #FFFFFF;
-                font-size: 15px;
-                font-weight: 700;
-                font-family: 'Segoe UI', 'Roboto Mono', monospace;
+                color: #C8D0DC;
+                font-size: 13px;
+                font-weight: 600;
+                font-family: "Cascadia Code", "Consolas", monospace;
             }
         """)
 

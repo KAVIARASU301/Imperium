@@ -272,172 +272,139 @@ class HeaderToolbar(QFrame):
             self.account_label.setText(f"Account: {account_id}")
 
     def _apply_styles(self):
-        """Enhanced dark theme with subtle improvements."""
         self.setStyleSheet("""
             HeaderToolbar {
-                background: qlineargradient(
-                    x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #1F2533,
-                    stop:0.5 #1A1F2E,
-                    stop:1 #141925
-                );
-                background-image: url("assets/textures/header_toolbar_texture.png");
-                border-top: 1px solid rgba(41, 199, 201, 0.08);
-                border-bottom: 1px solid #0B0E14;
-                font-family: "Segoe UI", sans-serif;
+                background-color: #0C0F17;
+                border-bottom: 1px solid #1C2333;
+                font-family: "Inter", "Segoe UI", sans-serif;
             }
-
             #separator {
+                background-color: #1C2333;
                 width: 1px;
-                background: qlineargradient(
-                    x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(58, 68, 88, 0),
-                    stop:0.5 rgba(58, 68, 88, 0.5),
-                    stop:1 rgba(58, 68, 88, 0)
-                );
                 border: none;
-                margin: 8px 0px;
+                margin: 8px 2px;
             }
-
             #quickAccessButton {
-                color: #8A9BA8;
-                background: qlineargradient(
-                    x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(255, 255, 255, 0.02),
-                    stop:1 rgba(255, 255, 255, 0)
-                );
-                border: 1px solid rgba(58, 68, 88, 0.3);
-                font-weight: 600;
+                color: #7A8799;
+                background-color: transparent;
+                border: none;
+                border-bottom: 2px solid transparent;
+                font-weight: 700;
                 font-size: 11px;
-                padding: 4px 8px;
-                border-radius: 6px;
+                letter-spacing: 0.04em;
+                padding: 3px 8px;
+                border-radius: 0px;
             }
-
             #quickAccessButton:hover {
-                background: qlineargradient(
-                    x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(41, 199, 201, 0.12),
-                    stop:1 rgba(41, 199, 201, 0.05)
-                );
-                border-color: rgba(41, 199, 201, 0.4);
-                color: #E0E0E0;
+                background-color: #111520;
+                color: #C8D0DC;
+                border-bottom: 2px solid #253047;
             }
-
             #quickAccessButton:checked {
-                background: qlineargradient(
-                    x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(41, 199, 201, 0.2),
-                    stop:1 rgba(41, 199, 201, 0.12)
-                );
-                border: 1px solid rgba(41, 199, 201, 0.5);
-                color: #FFFFFF;
+                background-color: #071214;
+                color: #00C4C6;
+                border-bottom: 2px solid #00C4C6;
             }
-
             #controlLabel {
-                color: #A9B1C3;
+                color: #7A8799;
                 font-size: 10px;
-                font-weight: bold;
+                font-weight: 700;
+                letter-spacing: 0.08em;
+                background: transparent;
             }
-
-            QComboBox, QSpinBox {
-                background: qlineargradient(
-                    x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #232734,
-                    stop:1 #1E2230
-                );
-                color: #E0E0E0;
-                border: 1px solid #3A4458;
-                border-radius: 5px;
+            QComboBox {
+                background-color: #0A0D14;
+                color: #C8D0DC;
+                border: 1px solid #1C2333;
+                border-radius: 2px;
                 padding: 3px 6px;
                 font-size: 12px;
                 font-weight: 500;
             }
-
-            QComboBox:hover, QSpinBox:hover {
-                border-color: rgba(41, 199, 201, 0.5);
+            QComboBox:hover { border-color: #253047; }
+            QComboBox:focus { border-color: #00C4C6; }
+            QComboBox::drop-down { border: none; width: 16px; background: transparent; }
+            QComboBox::down-arrow {
+                border-left: 4px solid transparent;
+                border-right: 4px solid transparent;
+                border-top: 5px solid #7A8799;
+                margin-right: 5px;
             }
-
-            QComboBox:focus, QSpinBox:focus {
-                border-color: #29C7C9;
+            QComboBox QAbstractItemView {
+                background-color: #0C0F17;
+                color: #C8D0DC;
+                border: 1px solid #253047;
+                selection-background-color: #161C28;
+                selection-color: #00C4C6;
+                outline: none;
             }
-
-            QComboBox::drop-down {
-                border: none;
-            }
-
-            #statusLabel {
-                color: #A9B1C3;
-                font-size: 10px;
+            QSpinBox {
+                background-color: #0A0D14;
+                color: #C8D0DC;
+                border: 1px solid #1C2333;
+                border-radius: 2px;
+                padding: 3px 6px;
+                font-size: 12px;
                 font-weight: 600;
             }
-
+            QSpinBox:hover { border-color: #253047; }
+            QSpinBox:focus { border-color: #00C4C6; }
+            #statusLabel {
+                color: #7A8799;
+                font-size: 11px;
+                font-weight: 500;
+                background: transparent;
+            }
             #iconButton {
-                font-size: 15px;
-                color: #A9B1C3;
+                font-size: 14px;
+                color: #7A8799;
                 background: transparent;
                 border: none;
-                padding: 2px;
+                padding: 2px 4px;
+                border-radius: 2px;
             }
-
-            #iconButton:hover {
-                color: #29C7C9;
-            }
-
+            #iconButton:hover { color: #00C4C6; background-color: #111520; }
             #journalButton {
-                background: qlineargradient(
-                    x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(41, 199, 201, 0.12),
-                    stop:1 rgba(41, 199, 201, 0.05)
-                );
-                color: #E0F6F6;
-                border: 1px solid rgba(41, 199, 201, 0.4);
-                border-radius: 6px;
-                padding: 4px 10px;
+                background-color: transparent;
+                color: #7A8799;
+                border: 1px solid #1C2333;
+                border-radius: 2px;
+                padding: 3px 10px;
                 font-size: 10px;
                 font-weight: 700;
+                letter-spacing: 0.06em;
             }
-
             #journalButton:hover {
-                border-color: rgba(41, 199, 201, 0.7);
-                color: #FFFFFF;
+                border-color: #00C4C6;
+                color: #00C4C6;
+                background-color: #071214;
             }
-
             #dangerButton {
-                background: qlineargradient(
-                    x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(255, 255, 255, 0.04),
-                    stop:1 rgba(255, 255, 255, 0.01)
-                );
-                color: #A9B1C3;
-                font-weight: 600;
-                border: 1px solid rgba(169, 177, 195, 0.35);
-                border-radius: 6px;
-                padding: 4px 10px;
+                background-color: transparent;
+                color: #7A8799;
+                font-weight: 700;
+                border: 1px solid #1C2333;
+                border-radius: 2px;
+                padding: 3px 10px;
                 font-size: 10px;
+                letter-spacing: 0.06em;
             }
-
             #dangerButton:hover {
-                background: #F85149;
-                border-color: #F85149;
-                color: #FFFFFF;
+                background-color: #1A0709;
+                border-color: #E0424A;
+                color: #E0424A;
             }
-
+            #dangerButton:pressed { background-color: #2A1215; }
             #symbolPickerButton {
-                background: qlineargradient(
-                    x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #232734,
-                    stop:1 #1E2230
-                );
-                color: #E0E0E0;
-                border: 1px solid #3A4458;
-                border-radius: 5px;
-                padding: 3px 6px;
+                background-color: #0A0D14;
+                color: #C8D0DC;
+                border: 1px solid #1C2333;
+                border-radius: 2px;
+                padding: 3px 8px;
                 font-size: 12px;
                 font-weight: 500;
                 text-align: left;
             }
-
-            #symbolPickerButton:hover {
-                border-color: rgba(41, 199, 201, 0.5);
-            }
+            #symbolPickerButton:hover { border-color: #253047; }
+            #symbolPickerButton:focus { border-color: #00C4C6; }
         """)
