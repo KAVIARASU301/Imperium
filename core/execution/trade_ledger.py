@@ -85,8 +85,6 @@ class TradeLedger:
 
                 exit_reason         TEXT,
                 strategy_tag        TEXT,
-                trade_status        TEXT DEFAULT 'MANUAL',
-                strategy_name       TEXT DEFAULT 'N/A',
 
                 trading_mode        TEXT,
                 session_date        DATE,
@@ -100,16 +98,7 @@ class TradeLedger:
             ON trades(session_date);
         """)
 
-        self._ensure_column(cursor, "trades", "trade_status", "TEXT DEFAULT 'MANUAL'")
-        self._ensure_column(cursor, "trades", "strategy_name", "TEXT DEFAULT 'N/A'")
-
         self._conn.commit()
-
-    def _ensure_column(self, cursor, table: str, column: str, definition: str) -> None:
-        rows = cursor.execute(f"PRAGMA table_info({table})").fetchall()
-        existing_columns = {row[1] for row in rows}
-        if column not in existing_columns:
-            cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
     # ------------------------------------------------------------------
     # Write API
@@ -158,12 +147,10 @@ class TradeLedger:
                     net_pnl,
                     exit_reason,
                     strategy_tag,
-                    trade_status,
-                    strategy_name,
                     trading_mode,
                     session_date
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 trade["trade_id"],
                 trade.get("order_id_entry"),
@@ -185,8 +172,6 @@ class TradeLedger:
                 trade.get("net_pnl"),
                 trade.get("exit_reason"),
                 trade.get("strategy_tag"),
-                str(trade.get("trade_status") or "MANUAL").upper(),
-                trade.get("strategy_name") or trade.get("strategy_tag") or "N/A",
                 self.mode.upper(),  # Force consistency with ledger mode
                 session_date  # Already converted to ISO string
             ))

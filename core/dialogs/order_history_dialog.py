@@ -26,7 +26,7 @@ class OrderHistoryTable(QTableWidget):
     def __init__(self):
         super().__init__()
 
-        self.setColumnCount(10)
+        self.setColumnCount(8)
         self.setHorizontalHeaderLabels([
             "",                 # Arrow
             "Entry Time",
@@ -35,9 +35,7 @@ class OrderHistoryTable(QTableWidget):
             "Qty",
             "Entry",
             "Exit",
-            "PnL",
-            "Status",
-            "Strategy"
+            "PnL"
         ])
 
         self._setup_table()
@@ -52,7 +50,6 @@ class OrderHistoryTable(QTableWidget):
         header = self.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeToContents)
         header.setSectionResizeMode(3, QHeaderView.Stretch)   # Symbol
-        header.setSectionResizeMode(9, QHeaderView.Stretch)   # Strategy
 
         self.setColumnWidth(0, 36)
         self.setColumnWidth(6, 110)
@@ -182,13 +179,6 @@ class OrderHistoryTable(QTableWidget):
             )
             pnl_item.setTextAlignment(Qt.AlignCenter)
             self.setItem(row, 7, pnl_item)
-
-            status_text = str(trade.get("trade_status") or "MANUAL").upper()
-            status_item = QTableWidgetItem(status_text)
-            status_item.setForeground(QColor("#29C7C9") if status_text == "ALGO" else QColor("#F39C12"))
-            self.setItem(row, 8, status_item)
-
-            self.setItem(row, 9, QTableWidgetItem(str(trade.get("strategy_name") or "N/A")))
 
             for col in range(self.columnCount()):
                 item = self.item(row, col)
