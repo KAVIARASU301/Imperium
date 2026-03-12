@@ -468,6 +468,7 @@ const state = {
   useOHLC:      true,
   twoDays:      false,         // default: 1D
   cvdRebased:   true,
+  hasRealData:  false,
   showEma10:    false,
   showEma21:    false,
   showEma51:    false,
@@ -715,6 +716,7 @@ function loadData() {
   if (realPayload) {
     const built = buildBarsFromRealPayload(realPayload);
     if (built.bars.length) {
+      state.hasRealData = true;
       state.bars = built.bars;
       state.splitIdx = built.splitIdx || 0;
       state.dateLabels = built.labels || [];
@@ -732,6 +734,8 @@ function loadData() {
       return;
     }
   }
+
+  state.hasRealData = false;
 
   const off  = state.dayOffset;
   const seed1 = 42 + off * 7;
@@ -1521,7 +1525,9 @@ setTimeout(() => { scrollToEnd(); render(); }, 80);
 
 // Simulated live refresh every 3s
 setInterval(() => {
-  if (state.dayOffset === 0 && state.bars.length > 0) {
+  // Keep simulation only for mock fallback data.
+  // Real chart payload is already sourced from backend candles/ticks.
+  if (!state.hasRealData && state.dayOffset === 0 && state.bars.length > 0) {
     const last = state.bars[state.bars.length - 1];
     const rng  = seededRand(Date.now() % 99991);
     const tick = last.c * (1 + (rng() - 0.495) * 0.003);
