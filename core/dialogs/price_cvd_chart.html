@@ -1,0 +1,1201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Price &amp; CVD Chart</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:          #0B0F1A;
+    --chart-bg:    #0D1117;
+    --toolbar-bg:  #111722;
+    --border:      #1E2D40;
+    --border-hi:   #2A3F58;
+    --text-1:      #D8E0F0;
+    --text-2:      #8A99B3;
+    --text-dim:    #3A4A60;
+    --price:       #FFE57F;
+    --cvd:         #26C6DA;
+    --bull:        #26A69A;
+    --bear:        #EF5350;
+    --ema10:       #00D9FF;
+    --ema21:       #FFD700;
+    --ema51:       #FF6B6B;
+    --vwap:        #00E676;
+    --accent:      #4D9FFF;
+  }
+
+  html, body {
+    width: 100%; height: 100%;
+    background: var(--bg);
+    color: var(--text-1);
+    font-family: 'IBM Plex Sans', sans-serif;
+    font-size: 12px;
+    overflow: hidden;
+    user-select: none;
+  }
+
+  #app {
+    display: flex;
+    flex-direction: column;
+    width: 100%; height: 100%;
+    min-height: 580px;
+  }
+
+  /* ── Toolbar ── */
+  #toolbar {
+    flex-shrink: 0;
+    height: 34px;
+    background: var(--toolbar-bg);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    padding: 0 10px;
+    gap: 6px;
+    position: relative;
+    z-index: 20;
+  }
+
+  .tb-sep { color: var(--border-hi); font-size: 14px; padding: 0 2px; }
+  .tb-label { color: var(--text-dim); font-size: 10px; font-weight: 700; letter-spacing: 1px; font-family: 'JetBrains Mono', monospace; }
+
+  .tb-btn {
+    background: #151D2B;
+    color: var(--text-2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0 9px;
+    height: 22px;
+    font-size: 11px;
+    font-weight: 700;
+    cursor: pointer;
+    font-family: 'JetBrains Mono', monospace;
+    transition: border-color .15s, background .15s, color .15s;
+    white-space: nowrap;
+  }
+  .tb-btn:hover { border-color: var(--accent); background: #1C2638; color: var(--text-1); }
+  .tb-btn.active { background: var(--bull); color: #000; border-color: var(--bull); }
+  .tb-btn.active-blue { background: #2A3B5C; color: #fff; border-color: #2A3B5C; }
+  .tb-btn.active-dim  { background: #1C2638; color: var(--text-1); border-color: var(--border-hi); }
+
+  #lbl-dates {
+    font-size: 11px; font-weight: 600; color: #C0CCE0;
+    min-width: 240px; text-align: center;
+    font-family: 'JetBrains Mono', monospace;
+    flex-shrink: 0;
+  }
+
+  #tf-select {
+    background: #151D2B;
+    color: var(--text-2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    height: 22px;
+    padding: 0 6px;
+    font-size: 11px;
+    font-weight: 700;
+    font-family: 'JetBrains Mono', monospace;
+    cursor: pointer;
+    outline: none;
+  }
+  #tf-select:hover { border-color: var(--accent); }
+  #tf-select option { background: #151D2B; }
+
+  #status-dot { font-size: 13px; line-height: 1; }
+
+  .spacer { flex: 1; }
+
+  /* ── Setup Panel ── */
+  #setup-panel {
+    position: absolute;
+    top: 38px; right: 4px;
+    background: #111722;
+    border: 1px solid var(--border-hi);
+    border-radius: 6px;
+    padding: 10px 12px;
+    z-index: 100;
+    display: none;
+    min-width: 210px;
+    box-shadow: 0 8px 32px rgba(0,0,0,.6);
+  }
+  #setup-panel.open { display: block; }
+
+  .sp-section {
+    color: var(--text-dim);
+    font-size: 9px; font-weight: 700; letter-spacing: 1.2px;
+    font-family: 'JetBrains Mono', monospace;
+    margin-bottom: 5px; margin-top: 4px;
+  }
+  .sp-hsep { height: 1px; background: var(--border); margin: 7px 0; }
+  .sp-row { display: flex; align-items: center; gap: 5px; margin-bottom: 4px; flex-wrap: wrap; }
+
+  .sp-btn {
+    background: #151D2B; color: var(--text-1);
+    border: 1px solid var(--border); border-radius: 4px;
+    padding: 0 10px; height: 22px;
+    font-size: 11px; font-weight: 700; cursor: pointer;
+    font-family: 'JetBrains Mono', monospace;
+    transition: all .15s;
+  }
+  .sp-btn:hover { border-color: var(--accent); background: #1C2638; }
+  .sp-btn.active { background: var(--bull); color: #000; border-color: var(--bull); }
+  .sp-btn.active-blue { background: #2A3B5C; color: #fff; border-color: #2A3B5C; }
+
+  .sp-cb-label {
+    display: flex; align-items: center; gap: 5px;
+    cursor: pointer; font-size: 11px; font-weight: 700;
+    font-family: 'JetBrains Mono', monospace;
+    height: 22px;
+  }
+  .sp-cb {
+    width: 13px; height: 13px; border-radius: 2px;
+    border: 1px solid currentColor;
+    background: var(--chart-bg);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 9px; flex-shrink: 0;
+    transition: background .12s;
+  }
+  .sp-cb.checked { background: currentColor; color: #000; }
+  .sp-cb.checked::after { content: '✓'; color: #000; font-weight: 900; font-size: 8px; }
+
+  /* ── Sliders for candle width/spacing ── */
+  .sp-slider-row {
+    display: flex; align-items: center; gap: 6px; margin-bottom: 6px;
+  }
+  .sp-slider-lbl {
+    color: var(--text-2); font-size: 10px; font-weight: 600;
+    font-family: 'JetBrains Mono', monospace;
+    min-width: 68px;
+  }
+  .sp-slider {
+    -webkit-appearance: none; appearance: none;
+    height: 4px; border-radius: 2px;
+    background: var(--border-hi);
+    flex: 1; cursor: pointer; outline: none;
+  }
+  .sp-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 12px; height: 12px; border-radius: 50%;
+    background: var(--accent); cursor: pointer;
+    border: 2px solid var(--bg);
+  }
+  .sp-slider-val {
+    color: var(--price); font-size: 10px; font-weight: 700;
+    font-family: 'JetBrains Mono', monospace;
+    min-width: 26px; text-align: right;
+  }
+
+  /* ── Chart area ── */
+  #chart-area {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    position: relative;
+  }
+
+  .panel-wrap {
+    position: relative;
+    overflow: hidden;
+  }
+  #price-wrap { flex: 0 0 65%; }
+  #cvd-wrap   { flex: 0 0 35%; border-top: 1px solid var(--border); }
+
+  canvas {
+    display: block;
+    width: 100%; height: 100%;
+  }
+
+  /* right-axis overlay */
+  .r-axis {
+    position: absolute;
+    top: 0; right: 0;
+    width: 72px; height: 100%;
+    pointer-events: none;
+  }
+
+  /* Last-price badge */
+  .price-badge {
+    position: absolute;
+    right: 0;
+    background: var(--price);
+    color: #000;
+    font-size: 10px; font-weight: 700;
+    font-family: 'JetBrains Mono', monospace;
+    padding: 1px 5px;
+    border-radius: 2px 0 0 2px;
+    pointer-events: none;
+    white-space: nowrap;
+    transform: translateY(-50%);
+    display: none;
+  }
+  #cvd-badge { background: var(--cvd); }
+
+  /* Divider drag handle */
+  #divider {
+    flex-shrink: 0;
+    height: 4px;
+    background: var(--border);
+    cursor: row-resize;
+    position: relative;
+    z-index: 5;
+  }
+  #divider:hover { background: var(--border-hi); }
+
+  /* Tooltip */
+  #tooltip {
+    position: fixed;
+    background: rgba(11,15,26,.92);
+    border: 1px solid var(--border-hi);
+    border-radius: 5px;
+    padding: 7px 10px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: var(--text-1);
+    pointer-events: none;
+    display: none;
+    z-index: 200;
+    line-height: 1.6;
+    min-width: 130px;
+  }
+
+  .tt-row { display: flex; justify-content: space-between; gap: 12px; }
+  .tt-key { color: var(--text-dim); }
+  .tt-val { font-weight: 700; }
+  .tt-bull { color: var(--bull); }
+  .tt-bear { color: var(--bear); }
+  .tt-cvd  { color: var(--cvd); }
+  .tt-date { color: var(--text-2); font-size: 9px; margin-bottom: 4px; }
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- Toolbar -->
+  <div id="toolbar">
+    <div class="spacer"></div>
+    <button class="tb-btn" id="btn-back" title="Previous day">◀</button>
+    <div id="lbl-dates">Loading…</div>
+    <button class="tb-btn" id="btn-fwd" title="Next day">▶</button>
+    <div class="spacer"></div>
+    <span class="tb-sep">|</span>
+    <span class="tb-label">TF</span>
+    <select id="tf-select">
+      <option value="1">1m</option>
+      <option value="3" selected>3m</option>
+      <option value="5">5m</option>
+      <option value="15">15m</option>
+      <option value="30">30m</option>
+    </select>
+    <button class="tb-btn active-dim" id="btn-setup">⚙ Setup</button>
+    <span id="status-dot" style="color:#EF5350">●</span>
+  </div>
+
+  <!-- Floating Setup Panel -->
+  <div id="setup-panel">
+    <div class="sp-section">CHART TYPE</div>
+    <div class="sp-row">
+      <button class="sp-btn" id="sp-line" >Line</button>
+      <button class="sp-btn active" id="sp-candles">Candles</button>
+    </div>
+
+    <div class="sp-hsep"></div>
+    <div class="sp-section">MODE</div>
+    <div class="sp-row">
+      <button class="sp-btn" id="sp-1d">1D</button>
+      <button class="sp-btn active" id="sp-2d">2D</button>
+    </div>
+    <div class="sp-row">
+      <button class="sp-btn active-blue" id="sp-rebase" style="font-size:10px">↺ Rebased CVD</button>
+    </div>
+
+    <div class="sp-hsep"></div>
+    <div class="sp-section">CANDLE SIZE</div>
+    <div class="sp-slider-row">
+      <span class="sp-slider-lbl">Width</span>
+      <input type="range" class="sp-slider" id="sl-width" min="2" max="20" value="7" step="1">
+      <span class="sp-slider-val" id="sl-width-val">7</span>
+    </div>
+    <div class="sp-slider-row">
+      <span class="sp-slider-lbl">Spacing</span>
+      <input type="range" class="sp-slider" id="sl-gap" min="1" max="12" value="2" step="1">
+      <span class="sp-slider-val" id="sl-gap-val">2</span>
+    </div>
+
+    <div class="sp-hsep"></div>
+    <div class="sp-section">INDICATORS</div>
+    <div class="sp-row">
+      <span class="sp-slider-lbl" style="color:var(--text-2)">EMA</span>
+      <label class="sp-cb-label" id="cb-ema10-lbl" style="color:var(--ema10)">
+        <span class="sp-cb" id="cb-ema10-box"></span>10
+      </label>
+      <label class="sp-cb-label" id="cb-ema21-lbl" style="color:var(--ema21)">
+        <span class="sp-cb" id="cb-ema21-box"></span>21
+      </label>
+      <label class="sp-cb-label" id="cb-ema51-lbl" style="color:var(--ema51)">
+        <span class="sp-cb" id="cb-ema51-box"></span>51
+      </label>
+    </div>
+    <div class="sp-row" style="padding-left:26px">
+      <label class="sp-cb-label" id="cb-vwap-lbl" style="color:var(--vwap)">
+        <span class="sp-cb" id="cb-vwap-box"></span>VWAP
+      </label>
+    </div>
+  </div>
+
+  <!-- Chart Area -->
+  <div id="chart-area">
+    <div class="panel-wrap" id="price-wrap">
+      <canvas id="price-canvas"></canvas>
+      <canvas class="r-axis" id="price-axis-canvas"></canvas>
+      <div class="price-badge" id="price-badge"></div>
+    </div>
+    <div id="divider"></div>
+    <div class="panel-wrap" id="cvd-wrap">
+      <canvas id="cvd-canvas"></canvas>
+      <canvas class="r-axis" id="cvd-axis-canvas"></canvas>
+      <div class="price-badge" id="cvd-badge"></div>
+    </div>
+  </div>
+</div>
+
+<div id="tooltip"></div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════════════════
+//  CONSTANTS & COLOUR PALETTE
+// ═══════════════════════════════════════════════════════════════════════════
+const C = {
+  bg:        '#0B0F1A', chartBg:  '#0D1117',
+  border:    '#1E2D40', borderHi: '#2A3F58',
+  text1:     '#D8E0F0', text2:    '#8A99B3', textDim: '#3A4A60',
+  price:     '#FFE57F', pricePrev:'#5A6070',
+  cvd:       '#26C6DA', cvdPrev:  '#3A5060',
+  bull:      '#26A69A', bear:     '#EF5350',
+  bullPrev:  '#1A4A46', bearPrev: '#5A2022',
+  cvdBull:   '#26C6DA', cvdBear:  '#FF6B6B',
+  ema10:     '#00D9FF', ema21:    '#FFD700', ema51: '#FF6B6B',
+  vwap:      '#00E676', daySep:   '#2A3F58',
+};
+
+const AXIS_W  = 72;   // right axis width px
+const MIN_BOTTOM_H = 100;
+const MIN_TOP_H    = 120;
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  STATE
+// ═══════════════════════════════════════════════════════════════════════════
+const state = {
+  useOHLC:      true,
+  twoDays:      true,
+  cvdRebased:   true,
+  showEma10:    false,
+  showEma21:    false,
+  showEma51:    false,
+  showVwap:     false,
+  tf:           3,          // minutes
+  candleW:      7,          // px
+  candleGap:    2,          // px
+  scrollOffsetX: 0,         // px scroll (positive = scroll left)
+  crosshairX:   -1,
+  crosshairY:   -1,
+  crosshairPanel: null,     // 'price'|'cvd'
+  bars:         [],         // {t, o, h, l, c, v, cvd, cvdO, cvdH, cvdL, prev}
+  splitIdx:     0,          // index where day 2 starts
+  dateLabels:   [],
+  dayOffset:    0,
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  CANVAS REFS
+// ═══════════════════════════════════════════════════════════════════════════
+const priceCvs  = document.getElementById('price-canvas');
+const priceAxCvs= document.getElementById('price-axis-canvas');
+const cvdCvs    = document.getElementById('cvd-canvas');
+const cvdAxCvs  = document.getElementById('cvd-axis-canvas');
+const pctx      = priceCvs.getContext('2d');
+const paxCtx    = priceAxCvs.getContext('2d');
+const cctx      = cvdCvs.getContext('2d');
+const caxCtx    = cvdAxCvs.getContext('2d');
+
+const pWrap     = document.getElementById('price-wrap');
+const cWrap     = document.getElementById('cvd-wrap');
+const divider   = document.getElementById('divider');
+const chartArea = document.getElementById('chart-area');
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  DATA GENERATION (mock OHLCV)
+// ═══════════════════════════════════════════════════════════════════════════
+function seededRand(seed) {
+  let s = seed;
+  return () => { s = (s * 16807 + 0) % 2147483647; return (s - 1) / 2147483646; };
+}
+
+function genDay(basePrice, seed, label) {
+  const rng = seededRand(seed);
+  const bars = [];
+  let price = basePrice;
+  let cvd   = 0;
+  const totalMins = 375; // 9:15 → 15:30
+
+  const startHour = 9, startMin = 15;
+  const tf = state.tf;
+  const nBars = Math.floor(totalMins / tf);
+
+  let vwapNum = 0, vwapDen = 0;
+
+  for (let i = 0; i < nBars; i++) {
+    const m    = startHour * 60 + startMin + i * tf;
+    const hh   = Math.floor(m / 60);
+    const mm   = m % 60;
+    const trend  = Math.sin(i / nBars * Math.PI) * 0.0012;
+    const vol    = rng() * 0.012 + 0.003;
+    const open   = price;
+    const close  = open * (1 + (rng() - 0.45) * vol + trend);
+    const high   = Math.max(open, close) * (1 + rng() * 0.004);
+    const low    = Math.min(open, close) * (1 - rng() * 0.004);
+    const volume = Math.floor(rng() * 50000 + 5000);
+    const delta  = (close > open ? 1 : -1) * volume * (0.4 + rng() * 0.6);
+    const cvdOpen  = cvd;
+    cvd += delta;
+    const cvdHigh  = Math.max(cvdOpen, cvd) * (1 + rng() * 0.002);
+    const cvdLow   = Math.min(cvdOpen, cvd) * (1 - rng() * 0.002);
+
+    vwapNum += ((high+low+close)/3) * volume;
+    vwapDen += volume;
+
+    bars.push({
+      t:    `${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}`,
+      date: label,
+      o: open, h: high, l: low, c: close, v: volume,
+      cvd, cvdO: cvdOpen, cvdH: cvdHigh, cvdL: cvdLow,
+      vwap: vwapDen ? vwapNum / vwapDen : close,
+    });
+    price = close;
+  }
+  return bars;
+}
+
+function buildDateLabel(offset) {
+  const d = new Date();
+  // Go back by offset trading days (roughly)
+  d.setDate(d.getDate() - offset * 1 - (offset > 0 ? 2 : 0));
+  return d.toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' });
+}
+
+function loadData() {
+  const off  = state.dayOffset;
+  const seed1 = 42 + off * 7;
+  const seed2 = 99 + off * 13;
+  const basePrice = 22400 + (off % 5) * 180;
+
+  const label1 = buildDateLabel(off + 1);
+  const label2 = buildDateLabel(off);
+
+  const day1 = genDay(basePrice, seed1, label1);
+  const day2 = genDay(day1[day1.length - 1].c, seed2, label2);
+
+  state.splitIdx  = day1.length;
+  state.dateLabels = [label1, label2];
+
+  if (state.twoDays) {
+    state.bars = [...day1, ...day2];
+  } else {
+    state.bars = day2;
+    state.splitIdx = 0;
+  }
+
+  document.getElementById('lbl-dates').textContent =
+    state.twoDays ? `${label1}  ·  ${label2}` : label2;
+
+  // update status
+  const dot = document.getElementById('status-dot');
+  dot.style.color = off === 0 ? C.vwap : C.ema10;
+
+  state.scrollOffsetX = 0;
+  render();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  INDICATOR MATH
+// ═══════════════════════════════════════════════════════════════════════════
+function calcEma(data, period) {
+  const k   = 2 / (period + 1);
+  const out = new Array(data.length).fill(NaN);
+  let prev  = NaN;
+  for (let i = 0; i < data.length; i++) {
+    if (isNaN(prev)) {
+      if (i >= period - 1) {
+        let sum = 0;
+        for (let j = i - period + 1; j <= i; j++) sum += data[j];
+        prev = sum / period;
+        out[i] = prev;
+      }
+    } else {
+      prev = data[i] * k + prev * (1 - k);
+      out[i] = prev;
+    }
+  }
+  return out;
+}
+
+function rebasedCvd(bars, splitIdx) {
+  if (!state.cvdRebased || !state.twoDays || splitIdx <= 0) return bars.map(b => b.cvd);
+  const offset1 = bars[0].cvd - bars[0].cvdO;  // shouldn't matter
+  const base1   = bars[0].cvdO;
+  const base2   = splitIdx < bars.length ? bars[splitIdx].cvdO : 0;
+  return bars.map((b, i) => {
+    const offset = i < splitIdx ? base1 : base2;
+    return b.cvd - offset;
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  LAYOUT HELPERS
+// ═══════════════════════════════════════════════════════════════════════════
+function dpr() { return window.devicePixelRatio || 1; }
+
+function resizeCanvas(cvs, w, h) {
+  const r = dpr();
+  if (cvs.width !== w * r || cvs.height !== h * r) {
+    cvs.width  = w * r;
+    cvs.height = h * r;
+    cvs.getContext('2d').scale(r, r);
+  }
+}
+
+function getRect(el) {
+  return el.getBoundingClientRect();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  VIEWPORT COMPUTATION
+// ═══════════════════════════════════════════════════════════════════════════
+function computeViewport() {
+  const bars   = state.bars;
+  const n      = bars.length;
+  const cw     = state.candleW;
+  const gap    = state.candleGap;
+  const step   = cw + gap;
+  const pW     = pWrap.clientWidth - AXIS_W;
+  const totalW = n * step;
+  const maxScroll = Math.max(0, totalW - pW);
+  state.scrollOffsetX = Math.max(0, Math.min(state.scrollOffsetX, maxScroll));
+
+  const firstBar = Math.floor(state.scrollOffsetX / step);
+  const lastBar  = Math.min(n - 1, firstBar + Math.ceil(pW / step) + 1);
+  return { firstBar, lastBar, step, pW };
+}
+
+function barToX(i, vp) {
+  const step = vp.step;
+  return i * step - state.scrollOffsetX + state.candleW / 2;
+}
+
+function xToBar(x, vp) {
+  return Math.round((x + state.scrollOffsetX - state.candleW / 2) / vp.step);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  RANGE HELPERS
+// ═══════════════════════════════════════════════════════════════════════════
+function yRange(values, pad = 0.04) {
+  const finite = values.filter(v => isFinite(v));
+  if (!finite.length) return [0, 1];
+  let mn = Math.min(...finite), mx = Math.max(...finite);
+  const span = mx - mn || Math.abs(mn) * 0.02 || 1;
+  return [mn - span * pad, mx + span * pad];
+}
+
+function dataToY(v, yMin, yMax, h) {
+  return h - (v - yMin) / (yMax - yMin) * h;
+}
+
+function fmtPrice(v) { return v.toFixed(0); }
+function fmtCvd(v) {
+  if (Math.abs(v) >= 1e6) return (v/1e6).toFixed(2) + 'M';
+  if (Math.abs(v) >= 1e3) return (v/1e3).toFixed(1) + 'K';
+  return v.toFixed(0);
+}
+function fmtNum(v, isCvd) { return isCvd ? fmtCvd(v) : fmtPrice(v); }
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  DRAWING PRIMITIVES
+// ═══════════════════════════════════════════════════════════════════════════
+function drawGrid(ctx, w, h, yMin, yMax, isCvd) {
+  ctx.save();
+  ctx.strokeStyle = 'rgba(30,45,64,0.5)';
+  ctx.lineWidth   = 1;
+
+  const nLines = 5;
+  for (let i = 0; i <= nLines; i++) {
+    const v = yMin + (yMax - yMin) * (i / nLines);
+    const y = dataToY(v, yMin, yMax, h);
+    ctx.beginPath();
+    ctx.moveTo(0, y); ctx.lineTo(w, y);
+    ctx.stroke();
+  }
+  // vertical grid (every ~60 bars)
+  ctx.strokeStyle = 'rgba(30,45,64,0.35)';
+  const vp  = computeViewport();
+  const step = vp.step;
+  const spacing = Math.max(1, Math.round(60 / step)) * step;
+  const startX = Math.floor(state.scrollOffsetX / spacing) * spacing;
+  for (let x = startX; x < startX + w + spacing; x += spacing) {
+    const px = x - state.scrollOffsetX;
+    if (px < 0 || px > w) continue;
+    ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, h); ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawCandlestick(ctx, x, o, h, l, c, cw, bull, bullC, bearC, isHalf) {
+  const bodyTop = Math.min(o, c);
+  const bodyH   = Math.max(1, Math.abs(c - o));
+  const color   = bull ? bullC : bearC;
+  const hw      = cw / 2;
+
+  ctx.strokeStyle = color;
+  ctx.lineWidth   = 1;
+  // Wick
+  ctx.beginPath();
+  ctx.moveTo(x, h); ctx.lineTo(x, l);
+  ctx.stroke();
+  // Body
+  ctx.fillStyle   = color;
+  ctx.globalAlpha = isHalf ? 0.5 : 0.88;
+  ctx.fillRect(x - hw * 0.82, bodyTop, cw * 0.82, bodyH);
+  ctx.strokeRect(x - hw * 0.82, bodyTop, cw * 0.82, bodyH);
+  ctx.globalAlpha = 1;
+}
+
+function drawLine(ctx, xs, ys, color, width = 1.5) {
+  if (!xs.length) return;
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.lineWidth   = width;
+  ctx.lineJoin    = 'round';
+  ctx.beginPath();
+  let started = false;
+  for (let i = 0; i < xs.length; i++) {
+    if (!isFinite(ys[i])) { started = false; continue; }
+    if (!started) { ctx.moveTo(xs[i], ys[i]); started = true; }
+    else ctx.lineTo(xs[i], ys[i]);
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawDaySeparator(ctx, x, h) {
+  ctx.save();
+  ctx.strokeStyle = C.daySep;
+  ctx.lineWidth   = 1;
+  ctx.setLineDash([4, 3]);
+  ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.restore();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  RIGHT AXIS DRAWING
+// ═══════════════════════════════════════════════════════════════════════════
+function drawRightAxis(ctx, w, h, yMin, yMax, isCvd) {
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = 'rgba(13,17,23,0.92)';
+  ctx.fillRect(0, 0, w, h);
+  ctx.strokeStyle = C.border;
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, h); ctx.stroke();
+
+  const nTicks = 6;
+  ctx.fillStyle   = isCvd ? C.cvd : C.price;
+  ctx.font        = '10px JetBrains Mono, monospace';
+  ctx.textAlign   = 'left';
+  ctx.textBaseline = 'middle';
+
+  for (let i = 0; i <= nTicks; i++) {
+    const v = yMin + (yMax - yMin) * (i / nTicks);
+    const y = dataToY(v, yMin, yMax, h);
+    ctx.fillStyle = 'rgba(30,45,64,0.6)';
+    ctx.fillRect(0, y, 5, 1);
+    ctx.fillStyle = isCvd ? C.cvd : C.price;
+    ctx.fillText(fmtNum(v, isCvd), 8, y);
+  }
+}
+
+function drawLastBadge(badge, plot, h, lastVal, yMin, yMax, isCvd) {
+  if (!isFinite(lastVal)) { badge.style.display = 'none'; return; }
+  const y = dataToY(lastVal, yMin, yMax, h);
+  const bounded = Math.max(10, Math.min(y, h - 10));
+  badge.style.display = 'block';
+  badge.style.top = (plot.offsetTop + bounded) + 'px';
+  badge.textContent = fmtNum(lastVal, isCvd);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  MAIN RENDER
+// ═══════════════════════════════════════════════════════════════════════════
+function render() {
+  const bars = state.bars;
+  if (!bars.length) return;
+
+  const pH = pWrap.clientHeight;
+  const cH = cWrap.clientHeight;
+  const pW = pWrap.clientWidth;
+  const cW = cWrap.clientWidth;
+  const innerW = pW - AXIS_W;
+
+  resizeCanvas(priceCvs,  innerW, pH);
+  resizeCanvas(priceAxCvs, AXIS_W, pH);
+  resizeCanvas(cvdCvs,   innerW, cH);
+  resizeCanvas(cvdAxCvs,  AXIS_W, cH);
+
+  const vp = computeViewport();
+  const { firstBar, lastBar } = vp;
+
+  // ── collect visible values ──
+  const visBars = bars.slice(firstBar, lastBar + 1);
+  const priceVals = visBars.flatMap(b => [b.h, b.l]);
+  const cvdRaw    = rebasedCvd(bars, state.splitIdx);
+  const cvdVals   = visBars.flatMap((b, i) => {
+    const idx = firstBar + i;
+    const cv  = cvdRaw[idx];
+    return [b.cvdH + (cv - b.cvd), b.cvdL + (cv - b.cvd), cv];
+  });
+
+  const [pMin, pMax] = yRange(priceVals);
+  const [cMin, cMax] = yRange(cvdVals);
+
+  // ── clear ──
+  pctx.clearRect(0, 0, innerW, pH);
+  pctx.fillStyle = C.chartBg; pctx.fillRect(0, 0, innerW, pH);
+  cctx.clearRect(0, 0, innerW, cH);
+  cctx.fillStyle = C.chartBg; cctx.fillRect(0, 0, innerW, cH);
+
+  drawGrid(pctx, innerW, pH, pMin, pMax, false);
+  drawGrid(cctx, innerW, cH, cMin, cMax, true);
+
+  // ── day separator ──
+  if (state.twoDays && state.splitIdx > 0) {
+    const sepX = barToX(state.splitIdx, vp);
+    if (sepX > 0 && sepX < innerW) {
+      drawDaySeparator(pctx, sepX, pH);
+      drawDaySeparator(cctx, sepX, cH);
+    }
+  }
+
+  // ── collect X positions for line/ema/vwap ──
+  const xs = [], pYs = [], cYs = [];
+  for (let i = firstBar; i <= lastBar; i++) {
+    const b  = bars[i];
+    const x  = barToX(i, vp);
+    const py = dataToY(b.c, pMin, pMax, pH);
+    const cv = cvdRaw[i];
+    const cy = dataToY(cv, cMin, cMax, cH);
+    xs.push(x); pYs.push(py); cYs.push(cy);
+  }
+
+  // ── candles or line ──
+  for (let i = firstBar; i <= lastBar; i++) {
+    const b   = bars[i];
+    const x   = barToX(i, vp);
+    const isP = i >= state.splitIdx;
+    const bull = b.c >= b.o;
+
+    if (state.useOHLC) {
+      // price candle
+      drawCandlestick(
+        pctx, x,
+        dataToY(b.o, pMin, pMax, pH),
+        dataToY(b.h, pMin, pMax, pH),
+        dataToY(b.l, pMin, pMax, pH),
+        dataToY(b.c, pMin, pMax, pH),
+        state.candleW, bull,
+        isP ? C.bull : C.bullPrev,
+        isP ? C.bear : C.bearPrev,
+        !isP
+      );
+      // cvd candle
+      const cv  = cvdRaw[i];
+      const cvO = cv - (b.cvd - b.cvdO);
+      const cvH = cv + (b.cvdH - b.cvd);
+      const cvL = cv - (b.cvd - b.cvdL);
+      const cvBull = cv >= cvO;
+      drawCandlestick(
+        cctx, x,
+        dataToY(cvO, cMin, cMax, cH),
+        dataToY(cvH, cMin, cMax, cH),
+        dataToY(cvL, cMin, cMax, cH),
+        dataToY(cv,  cMin, cMax, cH),
+        state.candleW, cvBull,
+        isP ? C.cvdBull : C.cvdPrev,
+        isP ? C.cvdBear : C.cvdPrev,
+        !isP
+      );
+    }
+  }
+
+  if (!state.useOHLC) {
+    drawLine(pctx, xs, pYs, C.price, 1.5);
+    drawLine(cctx, xs, cYs, C.cvd,  1.5);
+  }
+
+  // ── EMAs ──
+  const pClose = bars.map(b => b.c);
+  const cvdArr  = rebasedCvd(bars, state.splitIdx);
+
+  function emaLine(ctx, data, period, color, yMin, yMax, h) {
+    const ema = calcEma(data, period);
+    const visEmaY = [];
+    for (let i = firstBar; i <= lastBar; i++) visEmaY.push(dataToY(ema[i], yMin, yMax, h));
+    drawLine(ctx, xs, visEmaY, color, 1.2);
+  }
+
+  if (state.showEma10) { emaLine(pctx, pClose, 10, C.ema10, pMin, pMax, pH); emaLine(cctx, cvdArr, 10, C.ema10, cMin, cMax, cH); }
+  if (state.showEma21) { emaLine(pctx, pClose, 21, C.ema21, pMin, pMax, pH); emaLine(cctx, cvdArr, 21, C.ema21, cMin, cMax, cH); }
+  if (state.showEma51) { emaLine(pctx, pClose, 51, C.ema51, pMin, pMax, pH); emaLine(cctx, cvdArr, 51, C.ema51, cMin, cMax, cH); }
+
+  // ── VWAP ──
+  if (state.showVwap) {
+    const vwapY = [];
+    for (let i = firstBar; i <= lastBar; i++) vwapY.push(dataToY(bars[i].vwap, pMin, pMax, pH));
+    drawLine(pctx, xs, vwapY, C.vwap, 1.4);
+  }
+
+  // ── Time axis (bottom of price chart) ──
+  drawTimeAxis(pctx, bars, firstBar, lastBar, vp, innerW, pH);
+
+  // ── Right axes ──
+  drawRightAxis(paxCtx, AXIS_W, pH, pMin, pMax, false);
+  drawRightAxis(cvdAxCvs.getContext('2d'), AXIS_W, cH, cMin, cMax, true);
+
+  // ── Last price badges ──
+  const lastP = bars[bars.length - 1].c;
+  const lastC = cvdArr[bars.length - 1];
+  drawLastBadge(document.getElementById('price-badge'), pWrap, pH, lastP, pMin, pMax, false);
+  drawLastBadge(document.getElementById('cvd-badge'),   cWrap, cH, lastC, cMin, cMax, true);
+
+  // ── Crosshair ──
+  if (state.crosshairX >= 0) {
+    drawCrosshair(pctx, cctx, innerW, pH, cH, pMin, pMax, cMin, cMax);
+  }
+
+  // store for tooltip
+  state._viewport = vp;
+  state._pMin = pMin; state._pMax = pMax;
+  state._cMin = cMin; state._cMax = cMax;
+  state._pH = pH; state._cH = cH; state._innerW = innerW;
+}
+
+function drawTimeAxis(ctx, bars, first, last, vp, w, h) {
+  ctx.save();
+  ctx.fillStyle   = C.text2;
+  ctx.font        = '9px JetBrains Mono, monospace';
+  ctx.textAlign   = 'center';
+  ctx.textBaseline = 'top';
+
+  const minSpacing = 60;
+  let lastDrawnX = -999;
+
+  for (let i = first; i <= last; i++) {
+    const x = barToX(i, vp);
+    if (x - lastDrawnX < minSpacing) continue;
+    const label = bars[i].t;
+    if (label.endsWith(':00') || label.endsWith(':15') || label.endsWith(':30') || label.endsWith(':45')) {
+      ctx.fillText(label, x, h - 14);
+      lastDrawnX = x;
+    }
+  }
+  ctx.restore();
+}
+
+function drawCrosshair(pctx, cctx, w, pH, cH, pMin, pMax, cMin, cMax) {
+  const x  = state.crosshairX;
+  const py = state.crosshairPanel === 'price' ? state.crosshairY : -1;
+  const cy = state.crosshairPanel === 'cvd'   ? state.crosshairY : -1;
+
+  const draw = (ctx, panelH, y) => {
+    ctx.save();
+    ctx.strokeStyle = 'rgba(77,159,255,0.5)';
+    ctx.lineWidth   = 1;
+    ctx.setLineDash([4, 4]);
+    // vertical
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, panelH); ctx.stroke();
+    // horizontal (only in active panel)
+    if (y >= 0) {
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+    }
+    ctx.setLineDash([]);
+    ctx.restore();
+  };
+  draw(pctx, pH, py);
+  draw(cctx, cH, cy);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  TOOLTIP
+// ═══════════════════════════════════════════════════════════════════════════
+const tooltip = document.getElementById('tooltip');
+
+function showTooltip(e, barIdx) {
+  if (barIdx < 0 || barIdx >= state.bars.length) { tooltip.style.display='none'; return; }
+  const b   = state.bars[barIdx];
+  const cvd = rebasedCvd(state.bars, state.splitIdx)[barIdx];
+  const bull = b.c >= b.o;
+  const cls  = bull ? 'tt-bull' : 'tt-bear';
+
+  tooltip.innerHTML = `
+    <div class="tt-date">${b.date}  ${b.t}</div>
+    <div class="tt-row"><span class="tt-key">O</span><span class="tt-val ${cls}">${fmtPrice(b.o)}</span></div>
+    <div class="tt-row"><span class="tt-key">H</span><span class="tt-val ${cls}">${fmtPrice(b.h)}</span></div>
+    <div class="tt-row"><span class="tt-key">L</span><span class="tt-val ${cls}">${fmtPrice(b.l)}</span></div>
+    <div class="tt-row"><span class="tt-key">C</span><span class="tt-val ${cls}">${fmtPrice(b.c)}</span></div>
+    <div class="tt-row"><span class="tt-key">V</span><span class="tt-val" style="color:var(--text-2)">${(b.v/1000).toFixed(1)}K</span></div>
+    <div class="tt-row"><span class="tt-key">CVD</span><span class="tt-val tt-cvd">${fmtCvd(cvd)}</span></div>
+  `;
+  tooltip.style.display = 'block';
+
+  const tw = tooltip.offsetWidth;
+  const th = tooltip.offsetHeight;
+  let tx = e.clientX + 14;
+  let ty = e.clientY - 10;
+  if (tx + tw > window.innerWidth - 10)  tx = e.clientX - tw - 14;
+  if (ty + th > window.innerHeight - 10) ty = e.clientY - th + 10;
+  tooltip.style.left = tx + 'px';
+  tooltip.style.top  = ty + 'px';
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  MOUSE / TOUCH EVENTS
+// ═══════════════════════════════════════════════════════════════════════════
+function getCanvasXY(el, e) {
+  const r = el.getBoundingClientRect();
+  return [e.clientX - r.left, e.clientY - r.top];
+}
+
+function handleMouseMove(panel, e) {
+  const el  = panel === 'price' ? priceCvs : cvdCvs;
+  const [x, y] = getCanvasXY(el, e);
+  state.crosshairX = x;
+  state.crosshairY = y;
+  state.crosshairPanel = panel;
+
+  const vp = computeViewport();
+  const bi = xToBar(x, vp);
+  showTooltip(e, bi);
+  render();
+}
+
+function handleMouseLeave() {
+  state.crosshairX = -1;
+  tooltip.style.display = 'none';
+  render();
+}
+
+let isDragging = false, dragStartX = 0, dragStartScroll = 0;
+
+function handleMouseDown(e) {
+  if (e.button !== 0) return;
+  isDragging    = true;
+  dragStartX    = e.clientX;
+  dragStartScroll = state.scrollOffsetX;
+}
+function handleMouseUp() { isDragging = false; }
+function handleDragMove(e) {
+  if (!isDragging) return;
+  const dx = dragStartX - e.clientX;
+  state.scrollOffsetX = dragStartScroll + dx;
+  render();
+}
+
+function handleWheel(e) {
+  e.preventDefault();
+  state.scrollOffsetX += e.deltaX || e.deltaY * 0.3;
+  render();
+}
+
+[priceCvs, priceAxCvs].forEach(c => {
+  c.addEventListener('mousemove', e => { handleDragMove(e); handleMouseMove('price', e); });
+  c.addEventListener('mouseleave', handleMouseLeave);
+  c.addEventListener('mousedown', handleMouseDown);
+  c.addEventListener('wheel', handleWheel, { passive: false });
+});
+[cvdCvs, cvdAxCvs].forEach(c => {
+  c.addEventListener('mousemove', e => { handleDragMove(e); handleMouseMove('cvd', e); });
+  c.addEventListener('mouseleave', handleMouseLeave);
+  c.addEventListener('mousedown', handleMouseDown);
+  c.addEventListener('wheel', handleWheel, { passive: false });
+});
+document.addEventListener('mouseup', handleMouseUp);
+document.addEventListener('mousemove', e => { if (isDragging) { handleDragMove(e); render(); } });
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  PANEL RESIZE (drag divider)
+// ═══════════════════════════════════════════════════════════════════════════
+let divDragging = false, divStartY = 0, divStartPH = 0, divStartCH = 0;
+
+divider.addEventListener('mousedown', e => {
+  divDragging = true;
+  divStartY   = e.clientY;
+  divStartPH  = pWrap.clientHeight;
+  divStartCH  = cWrap.clientHeight;
+  e.preventDefault();
+});
+document.addEventListener('mousemove', e => {
+  if (!divDragging) return;
+  const dy   = e.clientY - divStartY;
+  const newP = Math.max(MIN_TOP_H, divStartPH + dy);
+  const total = divStartPH + divStartCH;
+  const newC = Math.max(MIN_BOTTOM_H, total - newP);
+  const actualP = total - newC;
+  pWrap.style.flex = 'none';
+  cWrap.style.flex = 'none';
+  pWrap.style.height = actualP + 'px';
+  cWrap.style.height = newC    + 'px';
+  render();
+});
+document.addEventListener('mouseup', () => { divDragging = false; });
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  TOOLBAR CONTROLS
+// ═══════════════════════════════════════════════════════════════════════════
+document.getElementById('btn-back').addEventListener('click', () => {
+  state.dayOffset++;
+  loadData();
+});
+document.getElementById('btn-fwd').addEventListener('click', () => {
+  if (state.dayOffset <= 0) return;
+  state.dayOffset--;
+  loadData();
+});
+
+document.getElementById('tf-select').addEventListener('change', function() {
+  state.tf = parseInt(this.value);
+  loadData();
+});
+
+// ── Setup panel toggle ──
+const setupPanel = document.getElementById('setup-panel');
+const btnSetup   = document.getElementById('btn-setup');
+btnSetup.addEventListener('click', () => {
+  setupPanel.classList.toggle('open');
+  btnSetup.classList.toggle('active-dim', setupPanel.classList.contains('open'));
+});
+document.addEventListener('click', e => {
+  if (!setupPanel.contains(e.target) && e.target !== btnSetup) {
+    setupPanel.classList.remove('open');
+  }
+});
+
+// ── Chart type ──
+document.getElementById('sp-line').addEventListener('click', () => {
+  state.useOHLC = false;
+  document.getElementById('sp-line').classList.add('active');
+  document.getElementById('sp-candles').classList.remove('active');
+  render();
+});
+document.getElementById('sp-candles').addEventListener('click', () => {
+  state.useOHLC = true;
+  document.getElementById('sp-candles').classList.add('active');
+  document.getElementById('sp-line').classList.remove('active');
+  render();
+});
+
+// ── Day mode ──
+document.getElementById('sp-1d').addEventListener('click', () => {
+  state.twoDays = false;
+  document.getElementById('sp-1d').classList.add('active');
+  document.getElementById('sp-2d').classList.remove('active');
+  loadData();
+});
+document.getElementById('sp-2d').addEventListener('click', () => {
+  state.twoDays = true;
+  document.getElementById('sp-2d').classList.add('active');
+  document.getElementById('sp-1d').classList.remove('active');
+  loadData();
+});
+
+// ── CVD rebase ──
+document.getElementById('sp-rebase').addEventListener('click', () => {
+  state.cvdRebased = !state.cvdRebased;
+  const el = document.getElementById('sp-rebase');
+  el.classList.toggle('active-blue', state.cvdRebased);
+  render();
+});
+
+// ── Sliders ──
+document.getElementById('sl-width').addEventListener('input', function() {
+  state.candleW = parseInt(this.value);
+  document.getElementById('sl-width-val').textContent = this.value;
+  render();
+});
+document.getElementById('sl-gap').addEventListener('input', function() {
+  state.candleGap = parseInt(this.value);
+  document.getElementById('sl-gap-val').textContent = this.value;
+  render();
+});
+
+// ── Checkboxes (EMA / VWAP) ──
+function makeCheckbox(boxId, stateKey) {
+  const box = document.getElementById(boxId);
+  box.parentElement.addEventListener('click', () => {
+    state[stateKey] = !state[stateKey];
+    box.classList.toggle('checked', state[stateKey]);
+    render();
+  });
+}
+makeCheckbox('cb-ema10-box', 'showEma10');
+makeCheckbox('cb-ema21-box', 'showEma21');
+makeCheckbox('cb-ema51-box', 'showEma51');
+makeCheckbox('cb-vwap-box',  'showVwap');
+
+// ── Keyboard shortcuts ──
+document.addEventListener('keydown', e => {
+  if (e.key === 'ArrowLeft')  { state.dayOffset++; loadData(); }
+  if (e.key === 'ArrowRight') { if (state.dayOffset > 0) { state.dayOffset--; loadData(); } }
+  if (e.key === '1') { state.twoDays = false; document.getElementById('sp-1d').classList.add('active'); document.getElementById('sp-2d').classList.remove('active'); loadData(); }
+  if (e.key === '2') { state.twoDays = true;  document.getElementById('sp-2d').classList.add('active'); document.getElementById('sp-1d').classList.remove('active'); loadData(); }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  RESIZE OBSERVER
+// ═══════════════════════════════════════════════════════════════════════════
+const ro = new ResizeObserver(() => render());
+ro.observe(pWrap);
+ro.observe(cWrap);
+
+// ── Auto-scroll to rightmost bar on load ──
+function scrollToEnd() {
+  const vp = computeViewport();
+  const n  = state.bars.length;
+  const totalW = n * vp.step;
+  const visW   = pWrap.clientWidth - AXIS_W;
+  state.scrollOffsetX = Math.max(0, totalW - visW + 20);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  INIT
+// ═══════════════════════════════════════════════════════════════════════════
+loadData();
+setTimeout(() => { scrollToEnd(); render(); }, 80);
+
+// Simulated live refresh every 3s
+setInterval(() => {
+  if (state.dayOffset === 0 && state.bars.length > 0) {
+    const last = state.bars[state.bars.length - 1];
+    const rng  = seededRand(Date.now() % 99991);
+    const tick = last.c * (1 + (rng() - 0.495) * 0.003);
+    last.c = tick;
+    last.h = Math.max(last.h, tick);
+    last.l = Math.min(last.l, tick);
+    last.cvd += (rng() - 0.5) * 3000;
+    render();
+  }
+}, 3000);
+</script>
+</body>
+</html>
