@@ -311,6 +311,7 @@
       <option value="30">30m</option>
     </select>
     <button class="tb-btn active-dim" id="btn-setup">⚙ Setup</button>
+    <button class="tb-btn" id="btn-golive" title="Snap to latest candle (End)">⟶ LIVE</button>
     <span id="status-dot" style="color:#EF5350">●</span>
   </div>
 
@@ -409,9 +410,10 @@ const C = {
   vwap:      '#00E676', daySep:   '#2A3F58',
 };
 
-const AXIS_W  = 72;   // right axis width px
-const MIN_BOTTOM_H = 100;
-const MIN_TOP_H    = 120;
+const AXIS_W         = 72;   // right axis width px
+const RIGHT_PAD_STEPS = 5;   // candle-steps of breathing room before the axis
+const MIN_BOTTOM_H   = 100;
+const MIN_TOP_H      = 120;
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  STATE
@@ -479,6 +481,7 @@ const state = {
   candleW:      2,             // default: width 2
   candleGap:    2,             // px
   scrollOffsetX: 0,         // px scroll (positive = scroll left)
+  _followMode:   true,      // auto-track latest candle (disabled when user manually scrolls back)
   crosshairX:   -1,
   crosshairY:   -1,
   crosshairPanel: null,     // 'price'|'cvd'
@@ -723,7 +726,8 @@ function loadData() {
       const dot = document.getElementById('status-dot');
       dot.style.color = built.currentKey === built.latestKey ? C.vwap : C.ema10;
 
-      state.scrollOffsetX = 0;
+      state.scrollOffsetX = 0;  // will be corrected by scrollToLatest below
+      if (state._followMode !== false) scrollToLatest();
       render();
       return;
     }
@@ -759,7 +763,8 @@ function loadData() {
   const dot = document.getElementById('status-dot');
   dot.style.color = off === 0 ? C.vwap : C.ema10;
 
-  state.scrollOffsetX = 0;
+  state.scrollOffsetX = 0;  // will be corrected by scrollToLatest below
+  if (state._followMode !== false) scrollToLatest();
   render();
 }
 
@@ -772,6 +777,7 @@ window.__applyPriceCvdLiveTick = (tick) => {
   if (!tick || !Number.isFinite(Number(tick.price)) || !Number.isFinite(Number(tick.cvd))) return;
   if (!Array.isArray(state.bars) || state.bars.length === 0) return;
 
+  const prevLen = state.bars.length;
   const last = state.bars[state.bars.length - 1];
   const px = Number(tick.price);
   const cvd = Number(tick.cvd);
@@ -784,6 +790,19 @@ window.__applyPriceCvdLiveTick = (tick) => {
     last.cvd = cvd;
     last.cvdH = Math.max(Number(last.cvdH ?? cvd), cvd, Number(last.cvdO));
     last.cvdL = Math.min(Number(last.cvdL ?? cvd), cvd, Number(last.cvdO));
+  }
+
+  // Auto-advance: if a new candle was appended (from historical refresh racing
+  // with a live tick) OR follow mode is active, keep the latest candle visible.
+  if (state._followMode) {
+    const step  = state.candleW + state.candleGap;
+    const n     = state.bars.length;
+    const visW  = pWrap.clientWidth - AXIS_W;
+    const targetScroll = Math.max(0, n * step - visW + RIGHT_PAD_STEPS * step);
+    // Smoothly nudge scroll forward only — never pull it backward
+    if (targetScroll > state.scrollOffsetX) {
+      state.scrollOffsetX = targetScroll;
+    }
   }
 
   render();
@@ -830,6 +849,11 @@ function dpr() { return window.devicePixelRatio || 1; }
 
 function resizeCanvas(cvs, w, h) {
   const r = dpr();
+  // Always lock CSS display size to logical w×h so the element never
+  // stretches (CSS `width:100%` would scale the buffer up to fill the
+  // full wrapper including the axis area, hiding ~15 candles behind it).
+  cvs.style.width  = w + 'px';
+  cvs.style.height = h + 'px';
   if (cvs.width !== w * r || cvs.height !== h * r) {
     cvs.width  = w * r;
     cvs.height = h * r;
@@ -852,12 +876,13 @@ function computeViewport() {
   const step   = cw + gap;
   const pW     = pWrap.clientWidth - AXIS_W;
   const totalW = n * step;
-  const maxScroll = Math.max(0, totalW - pW);
+  // RIGHT_PAD_STEPS of empty space between last candle and the price axis
+  const maxScroll = Math.max(0, totalW - pW + RIGHT_PAD_STEPS * step);
   state.scrollOffsetX = Math.max(0, Math.min(state.scrollOffsetX, maxScroll));
 
   const firstBar = Math.floor(state.scrollOffsetX / step);
   const lastBar  = Math.min(n - 1, firstBar + Math.ceil(pW / step) + 1);
-  return { firstBar, lastBar, step, pW };
+  return { firstBar, lastBar, step, pW, maxScroll };
 }
 
 function barToX(i, vp) {
@@ -1278,12 +1303,23 @@ function handleDragMove(e) {
   if (!isDragging) return;
   const dx = dragStartX - e.clientX;
   state.scrollOffsetX = dragStartScroll + dx;
+  // Dragging left (into history) → disengage follow mode
+  if (dx < -8) state._followMode = false;
+  // Dragging right to the end → re-engage follow mode
+  const vp = computeViewport();
+  if (state.scrollOffsetX >= vp.maxScroll - vp.step) state._followMode = true;
   render();
 }
 
 function handleWheel(e) {
   e.preventDefault();
-  state.scrollOffsetX += e.deltaX || e.deltaY * 0.3;
+  const delta = e.deltaX || e.deltaY * 0.3;
+  state.scrollOffsetX += delta;
+  // Scrolling left → disengage follow
+  if (delta < -4) state._followMode = false;
+  // Scrolled to the live edge → re-engage follow
+  const vp = computeViewport();
+  if (state.scrollOffsetX >= vp.maxScroll - vp.step) state._followMode = true;
   render();
 }
 
@@ -1330,12 +1366,25 @@ document.addEventListener('mouseup', () => { if (!divDragging) return; divDraggi
 // ═══════════════════════════════════════════════════════════════════════════
 document.getElementById('btn-back').addEventListener('click', () => {
   state.dayOffset++;
+  state._followMode = false;  // navigating to historical day
   loadData();
 });
 document.getElementById('btn-fwd').addEventListener('click', () => {
   if (state.dayOffset <= 0) return;
   state.dayOffset--;
+  if (state.dayOffset === 0) state._followMode = true;  // back to today
   loadData();
+});
+
+// ── Go Live button — snap to latest candle and re-engage follow mode ──
+document.getElementById('btn-golive').addEventListener('click', () => {
+  state._followMode = true;
+  scrollToLatest();
+  render();
+  // Visual feedback
+  const btn = document.getElementById('btn-golive');
+  btn.classList.add('active');
+  setTimeout(() => btn.classList.remove('active'), 400);
 });
 
 document.getElementById('tf-select').addEventListener('change', function() {
@@ -1433,8 +1482,9 @@ makeCheckbox('cb-vwap-box',  'showVwap');
 
 // ── Keyboard shortcuts ──
 document.addEventListener('keydown', e => {
-  if (e.key === 'ArrowLeft')  { state.dayOffset++; loadData(); }
-  if (e.key === 'ArrowRight') { if (state.dayOffset > 0) { state.dayOffset--; loadData(); } }
+  if (e.key === 'ArrowLeft')  { state._followMode = false; state.dayOffset++; loadData(); }
+  if (e.key === 'ArrowRight') { if (state.dayOffset > 0) { state.dayOffset--; if (state.dayOffset === 0) state._followMode = true; loadData(); } }
+  if (e.key === 'End') { state._followMode = true; scrollToLatest(); render(); }
   if (e.key === '1') { state.twoDays = false; document.getElementById('sp-1d').classList.add('active'); document.getElementById('sp-2d').classList.remove('active'); saveSettings(); loadData(); }
   if (e.key === '2') { state.twoDays = true;  document.getElementById('sp-2d').classList.add('active'); document.getElementById('sp-1d').classList.remove('active'); saveSettings(); loadData(); }
 });
@@ -1461,20 +1511,28 @@ const ro = new ResizeObserver(() => {
   if (state._paneRatio !== undefined) {
     _applyPaneRatio(state._paneRatio);
   }
+  // Re-snap to latest candle if follow mode is active (window/dialog resized)
+  if (state._followMode && state.bars.length) scrollToLatest();
   render();
 });
 ro.observe(chartArea);
 ro.observe(pWrap);
 ro.observe(cWrap);
 
-// ── Auto-scroll to rightmost bar on load ──
-function scrollToEnd() {
-  const vp = computeViewport();
-  const n  = state.bars.length;
-  const totalW = n * vp.step;
+// ── Scroll so the latest candle is in focus with RIGHT_PAD breathing room ──
+function scrollToLatest() {
+  const step   = state.candleW + state.candleGap;
+  const n      = state.bars.length;
+  const totalW = n * step;
   const visW   = pWrap.clientWidth - AXIS_W;
-  state.scrollOffsetX = Math.max(0, totalW - visW + 20);
+  if (visW <= 0) return; // layout not ready yet
+  // Position so last candle sits RIGHT_PAD_STEPS steps from the axis
+  state.scrollOffsetX = Math.max(0, totalW - visW + RIGHT_PAD_STEPS * step);
+  state._followMode = true;
 }
+
+// Legacy alias kept for any direct calls
+const scrollToEnd = scrollToLatest;
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  INIT
@@ -1540,7 +1598,14 @@ function restoreSettings() {
 restoreSettings();
 applySettingsToUI();
 loadData();
-setTimeout(() => { scrollToEnd(); render(); }, 80);
+// Scroll to latest candle once layout is fully painted (two rAF frames ensures
+// clientWidth is non-zero before we compute the target scroll position).
+requestAnimationFrame(() => {
+  requestAnimationFrame(() => {
+    scrollToLatest();
+    render();
+  });
+});
 
 // Simulated live refresh every 3s
 setInterval(() => {
