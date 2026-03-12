@@ -122,9 +122,31 @@ class PriceCVDChartDialog(QDialog):
         logger.debug("[PriceCVDChart] Geometry saved for %s", self.symbol)
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
+        self._live_flush_timer.stop()
         self._disconnect_live_feeds()
+        self._teardown_web_view()
         self._save_geometry()
         super().closeEvent(event)
+
+    def _teardown_web_view(self) -> None:
+        web_view = getattr(self, "_web_view", None)
+        if web_view is None:
+            return
+
+        try:
+            web_view.loadFinished.disconnect(self._on_web_view_loaded)
+        except Exception:
+            pass
+
+        try:
+            web_view.setUrl(QUrl("about:blank"))
+        except Exception:
+            logger.debug("[PriceCVDChart] Failed to blank web view for %s", self.symbol, exc_info=True)
+
+        try:
+            web_view.deleteLater()
+        finally:
+            self._web_view = None
 
     def _disconnect_live_feeds(self) -> None:
         if self.cvd_engine is not None:
