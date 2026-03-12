@@ -1754,6 +1754,7 @@ class ImperiumMainWindow(QMainWindow):
         dlg = CVDSetMultiChartDialog(
             kite=self.real_kite_client,
             symbol_set_manager=self.cvd_symbol_set_manager,
+            cvd_engine=self.cvd_engine,
             resolve_fut_token_fn=resolve_cvd_token_for_sets,
             register_token_fn=lambda t: (
                 self.cvd_engine.register_token(t),

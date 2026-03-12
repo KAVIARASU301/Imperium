@@ -35,6 +35,7 @@ class CVDSetMultiChartDialog(QDialog):
         self,
         kite,
         symbol_set_manager: CVDSymbolSetManager,
+        cvd_engine,
         resolve_fut_token_fn,
         register_token_fn,
         unregister_tokens_fn,
@@ -44,6 +45,7 @@ class CVDSetMultiChartDialog(QDialog):
 
         self.kite = kite
         self.symbol_set_manager = symbol_set_manager
+        self.cvd_engine = cvd_engine
         self.current_date = None
         self.previous_date = None
 
@@ -67,6 +69,9 @@ class CVDSetMultiChartDialog(QDialog):
         self._setup_ui()
         self._load_sets()
         self._pending_chart_reload = 0
+
+        if self.cvd_engine is not None:
+            self.cvd_engine.cvd_updated.connect(self._on_cvd_tick)
 
     # ------------------------------------------------------------------
 
@@ -399,6 +404,23 @@ class CVDSetMultiChartDialog(QDialog):
         cur, prev = self.navigator.get_dates()
         self._load_charts_for_dates(cur, prev)
 
+    def _on_cvd_tick(self, instrument_token: int, cvd_value: float, _last_price: float):
+        if not self.isVisible():
+            return
+
+        updated = False
+        for widget in self.chart_widgets:
+            if (
+                widget.isVisible()
+                and widget.live_mode
+                and widget.instrument_token == instrument_token
+            ):
+                widget.apply_live_cvd_tick(cvd_value)
+                updated = True
+
+        if updated and self.aggregate_toggle.isChecked() and self.aggregate_chart.isVisible():
+            self._refresh_aggregate_chart()
+
     # ------------------------------------------------------------------
 
     def _activate_symbols(self, symbols: List[str]):
@@ -504,5 +526,10 @@ class CVDSetMultiChartDialog(QDialog):
 
     def closeEvent(self, event):
         logger.info("[CVD-SET] Closing dialog")
+        if self.cvd_engine is not None:
+            try:
+                self.cvd_engine.cvd_updated.disconnect(self._on_cvd_tick)
+            except (TypeError, RuntimeError):
+                pass
         self._clear_charts()
         super().closeEvent(event)

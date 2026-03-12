@@ -202,8 +202,8 @@
     position: relative;
     overflow: hidden;
   }
-  #price-wrap { flex: 0 0 65%; }
-  #cvd-wrap   { flex: 0 0 35%; border-top: 1px solid var(--border); }
+  #price-wrap { flex: 0 0 50%; }
+  #cvd-wrap   { flex: 0 0 50%; border-top: 1px solid var(--border); }
 
   canvas {
     display: block;
@@ -273,26 +273,7 @@
   .tt-cvd  { color: var(--cvd); }
   .tt-date { color: var(--text-2); font-size: 9px; margin-bottom: 4px; }
 
-  /* ── Window controls (min / max / restore) ── */
-  #wc-group {
-    display: flex; align-items: center; gap: 3px;
-    margin-left: 6px;
-  }
-  .tb-wc {
-    width: 22px; height: 22px;
-    background: #151D2B;
-    color: var(--text-2);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    font-size: 13px; line-height: 1;
-    cursor: pointer;
-    display: flex; align-items: center; justify-content: center;
-    padding: 0;
-    transition: border-color .15s, background .15s, color .15s;
-  }
-  .tb-wc:hover { border-color: var(--accent); background: #1C2638; color: var(--text-1); }
-  .tb-wc-max:hover { border-color: var(--bull); }
-  .tb-wc-close:hover { background: #5C1A1A; border-color: var(--bear); color: var(--bear); }
+
 
   /* ── Nav group — truly centred regardless of right-side width ── */
   #nav-group {
@@ -322,20 +303,14 @@
     <span class="tb-sep">|</span>
     <span class="tb-label">TF</span>
     <select id="tf-select">
-      <option value="1">1m</option>
-      <option value="3" selected>3m</option>
+      <option value="1" selected>1m</option>
+      <option value="3">3m</option>
       <option value="5">5m</option>
       <option value="15">15m</option>
       <option value="30">30m</option>
     </select>
     <button class="tb-btn active-dim" id="btn-setup">⚙ Setup</button>
     <span id="status-dot" style="color:#EF5350">●</span>
-    <span class="tb-sep">|</span>
-    <div id="wc-group">
-      <button class="tb-wc tb-wc-min"   id="btn-wc-min"   title="Minimise">−</button>
-      <button class="tb-wc tb-wc-max"   id="btn-wc-max"   title="Maximise" data-max="0">⬜</button>
-      <button class="tb-wc tb-wc-close" id="btn-wc-close" title="Close">✕</button>
-    </div>
   </div>
 
   <!-- Floating Setup Panel -->
@@ -349,8 +324,8 @@
     <div class="sp-hsep"></div>
     <div class="sp-section">MODE</div>
     <div class="sp-row">
-      <button class="sp-btn" id="sp-1d">1D</button>
-      <button class="sp-btn active" id="sp-2d">2D</button>
+      <button class="sp-btn active" id="sp-1d">1D</button>
+      <button class="sp-btn" id="sp-2d">2D</button>
     </div>
     <div class="sp-row">
       <button class="sp-btn active-blue" id="sp-rebase" style="font-size:10px">↺ Rebased CVD</button>
@@ -360,8 +335,8 @@
     <div class="sp-section">CANDLE SIZE</div>
     <div class="sp-slider-row">
       <span class="sp-slider-lbl">Width</span>
-      <input type="range" class="sp-slider" id="sl-width" min="2" max="20" value="7" step="1">
-      <span class="sp-slider-val" id="sl-width-val">7</span>
+      <input type="range" class="sp-slider" id="sl-width" min="2" max="20" value="2" step="1">
+      <span class="sp-slider-val" id="sl-width-val">2</span>
     </div>
     <div class="sp-slider-row">
       <span class="sp-slider-lbl">Spacing</span>
@@ -393,7 +368,7 @@
     <div class="sp-section">DISPLAY</div>
     <div class="sp-row">
       <label class="sp-cb-label" id="cb-tooltip-lbl" style="color:var(--text-2)">
-        <span class="sp-cb checked" id="cb-tooltip-box"></span>Tooltip
+        <span class="sp-cb" id="cb-tooltip-box"></span>Tooltip
       </label>
     </div>
   </div>
@@ -440,18 +415,67 @@ const MIN_TOP_H    = 120;
 // ═══════════════════════════════════════════════════════════════════════════
 //  STATE
 // ═══════════════════════════════════════════════════════════════════════════
+const STATE_KEY = 'priceCvdChartSettings_v1';
+
+/** Persist a subset of state to localStorage */
+function saveSettings() {
+  try {
+    const s = {
+      useOHLC:     state.useOHLC,
+      twoDays:     state.twoDays,
+      cvdRebased:  state.cvdRebased,
+      showEma10:   state.showEma10,
+      showEma21:   state.showEma21,
+      showEma51:   state.showEma51,
+      showVwap:    state.showVwap,
+      showTooltip: state.showTooltip,
+      tf:          state.tf,
+      candleW:     state.candleW,
+      candleGap:   state.candleGap,
+      paneRatio:   _getPaneRatio(),
+    };
+    localStorage.setItem(STATE_KEY, JSON.stringify(s));
+  } catch(e) { /* storage unavailable — ignore */ }
+}
+
+/** Return the current price-pane ratio (0..1) */
+function _getPaneRatio() {
+  const total = pWrap.clientHeight + cWrap.clientHeight;
+  return total > 0 ? pWrap.clientHeight / total : 0.5;
+}
+
+/** Apply a pane ratio (0..1) */
+function _applyPaneRatio(ratio) {
+  const area = chartArea.clientHeight - 4; // subtract divider
+  const pH = Math.round(area * ratio);
+  const cH = area - pH;
+  pWrap.style.flex   = 'none';
+  cWrap.style.flex   = 'none';
+  pWrap.style.height = Math.max(MIN_TOP_H, pH) + 'px';
+  cWrap.style.height = Math.max(MIN_BOTTOM_H, cH) + 'px';
+}
+
+/** Load persisted settings and return merged object (or null on first run) */
+function loadSettings() {
+  try {
+    const raw = localStorage.getItem(STATE_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch(e) {}
+  return null;
+}
+
 const state = {
   useOHLC:      true,
-  twoDays:      true,
+  twoDays:      false,         // default: 1D
   cvdRebased:   true,
   showEma10:    false,
   showEma21:    false,
   showEma51:    false,
   showVwap:     false,
-  showTooltip:  true,
-  tf:           3,          // minutes
-  candleW:      7,          // px
-  candleGap:    2,          // px
+  showTooltip:  false,         // default: off
+  tf:           1,             // default: 1 min
+  candleW:      2,             // default: width 2
+  candleGap:    2,             // px
   scrollOffsetX: 0,         // px scroll (positive = scroll left)
   crosshairX:   -1,
   crosshairY:   -1,
@@ -1284,7 +1308,7 @@ document.addEventListener('mousemove', e => {
   cWrap.style.height = newC    + 'px';
   render();
 });
-document.addEventListener('mouseup', () => { divDragging = false; });
+document.addEventListener('mouseup', () => { if (!divDragging) return; divDragging = false; saveSettings(); });
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  TOOLBAR CONTROLS
@@ -1301,6 +1325,7 @@ document.getElementById('btn-fwd').addEventListener('click', () => {
 
 document.getElementById('tf-select').addEventListener('change', function() {
   state.tf = parseInt(this.value);
+  saveSettings();
   loadData();
 });
 
@@ -1322,13 +1347,13 @@ document.getElementById('sp-line').addEventListener('click', () => {
   state.useOHLC = false;
   document.getElementById('sp-line').classList.add('active');
   document.getElementById('sp-candles').classList.remove('active');
-  render();
+  saveSettings(); render();
 });
 document.getElementById('sp-candles').addEventListener('click', () => {
   state.useOHLC = true;
   document.getElementById('sp-candles').classList.add('active');
   document.getElementById('sp-line').classList.remove('active');
-  render();
+  saveSettings(); render();
 });
 
 // ── Day mode ──
@@ -1336,13 +1361,13 @@ document.getElementById('sp-1d').addEventListener('click', () => {
   state.twoDays = false;
   document.getElementById('sp-1d').classList.add('active');
   document.getElementById('sp-2d').classList.remove('active');
-  loadData();
+  saveSettings(); loadData();
 });
 document.getElementById('sp-2d').addEventListener('click', () => {
   state.twoDays = true;
   document.getElementById('sp-2d').classList.add('active');
   document.getElementById('sp-1d').classList.remove('active');
-  loadData();
+  saveSettings(); loadData();
 });
 
 // ── CVD rebase ──
@@ -1350,19 +1375,19 @@ document.getElementById('sp-rebase').addEventListener('click', () => {
   state.cvdRebased = !state.cvdRebased;
   const el = document.getElementById('sp-rebase');
   el.classList.toggle('active-blue', state.cvdRebased);
-  render();
+  saveSettings(); render();
 });
 
 // ── Sliders ──
 document.getElementById('sl-width').addEventListener('input', function() {
   state.candleW = parseInt(this.value);
   document.getElementById('sl-width-val').textContent = this.value;
-  render();
+  saveSettings(); render();
 });
 document.getElementById('sl-gap').addEventListener('input', function() {
   state.candleGap = parseInt(this.value);
   document.getElementById('sl-gap-val').textContent = this.value;
-  render();
+  saveSettings(); render();
 });
 
 // ── Checkboxes (EMA / VWAP) ──
@@ -1371,7 +1396,7 @@ function makeCheckbox(boxId, stateKey) {
   box.parentElement.addEventListener('click', () => {
     state[stateKey] = !state[stateKey];
     box.classList.toggle('checked', state[stateKey]);
-    render();
+    saveSettings(); render();
   });
 }
 makeCheckbox('cb-ema10-box', 'showEma10');
@@ -1386,15 +1411,17 @@ makeCheckbox('cb-vwap-box',  'showVwap');
     state.showTooltip = !state.showTooltip;
     box.classList.toggle('checked', state.showTooltip);
     if (!state.showTooltip) tooltip.style.display = 'none';
+    saveSettings();
   });
 })();
+
 
 // ── Keyboard shortcuts ──
 document.addEventListener('keydown', e => {
   if (e.key === 'ArrowLeft')  { state.dayOffset++; loadData(); }
   if (e.key === 'ArrowRight') { if (state.dayOffset > 0) { state.dayOffset--; loadData(); } }
-  if (e.key === '1') { state.twoDays = false; document.getElementById('sp-1d').classList.add('active'); document.getElementById('sp-2d').classList.remove('active'); loadData(); }
-  if (e.key === '2') { state.twoDays = true;  document.getElementById('sp-2d').classList.add('active'); document.getElementById('sp-1d').classList.remove('active'); loadData(); }
+  if (e.key === '1') { state.twoDays = false; document.getElementById('sp-1d').classList.add('active'); document.getElementById('sp-2d').classList.remove('active'); saveSettings(); loadData(); }
+  if (e.key === '2') { state.twoDays = true;  document.getElementById('sp-2d').classList.add('active'); document.getElementById('sp-1d').classList.remove('active'); saveSettings(); loadData(); }
 });
 
 // ── Qt window-control bridge ──
@@ -1410,22 +1437,6 @@ function _initQtBridge() {
 }
 _initQtBridge();
 
-document.getElementById('btn-wc-min').addEventListener('click', () => {
-  if (_qtBridge) _qtBridge.minimize();
-});
-
-document.getElementById('btn-wc-max').addEventListener('click', () => {
-  if (_qtBridge) _qtBridge.toggleMaximize();
-  const btn = document.getElementById('btn-wc-max');
-  const isMax = btn.dataset.max === '1';
-  btn.dataset.max = isMax ? '0' : '1';
-  btn.textContent  = isMax ? '⬜' : '❐';
-  btn.title        = isMax ? 'Maximise' : 'Restore';
-});
-
-document.getElementById('btn-wc-close').addEventListener('click', () => {
-  if (_qtBridge) _qtBridge.close();
-});
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  RESIZE OBSERVER
@@ -1446,6 +1457,65 @@ function scrollToEnd() {
 // ═══════════════════════════════════════════════════════════════════════════
 //  INIT
 // ═══════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════
+//  SETTINGS RESTORE
+// ═══════════════════════════════════════════════════════════════════════════
+/** Sync all UI widgets to match current state values */
+function applySettingsToUI() {
+  // TF select
+  const tfSel = document.getElementById('tf-select');
+  tfSel.value = String(state.tf);
+
+  // Chart type buttons
+  document.getElementById('sp-candles').classList.toggle('active',  state.useOHLC);
+  document.getElementById('sp-line').classList.toggle('active',    !state.useOHLC);
+
+  // Day mode buttons
+  document.getElementById('sp-1d').classList.toggle('active', !state.twoDays);
+  document.getElementById('sp-2d').classList.toggle('active',  state.twoDays);
+
+  // CVD rebase
+  document.getElementById('sp-rebase').classList.toggle('active-blue', state.cvdRebased);
+
+  // Width slider
+  const wSlider = document.getElementById('sl-width');
+  wSlider.value = state.candleW;
+  document.getElementById('sl-width-val').textContent = state.candleW;
+
+  // Gap slider
+  const gSlider = document.getElementById('sl-gap');
+  gSlider.value = state.candleGap;
+  document.getElementById('sl-gap-val').textContent = state.candleGap;
+
+  // Checkboxes
+  document.getElementById('cb-ema10-box').classList.toggle('checked', state.showEma10);
+  document.getElementById('cb-ema21-box').classList.toggle('checked', state.showEma21);
+  document.getElementById('cb-ema51-box').classList.toggle('checked', state.showEma51);
+  document.getElementById('cb-vwap-box').classList.toggle('checked',  state.showVwap);
+  document.getElementById('cb-tooltip-box').classList.toggle('checked', state.showTooltip);
+}
+
+/** Merge persisted settings into state and restore pane split */
+function restoreSettings() {
+  const saved = loadSettings();
+  if (!saved) return;              // first run — keep hard-coded defaults
+
+  const keys = ['useOHLC','twoDays','cvdRebased','showEma10','showEma21',
+                 'showEma51','showVwap','showTooltip','tf','candleW','candleGap'];
+  for (const k of keys) {
+    if (saved[k] !== undefined) state[k] = saved[k];
+  }
+
+  // Restore pane ratio after layout is painted
+  if (typeof saved.paneRatio === 'number') {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => { _applyPaneRatio(saved.paneRatio); render(); });
+    });
+  }
+}
+
+restoreSettings();
+applySettingsToUI();
 loadData();
 setTimeout(() => { scrollToEnd(); render(); }, 80);
 

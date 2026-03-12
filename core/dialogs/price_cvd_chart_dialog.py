@@ -7,33 +7,12 @@ from datetime import datetime, timedelta
 from pathlib import Path
 import json
 
-from PySide6.QtCore import Qt, QObject, QUrl, Slot
+from PySide6.QtCore import Qt, QUrl, QSettings, QByteArray
 from PySide6.QtWidgets import QDialog, QLabel, QVBoxLayout
 
 logger = logging.getLogger(__name__)
 
 
-class _WindowBridge(QObject):
-    """Slots exposed to the chart's JS window-control buttons via QWebChannel."""
-
-    def __init__(self, dialog: QDialog) -> None:
-        super().__init__(dialog)
-        self._dialog = dialog
-
-    @Slot()
-    def minimize(self) -> None:
-        self._dialog.showMinimized()
-
-    @Slot()
-    def toggleMaximize(self) -> None:
-        if self._dialog.isMaximized():
-            self._dialog.showNormal()
-        else:
-            self._dialog.showMaximized()
-
-    @Slot()
-    def close(self) -> None:
-        self._dialog.close()
 
 
 class PriceCVDChartDialog(QDialog):
@@ -59,10 +38,24 @@ class PriceCVDChartDialog(QDialog):
         self.cvd_engine = cvd_engine
         self.price_instrument_token = price_instrument_token or instrument_token
 
+        # Promote to a full top-level window so the OS decorates it with
+        # Minimize / Maximize / Close buttons in the native title bar.
+        self.setWindowFlags(
+            Qt.Window
+            | Qt.WindowTitleHint
+            | Qt.WindowMinimizeButtonHint
+            | Qt.WindowMaximizeButtonHint
+            | Qt.WindowCloseButtonHint
+        )
+
         self.setWindowTitle(f"Price & CVD — {symbol}")
         self.resize(self._DEFAULT_W, self._DEFAULT_H)
         self.setMinimumSize(620, 380)
         self.setStyleSheet("background:#0B0F1A;")
+
+        # ── Restore previous window geometry ──
+        self._settings_key = f"PriceCVDChart/{symbol}"
+        self._restore_geometry()
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -78,16 +71,9 @@ class PriceCVDChartDialog(QDialog):
 
         try:
             from PySide6.QtWebEngineWidgets import QWebEngineView
-            from PySide6.QtWebChannel import QWebChannel
 
             web_view = QWebEngineView(self)
             web_view.setContextMenuPolicy(Qt.NoContextMenu)
-
-            # ── QWebChannel: expose _WindowBridge as "bridge" to JS ──
-            self._bridge  = _WindowBridge(self)
-            self._channel = QWebChannel(self)
-            self._channel.registerObject("bridge", self._bridge)
-            web_view.page().setWebChannel(self._channel)
 
             web_view.setUrl(QUrl.fromLocalFile(str(html_path.resolve())))
             web_view.loadFinished.connect(self._on_web_view_loaded)
@@ -100,6 +86,29 @@ class PriceCVDChartDialog(QDialog):
             err.setStyleSheet("color:#EF5350; padding: 12px;")
             root.addWidget(err)
 
+    # ── Window geometry persistence ────────────────────────────────────────
+
+    def _qsettings(self) -> QSettings:
+        return QSettings("TradingTerminal", "PriceCVDChart")
+
+    def _restore_geometry(self) -> None:
+        qs = self._qsettings()
+        geom: QByteArray = qs.value(f"{self._settings_key}/geometry")  # type: ignore[assignment]
+        if geom and not geom.isEmpty():
+            self.restoreGeometry(geom)
+            logger.debug("[PriceCVDChart] Geometry restored for %s", self.symbol)
+
+    def _save_geometry(self) -> None:
+        qs = self._qsettings()
+        qs.setValue(f"{self._settings_key}/geometry", self.saveGeometry())
+        qs.sync()
+        logger.debug("[PriceCVDChart] Geometry saved for %s", self.symbol)
+
+    def closeEvent(self, event) -> None:  # type: ignore[override]
+        self._save_geometry()
+        super().closeEvent(event)
+
+    # ── Historical data ──────────────────────────────────────────────────
     def _fetch_historical(self, token: int, from_dt: datetime, to_dt: datetime) -> list[dict]:
         if not self.kite or not token:
             return []

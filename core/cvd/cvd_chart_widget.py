@@ -628,6 +628,38 @@ class CVDChartWidget(QWidget):
         if force or self._is_refresh_allowed():
             self._load_historical()
 
+    def apply_live_cvd_tick(self, cvd_value: float, timestamp: datetime | None = None):
+        """Apply websocket CVD updates directly to the active minute candle."""
+        if not self.live_mode:
+            return
+        if self.cvd_df is None or self.cvd_df.empty:
+            return
+
+        ts = (timestamp or datetime.now()).replace(second=0, microsecond=0)
+        cvd = float(cvd_value)
+
+        if ts in self.cvd_df.index:
+            row = self.cvd_df.loc[ts]
+            self.cvd_df.at[ts, "close"] = cvd
+            self.cvd_df.at[ts, "high"] = max(float(row["high"]), cvd)
+            self.cvd_df.at[ts, "low"] = min(float(row["low"]), cvd)
+        else:
+            prev_close = float(self.cvd_df.iloc[-1]["close"])
+            self.cvd_df.loc[ts, ["open", "high", "low", "close", "session"]] = [
+                prev_close,
+                max(prev_close, cvd),
+                min(prev_close, cvd),
+                cvd,
+                ts.date(),
+            ]
+            self.cvd_df.sort_index(inplace=True)
+
+            sessions = sorted(self.cvd_df["session"].unique())
+            if len(sessions) > 2:
+                self.cvd_df = self.cvd_df[self.cvd_df["session"].isin(sessions[-2:])]
+
+        self._plot()
+
     def stop_updates(self):
         if hasattr(self, "_poller"):
             self._poller.stop()
