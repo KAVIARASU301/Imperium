@@ -45,6 +45,9 @@ class PriceCVDChartDialog(QDialog):
         self._live_flush_timer.setSingleShot(True)
         self._live_flush_timer.setInterval(120)
         self._live_flush_timer.timeout.connect(self._flush_live_tick)
+        self._historical_refresh_timer = QTimer(self)
+        self._historical_refresh_timer.setSingleShot(True)
+        self._historical_refresh_timer.timeout.connect(self._refresh_historical_from_timer)
 
         # Promote to a full top-level window so the OS decorates it with
         # Minimize / Maximize / Close buttons in the native title bar.
@@ -123,6 +126,7 @@ class PriceCVDChartDialog(QDialog):
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
         self._live_flush_timer.stop()
+        self._historical_refresh_timer.stop()
         self._disconnect_live_feeds()
         self._teardown_web_view()
         self._save_geometry()
@@ -204,6 +208,22 @@ class PriceCVDChartDialog(QDialog):
             return
 
         self._web_ready = True
+        self._refresh_historical_chart_data()
+        self._schedule_next_historical_refresh()
+
+    def _refresh_historical_from_timer(self) -> None:
+        if not self._web_ready:
+            return
+        self._refresh_historical_chart_data()
+        self._schedule_next_historical_refresh()
+
+    def _schedule_next_historical_refresh(self) -> None:
+        now = datetime.now()
+        next_minute = (now.replace(second=0, microsecond=0) + timedelta(minutes=1, milliseconds=150))
+        interval_ms = max(250, int((next_minute - now).total_seconds() * 1000))
+        self._historical_refresh_timer.start(interval_ms)
+
+    def _refresh_historical_chart_data(self) -> None:
         try:
             to_dt = datetime.now()
             from_dt = to_dt - timedelta(days=8)
@@ -215,11 +235,7 @@ class PriceCVDChartDialog(QDialog):
                 "price": self._normalize_rows(price_rows),
                 "cvd": self._normalize_rows(cvd_rows),
             }
-            js = (
-                f"window.__PRICE_CVD_REAL_DATA__ = {json.dumps(payload)};"
-                "if (typeof window.__reloadPriceCvdData === 'function') window.__reloadPriceCvdData();"
-            )
-            self._web_view.page().runJavaScript(js)
+            self._inject_payload(payload)
             logger.info(
                 "[PriceCVDChart] Injected real data for %s (price=%d, cvd=%d)",
                 self.symbol,
@@ -228,6 +244,13 @@ class PriceCVDChartDialog(QDialog):
             )
         except Exception:
             logger.exception("[PriceCVDChart] Failed to inject real chart data for %s", self.symbol)
+
+    def _inject_payload(self, payload: dict) -> None:
+        js = (
+            f"window.__PRICE_CVD_REAL_DATA__ = {json.dumps(payload)};"
+            "if (typeof window.__reloadPriceCvdData === 'function') window.__reloadPriceCvdData();"
+        )
+        self._web_view.page().runJavaScript(js)
 
     def _on_cvd_updated(self, instrument_token: int, cvd_value: float, last_price: float) -> None:
         if instrument_token != self.instrument_token:

@@ -43,7 +43,6 @@
     display: flex;
     flex-direction: column;
     width: 100%; height: 100%;
-    min-height: 580px;
   }
 
   /* ── Toolbar ── */
@@ -191,7 +190,8 @@
 
   /* ── Chart area ── */
   #chart-area {
-    flex: 1;
+    flex: 1 1 0;
+    min-height: 0;
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -201,9 +201,10 @@
   .panel-wrap {
     position: relative;
     overflow: hidden;
+    min-height: 0;
   }
-  #price-wrap { flex: 0 0 50%; }
-  #cvd-wrap   { flex: 0 0 50%; border-top: 1px solid var(--border); }
+  #price-wrap { flex: 1 1 0; }
+  #cvd-wrap   { flex: 1 1 0; border-top: 1px solid var(--border); }
 
   canvas {
     display: block;
@@ -432,7 +433,7 @@ function saveSettings() {
       tf:          state.tf,
       candleW:     state.candleW,
       candleGap:   state.candleGap,
-      paneRatio:   _getPaneRatio(),
+      paneRatio:   state._paneRatio !== undefined ? state._paneRatio : _getPaneRatio(),
     };
     localStorage.setItem(STATE_KEY, JSON.stringify(s));
   } catch(e) { /* storage unavailable — ignore */ }
@@ -444,15 +445,15 @@ function _getPaneRatio() {
   return total > 0 ? pWrap.clientHeight / total : 0.5;
 }
 
-/** Apply a pane ratio (0..1) */
+/** Apply a pane ratio (0..1) using flex so panels always fill available space */
 function _applyPaneRatio(ratio) {
-  const area = chartArea.clientHeight - 4; // subtract divider
-  const pH = Math.round(area * ratio);
-  const cH = area - pH;
-  pWrap.style.flex   = 'none';
-  cWrap.style.flex   = 'none';
-  pWrap.style.height = Math.max(MIN_TOP_H, pH) + 'px';
-  cWrap.style.height = Math.max(MIN_BOTTOM_H, cH) + 'px';
+  const clampedRatio = Math.max(0.15, Math.min(0.85, ratio));
+  pWrap.style.flex = `${clampedRatio} 1 0`;
+  cWrap.style.flex = `${1 - clampedRatio} 1 0`;
+  pWrap.style.height = '';
+  cWrap.style.height = '';
+  // Store ratio for resize re-application
+  state._paneRatio = clampedRatio;
 }
 
 /** Load persisted settings and return merged object (or null on first run) */
@@ -1322,15 +1323,11 @@ divider.addEventListener('mousedown', e => {
 });
 document.addEventListener('mousemove', e => {
   if (!divDragging) return;
-  const dy   = e.clientY - divStartY;
-  const newP = Math.max(MIN_TOP_H, divStartPH + dy);
+  const dy    = e.clientY - divStartY;
   const total = divStartPH + divStartCH;
-  const newC = Math.max(MIN_BOTTOM_H, total - newP);
-  const actualP = total - newC;
-  pWrap.style.flex = 'none';
-  cWrap.style.flex = 'none';
-  pWrap.style.height = actualP + 'px';
-  cWrap.style.height = newC    + 'px';
+  const newP  = Math.max(MIN_TOP_H, Math.min(total - MIN_BOTTOM_H, divStartPH + dy));
+  const ratio = newP / total;
+  _applyPaneRatio(ratio);
   render();
 });
 document.addEventListener('mouseup', () => { if (!divDragging) return; divDragging = false; saveSettings(); });
@@ -1466,7 +1463,14 @@ _initQtBridge();
 // ═══════════════════════════════════════════════════════════════════════════
 //  RESIZE OBSERVER
 // ═══════════════════════════════════════════════════════════════════════════
-const ro = new ResizeObserver(() => render());
+const ro = new ResizeObserver(() => {
+  // Re-apply the stored ratio so panels fill available space after resize
+  if (state._paneRatio !== undefined) {
+    _applyPaneRatio(state._paneRatio);
+  }
+  render();
+});
+ro.observe(chartArea);
 ro.observe(pWrap);
 ro.observe(cWrap);
 
@@ -1533,6 +1537,7 @@ function restoreSettings() {
 
   // Restore pane ratio after layout is painted
   if (typeof saved.paneRatio === 'number') {
+    state._paneRatio = saved.paneRatio;
     requestAnimationFrame(() => {
       requestAnimationFrame(() => { _applyPaneRatio(saved.paneRatio); render(); });
     });
