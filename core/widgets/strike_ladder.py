@@ -136,10 +136,10 @@ class StrikeLadderWidget(QWidget):
         h.setSectionResizeMode(self.PE_BTN, QHeaderView.Fixed)
         h.setSectionResizeMode(self.STRIKE, QHeaderView.Fixed)
 
-        self.table.setColumnWidth(self.CE_BTN, 20)
-        self.table.setColumnWidth(self.CE_CHART, 18)
-        self.table.setColumnWidth(self.PE_CHART, 18)
-        self.table.setColumnWidth(self.PE_BTN, 20)
+        self.table.setColumnWidth(self.CE_BTN, 28)
+        self.table.setColumnWidth(self.CE_CHART, 16)
+        self.table.setColumnWidth(self.PE_CHART, 16)
+        self.table.setColumnWidth(self.PE_BTN, 28)
         self.table.setColumnWidth(self.STRIKE, 75)
 
         # Stretchable columns
@@ -366,7 +366,7 @@ class StrikeLadderWidget(QWidget):
 
     def _make_btn(self, c: Optional[Contract]) -> QPushButton:
         b = QPushButton()
-        b.setFixedSize(18, 16)
+        b.setFixedSize(26, 16)
         if not c:
             b.setEnabled(False)
             b.setStyleSheet("background: transparent;")
@@ -380,7 +380,7 @@ class StrikeLadderWidget(QWidget):
             QPushButton#strikeActionButton {{ background: transparent; color: {col}; 
                                               border: 1px solid {col}40; border-radius: 2px;
                                               font-size: 7px; font-weight: 700; 
-                                              padding: 0px; min-width: 0px; max-width: 18px;
+                                              padding: 0px; min-width: 0px; max-width: 26px;
                                               min-height: 0px; max-height: 16px; }}
             QPushButton#strikeActionButton:hover {{ background: {col}; color: #161A25; }}
         """)
@@ -389,7 +389,7 @@ class StrikeLadderWidget(QWidget):
     def _make_chart_btn(self, c: Optional[Contract]) -> QPushButton:
         """Create chart button for opening CVD Single Chart Dialog"""
         b = QPushButton()
-        b.setFixedSize(16, 16)
+        b.setFixedSize(14, 16)
         if not c:
             b.setEnabled(False)
             b.setStyleSheet("background: transparent;")
@@ -406,7 +406,7 @@ class StrikeLadderWidget(QWidget):
                 border-radius: 2px;
                 font-size: 8px;
                 font-weight: 600;
-                padding: 0px; min-width: 0px; max-width: 16px;
+                padding: 0px; min-width: 0px; max-width: 14px;
                 min-height: 0px; max-height: 16px;
             }
             QPushButton#strikeChartButton:hover { 
