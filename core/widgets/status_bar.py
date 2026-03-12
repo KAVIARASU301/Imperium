@@ -140,7 +140,7 @@ class StatusBarWidget:
         is_connected = "Connected" in status
 
         icon_path = connected_icon if is_connected else disconnected_icon
-        tint_color = QColor("#00E676") if is_connected else QColor("#FF5252")
+        tint_color = QColor("#1DB87E") if is_connected else QColor("#E0424A")
 
         if not os.path.exists(icon_path):
             return
@@ -193,11 +193,11 @@ class StatusBarWidget:
 
         # Determine color by status - handle both "Healthy" and "API Healthy" formats
         if "Healthy" in api_status:
-            tint_color = QColor("#00E676")  # green
+            tint_color = QColor("#1DB87E")  # green
         elif "Recovering" in api_status:
-            tint_color = QColor("#FFC107")  # amber
+            tint_color = QColor("#C89B3C")  # amber
         else:
-            tint_color = QColor("#FF1744")  # red
+            tint_color = QColor("#E0424A")  # red
 
         tinted = QPixmap(original.size())
         tinted.fill(Qt.transparent)

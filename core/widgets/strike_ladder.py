@@ -148,14 +148,14 @@ class StrikeLadderWidget(QWidget):
 
         self.setStyleSheet("""
             QTableWidget {
-                background-image: url("assets/textures/main_window_bg.png");
-                color: #E0E0E0;
-                border: none;
+                background-color: #0C0F17;
+                color: #C8D0DC;
+                border: 1px solid #1C2333;
                 font-size: 12px;
             }
             QHeaderView::section {
-                background: #041D27;
-                color: #A9B1C3;
+                background: #07090E;
+                color: #7A8799;
                 padding: 6px 4px;
                 border: none;
                 font-weight: 600;
@@ -179,38 +179,38 @@ class StrikeLadderWidget(QWidget):
                 width: 0px;
             }
             QScrollBar::handle:vertical {
-                background: rgba(169, 177, 195, 0.25);
-                border-radius: 3px;
+                background: #1C2333;
+                border-radius: 2px;
                 min-height: 30px;
             }
             QScrollBar::handle:vertical:hover {
-                background: rgba(169, 177, 195, 0.4);
+                background: #253047;
             }
             QCheckBox {
-                color: #A9B1C3;
+                color: #7A8799;
                 font-size: 11px;
             }
             QCheckBox::indicator {
                 width: 15px;
                 height: 15px;
                 border: 1px solid #3A4458;
-                border-radius: 3px;
+                border-radius: 2px;
             }
             QCheckBox::indicator:checked {
-                background: #29C7C9;
-                border-color: #29C7C9;
+                background: #00C4C6;
+                border-color: #00C4C6;
             }
             QMenu {
                 background: #1B2030;
                 border: 1px solid #3A4458;
-                border-radius: 6px;
+                border-radius: 2px;
                 padding: 6px;
             }
             QMenu::item {
                 padding: 7px 20px;
                 color: #E0E0E0;
                 font-size: 12px;
-                border-radius: 4px;
+                border-radius: 2px;
             }
             QMenu::item:selected {
                 background: #2A3350;
@@ -372,10 +372,10 @@ class StrikeLadderWidget(QWidget):
         b.setText(c.option_type)
         b.setCursor(Qt.PointingHandCursor)
         b.clicked.connect(lambda: self.strike_selected.emit(c))
-        col = "#29C7C9" if c.option_type == "CE" else "#F85149"
+        col = "#00C4C6" if c.option_type == "CE" else "#E0424A"
         b.setStyleSheet(f"""
             QPushButton {{ background: transparent; color: {col}; 
-                           border: 1px solid {col}40; border-radius: 3px;
+                           border: 1px solid {col}40; border-radius: 2px;
                            font-size: 9px; font-weight: 700; }}
             QPushButton:hover {{ background: {col}; color: #161A25; }}
         """)
@@ -395,9 +395,9 @@ class StrikeLadderWidget(QWidget):
         b.setStyleSheet("""
             QPushButton { 
                 background: transparent; 
-                color: #A9B1C3; 
+                color: #7A8799; 
                 border: 1px solid #3A445840; 
-                border-radius: 3px;
+                border-radius: 2px;
                 font-size: 13px;
                 font-weight: 600;
             }
@@ -413,7 +413,7 @@ class StrikeLadderWidget(QWidget):
         i = QTableWidgetItem(f"{s:.0f}")
         i.setTextAlignment(Qt.AlignCenter)
         if atm:
-            i.setForeground(QColor("#29C7C9"))
+            i.setForeground(QColor("#00C4C6"))
             f = QFont()
             f.setBold(True)
             i.setFont(f)
@@ -424,7 +424,7 @@ class StrikeLadderWidget(QWidget):
         i = QTableWidgetItem(txt)
         i.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
         if c and c.ltp:
-            i.setForeground(QColor("#29C7C9" if is_call else "#F85149"))
+            i.setForeground(QColor("#00C4C6" if is_call else "#E0424A"))
             f = QFont()
             f.setBold(True)
             i.setFont(f)
@@ -457,7 +457,7 @@ class StrikeLadderWidget(QWidget):
         if is_call:
             bar.setInvertedAppearance(True)
 
-        col = "#29C7C9" if is_call else "#F85149"
+        col = "#00C4C6" if is_call else "#E0424A"
         bar.setStyleSheet(f"""
             QProgressBar {{ border: none; border-radius: 1.5px; background: #2A3140; }}
             QProgressBar::chunk {{ background: {col}; border-radius: 1.5px; }}

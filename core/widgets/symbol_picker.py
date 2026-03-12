@@ -54,7 +54,7 @@ class SymbolPickerPopup(QWidget):
 
         # Search box
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("🔍 Search symbols...")
+        self.search_input.setPlaceholderText("Search symbols...")
         self.search_input.textChanged.connect(self._filter_symbols)
         content_layout.addWidget(self.search_input)
 
@@ -328,21 +328,21 @@ class SymbolPickerPopup(QWidget):
     def _apply_styles(self):
         self.setStyleSheet("""
             #popupContainer {
-                background-color: #1A1F2E;
-                border: 1px solid #3A4458;
-                border-radius: 8px;
+                background-color: #0C0F17;
+                border: 1px solid #1C2333;
+                border-radius: 2px;
             }
 
             QLineEdit {
-                background-color: #212635;
-                border: 1px solid #3A4458;
-                border-radius: 6px;
+                background-color: #111520;
+                border: 1px solid #1C2333;
+                border-radius: 2px;
                 color: #E0E0E0;
                 padding: 8px 12px;
                 font-size: 13px;
             }
             QLineEdit:focus {
-                border-color: #29C7C9;
+                border-color: #00C4C6;
             }
 
             #symbolScroll {
@@ -351,17 +351,19 @@ class SymbolPickerPopup(QWidget):
             }
 
             #groupHeader {
-                color: #29C7C9;
-                font-size: 14px;
-                font-weight: bold;
+                color: #00C4C6;
+                font-size: 10px;
+                font-weight: 700;
+                letter-spacing: 0.08em;
+                text-transform: uppercase;
                 padding: 4px 0px;
             }
 
             #symbolButton {
-                background-color: #212635;
+                background-color: #111520;
                 color: #E0E0E0;
-                border: 1px solid #3A4458;
-                border-radius: 5px;
+                border: 1px solid #1C2333;
+                border-radius: 2px;
                 padding: 8px 12px;
                 font-size: 12px;
                 font-weight: 500;
@@ -369,27 +371,27 @@ class SymbolPickerPopup(QWidget):
             }
             #symbolButton:hover {
                 background-color: #2A3144;
-                border-color: #29C7C9;
-                color: #FFFFFF;
+                border-color: #00C4C6;
+                color: #C8D0DC;
             }
             #symbolButton:pressed {
-                background-color: #29C7C9;
-                color: #161A25;
+                background-color: #00C4C6;
+                color: #07090E;
             }
             #symbolButton[kb_selected="true"] {
-                background-color: #29C7C9;
-                color: #161A25;
-                border-color: #29C7C9;
+                background-color: #00C4C6;
+                color: #07090E;
+                border-color: #00C4C6;
             }
 
             QScrollBar:vertical {
-                background-color: #1A1F2E;
+                background-color: #07090E;
                 width: 8px;
-                border-radius: 4px;
+                border-radius: 0px;
             }
             QScrollBar::handle:vertical {
                 background-color: #3A4458;
-                border-radius: 4px;
+                border-radius: 0px;
                 min-height: 20px;
             }
             QScrollBar::handle:vertical:hover {

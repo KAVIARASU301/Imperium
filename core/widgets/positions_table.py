@@ -39,9 +39,9 @@ class PositionsTable(QWidget):
     }
 
     GROUP_COLOR_OPTIONS = {
-        "Red": "#F85149",
-        "Green": "#34D399",
-        "Cyan": "#22D3EE",
+        "Red": "#E0424A",
+        "Green": "#1DB87E",
+        "Cyan": "#00C4C6",
         "White": "#E5E7EB",
         "Grey": "#9CA3AF",
         "Sky Blue": "#60A5FA",
@@ -172,7 +172,7 @@ class PositionsTable(QWidget):
         formatted = f"₹ {sign}{abs(total_pnl):,.0f}"
         self.total_pnl_value.setText(formatted)
 
-        color = "#1DE9B6" if total_pnl >= 0 else "#F85149"
+        color = "#1DB87E" if total_pnl >= 0 else "#E0424A"
         self.total_pnl_value.setStyleSheet(
             f"color: {color}; font-weight: 700; font-size: 13px;"
         )
@@ -367,7 +367,7 @@ class PositionsTable(QWidget):
                 self._portfolio_sl is None and self._portfolio_tp is None
         ):
             self.portfolio_sl_tp_label.setText("SL/TP: —")
-            self.portfolio_sl_tp_label.setStyleSheet("color: #A9B1C3;")
+            self.portfolio_sl_tp_label.setStyleSheet("color: #7A8799;")
             return
 
         parts = []
@@ -505,7 +505,7 @@ class PositionsTable(QWidget):
             if item:
                 if item.text() != new_pnl:
                     item.setText(new_pnl)
-                item.setForeground(QColor("#1DE9B6") if pnl >= 0 else QColor("#F85149"))
+                item.setForeground(QColor("#1DB87E") if pnl >= 0 else QColor("#E0424A"))
 
         # Update group header PnL rows in-place too
         for group_name, group_row in self.group_row_map.items():
@@ -519,7 +519,7 @@ class PositionsTable(QWidget):
             if item:
                 if item.text() != new_pnl:
                     item.setText(new_pnl)
-                item.setForeground(QColor("#1DE9B6") if group_pnl >= 0 else QColor("#F85149"))
+                item.setForeground(QColor("#1DB87E") if group_pnl >= 0 else QColor("#E0424A"))
 
         self._update_footer()
         self.table.setUpdatesEnabled(True)
@@ -605,7 +605,7 @@ class PositionsTable(QWidget):
         formatted = f"₹ {sign}{abs(total_pnl):,.0f}"
         self.total_pnl_value.setText(formatted)
 
-        color = "#1DE9B6" if total_pnl >= 0 else "#F85149"
+        color = "#1DB87E" if total_pnl >= 0 else "#E0424A"
         self.total_pnl_value.setStyleSheet(
             f"color: {color}; font-weight: 700; font-size: 13px;"
         )
@@ -624,7 +624,7 @@ class PositionsTable(QWidget):
     def _set_pnl_item(self, row, pnl):
         item = QTableWidgetItem(f"{pnl:,.0f}")
         item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        item.setForeground(QColor("#1DE9B6") if pnl >= 0 else QColor("#F85149"))
+        item.setForeground(QColor("#1DB87E") if pnl >= 0 else QColor("#E0424A"))
         font = QFont()
         font.setBold(True)
         item.setFont(font)
@@ -650,7 +650,7 @@ class PositionsTable(QWidget):
         if tp and tp > 0:
             tp_pnl = abs(tp - avg) * qty
             parts.append(
-                f"<span style='color:#34D399;'>Take Profit</span> "
+                f"<span style='color:#1DB87E;'>Take Profit</span> "
                 f"<span style='color:#E5E7EB;'>₹{tp_pnl:,.0f}</span> "
                 f"<span style='color:#9CA3AF;'>@ {tp:.2f}</span>"
             )
@@ -744,7 +744,7 @@ class PositionsTable(QWidget):
 
         pnl_item = QTableWidgetItem(f"{group_pnl:,.0f}")
         pnl_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        pnl_item.setForeground(QColor("#1DE9B6") if group_pnl >= 0 else QColor("#F85149"))
+        pnl_item.setForeground(QColor("#1DB87E") if group_pnl >= 0 else QColor("#E0424A"))
         pnl_font = QFont()
         pnl_font.setBold(True)
         pnl_item.setFont(pnl_font)
@@ -763,7 +763,7 @@ class PositionsTable(QWidget):
             )
         if tp is not None:
             parts.append(
-                f"<span style='color:#34D399;'>Group TP</span> "
+                f"<span style='color:#1DB87E;'>Group TP</span> "
                 f"<span style='color:#E5E7EB;'>₹{tp:,.0f}</span>"
             )
 
@@ -857,7 +857,7 @@ class PositionsTable(QWidget):
         for color_name, color_hex in self.GROUP_COLOR_OPTIONS.items():
             color_combo.addItem(f"{color_name} ({color_hex})", color_hex)
         color_combo.setMinimumHeight(32)
-        default_cyan_index = color_combo.findData("#22D3EE")
+        default_cyan_index = color_combo.findData("#00C4C6")
         if default_cyan_index >= 0:
             color_combo.setCurrentIndex(default_cyan_index)
 
@@ -867,7 +867,7 @@ class PositionsTable(QWidget):
         layout.addLayout(form)
 
         preview_card = QFrame()
-        preview_card.setStyleSheet("QFrame { background: #102431; border: 1px solid #2B3A4A; border-radius: 8px; }")
+        preview_card.setStyleSheet("QFrame { background: #111520; border: 1px solid #1C2333; border-radius: 2px; }")
         preview_layout = QHBoxLayout(preview_card)
         preview_layout.setContentsMargins(12, 10, 12, 10)
         preview_icon = QLabel()
@@ -908,58 +908,50 @@ class PositionsTable(QWidget):
 
         button_box.setStyleSheet("""
             QPushButton#secondaryButton {
-                background: #1E293B;
-                color: #CBD5E1;
-                border: 1px solid #334155;
-                border-radius: 8px;
+                background: #111520;
+                color: #C8D0DC;
+                border: 1px solid #1C2333;
+                border-radius: 2px;
                 padding: 8px 16px;
                 font-size: 12px;
                 font-weight: 600;
             }
 
             QPushButton#secondaryButton:hover {
-                background: #273449;
-                color: #E2E8F0;
-                border-color: #475569;
+                background: #161C28;
+                color: #C8D0DC;
+                border-color: #253047;
             }
 
             QPushButton#secondaryButton:pressed {
-                background: #182233;
+                background: #0A0D14;
             }
 
             QPushButton#primaryButton {
-                background: qlineargradient(
-                    x1: 0, y1: 0, x2: 1, y2: 1,
-                    stop: 0 #22D3EE,
-                    stop: 1 #14B8A6
-                );
-                color: #05202C;
-                border: 1px solid #4DE4EA;
-                border-radius: 8px;
+                background: #00A8AA;
+                color: #07090E;
+                border: 1px solid #00C4C6;
+                border-radius: 2px;
                 padding: 8px 18px;
                 font-size: 12px;
                 font-weight: 700;
             }
 
             QPushButton#primaryButton:hover {
-                background: qlineargradient(
-                    x1: 0, y1: 0, x2: 1, y2: 1,
-                    stop: 0 #67E8F9,
-                    stop: 1 #2DD4BF
-                );
-                border-color: #8AF0F5;
+                background: #00C4C6;
+                border-color: #00C4C6;
             }
 
             QPushButton#primaryButton:pressed {
-                background: #0EA5A6;
-                border-color: #14B8A6;
-                color: #03161F;
+                background: #008F91;
+                border-color: #00A8AA;
+                color: #07090E;
             }
 
             QPushButton:disabled {
-                background: #1F2937;
-                color: #64748B;
-                border-color: #334155;
+                background: #111520;
+                color: #3A4458;
+                border-color: #1C2333;
             }
         """)
         layout.addWidget(button_box)
@@ -986,7 +978,7 @@ class PositionsTable(QWidget):
         if style:
             self.group_styles[group_name] = {
                 "icon": self._normalize_group_icon_style(style.get("icon")),
-                "color": style.get("color", "#22D3EE"),
+                "color": style.get("color", "#00C4C6"),
             }
 
         for symbol in symbols:
@@ -1182,7 +1174,7 @@ class PositionsTable(QWidget):
                     style = self.group_styles.get(group_name, {})
                     self.group_styles[group_name] = {
                         "icon": self._normalize_group_icon_style(style.get("icon")),
-                        "color": style.get("color", "#22D3EE"),
+                        "color": style.get("color", "#00C4C6"),
                     }
         except Exception as e:
             logger.warning(f"Failed to load position order: {e}")
@@ -1628,16 +1620,16 @@ class PositionsTable(QWidget):
 
         self.setStyleSheet("""
             QTableWidget {
-                background-image: url("assets/textures/main_window_bg.png");
-                color: #E0E0E0;
-                border: none;
+                background-color: #0C0F17;
+                color: #C8D0DC;
+                border: 1px solid #1C2333;
                 font-size: 13px;
                 selection-background-color: #184540;
             }
 
             QHeaderView::section {
-                background: #041D27;               
-                color: #A9B1C3;
+                background: #07090E;               
+                color: #7A8799;
                 padding: 8px;
                 border: none;
                 font-weight: 600;
@@ -1653,17 +1645,17 @@ class PositionsTable(QWidget):
             }
 
             QScrollBar::handle:vertical {
-                background: rgba(169, 177, 195, 0.25);
-                border-radius: 4px;
+                background: #1C2333;
+                border-radius: 2px;
                 min-height: 30px;
             }
 
             QScrollBar::handle:vertical:hover {
-                background: rgba(169, 177, 195, 0.4);
+                background: #253047;
             }
 
             QScrollBar::handle:vertical:pressed {
-                background: rgba(41, 199, 201, 0.5);
+                background: #00C4C6;
             }
 
             QScrollBar::add-line:vertical,
@@ -1685,17 +1677,17 @@ class PositionsTable(QWidget):
             }
 
             QScrollBar::handle:horizontal {
-                background: rgba(169, 177, 195, 0.25);
-                border-radius: 4px;
+                background: #1C2333;
+                border-radius: 2px;
                 min-width: 30px;
             }
 
             QScrollBar::handle:horizontal:hover {
-                background: rgba(169, 177, 195, 0.4);
+                background: #253047;
             }
 
             QScrollBar::handle:horizontal:pressed {
-                background: rgba(41, 199, 201, 0.5);
+                background: #00C4C6;
             }
 
             QScrollBar::add-line:horizontal,
@@ -1739,13 +1731,13 @@ class PositionsTable(QWidget):
 
             /* Subtle depth: top/bottom light */
             QTableWidget::item:selected {
-                border-top: 1px solid rgba(120, 150, 255, 0.12);
-                border-bottom: 1px solid rgba(20, 30, 80, 0.45);
+                border-top: 1px solid #1C2333;
+                border-bottom: 1px solid #1C2333;
             }
 
             /* Hovered row (current cell, not selected) */
             QTableWidget::item:!selected:current {
-                background-color: rgba(4, 29, 39, 0.6);
+                background-color: #111520;
             }
 
             /* REMOVE current-cell focus rectangle */
@@ -1777,48 +1769,48 @@ class PositionsTable(QWidget):
 
             #footerButton {
                 background-color: transparent;
-                color: #A9B1C3;
+                color: #7A8799;
                 border: 1px solid #3A4458;
-                border-radius: 4px;
+                border-radius: 2px;
                 padding: 6px 12px;
                 font-size: 12px;
             }
 
             #footerButton:hover {
-                background-color: #29C7C9;
+                background-color: #00C4C6;
                 color: #161A25;
-                border-color: #29C7C9;
+                border-color: #00C4C6;
             }
 
             #portfolioSLTPLabel {
-                color: #A9B1C3;
+                color: #7A8799;
                 font-size: 12px;
                 font-weight: 500;
             }
 
             #footerIconButton {
                 background-color: transparent;
-                color: #A9B1C3;
+                color: #7A8799;
                 border: 1px solid #3A4458;
-                border-radius: 4px;
+                border-radius: 2px;
                 padding: 0px;
                 font-size: 13px;
                 font-weight: 600;
             }
 
             #footerIconButton:hover {
-                background-color: #29C7C9;
+                background-color: #00C4C6;
                 color: #161A25;
-                border-color: #29C7C9;
+                border-color: #00C4C6;
             }
             #portfolioSLTPLabel {
-                color: #A9B1C3;
+                color: #7A8799;
                 font-size: 11px;
                 font-weight: 500;
                 padding: 0px 8px;
             }
             #footerTitleLabel {
-                color: #A9B1C3;
+                color: #7A8799;
                 font-size: 11px;
                 font-weight: 600;
                 letter-spacing: 0.3px;
@@ -1831,9 +1823,9 @@ class PositionsTable(QWidget):
 
             /* ===== CONTEXT MENU ===== */
             QMenu {
-                background-color: #1B2030;
-                border: 1px solid #3A4458;
-                border-radius: 6px;
+                background-color: #0C0F17;
+                border: 1px solid #1C2333;
+                border-radius: 2px;
                 padding: 6px;
             }
 
@@ -1841,11 +1833,11 @@ class PositionsTable(QWidget):
                 padding: 8px 22px 8px 18px;
                 color: #E0E0E0;
                 font-size: 13px;
-                border-radius: 4px;
+                border-radius: 2px;
             }
 
             QMenu::item:selected {
-                background-color: #2A3350;
+                background-color: #111520;
             }
 
             QMenu::separator {
@@ -1856,11 +1848,11 @@ class PositionsTable(QWidget):
 
             /* Exit action – danger semantics */
             QMenu::item#exitAction {
-                color: #F85149;
+                color: #E0424A;
                 font-weight: 600;
             }
 
             QMenu::item#exitAction:selected {
-                background-color: rgba(248, 81, 73, 0.15);
+                background-color: #1A0709;
             }
         """)

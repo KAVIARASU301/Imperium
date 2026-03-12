@@ -34,11 +34,14 @@ class AnimatedTableWidgetItem(QTableWidgetItem):
         if is_pnl:
             # Set a faint background shade instead of changing text color
             if value > 0:
-                self.setBackground(QColor(46, 160, 67, 30))  # Lite Green Shade
+                self.setBackground(QColor("#111520"))
+                self.setForeground(QColor("#1DB87E"))
             elif value < 0:
-                self.setBackground(QColor(248, 81, 73, 30))  # Lite Red Shade
+                self.setBackground(QColor("#1A0709"))
+                self.setForeground(QColor("#E0424A"))
             else:
-                self.setBackground(QColor("transparent"))
+                self.setBackground(QColor("#0C0F17"))
+                self.setForeground(QColor("#C8D0DC"))
 
             # Format currency
             self.setText(f"₹{value:,.2f}")
@@ -96,49 +99,49 @@ class OpenPositionsTable(QWidget):
         """Apply rich dark theme styling to the table"""
         self.setStyleSheet("""
             QTableWidget {
-                background-color: #0d1117;
-                alternate-background-color: #161b22;
-                color: #e6edf3;
-                gridline-color: #30363d;
-                border: 1px solid #30363d;
-                border-radius: 8px;
-                selection-background-color: #2c313a;
+                background-color: #0C0F17;
+                alternate-background-color: #111520;
+                color: #C8D0DC;
+                gridline-color: #1C2333;
+                border: 1px solid #1C2333;
+                border-radius: 0px;
+                selection-background-color: #161C28;
                 font-size: 13px;
             }
-            QTableWidget::item { padding: 8px; border-bottom: 1px solid #21262d; }
-            QTableWidget::item:selected { background-color: #2c313a; color: white; }
-            QTableWidget::item:hover { background-color: #21262d; }
+            QTableWidget::item { padding: 8px; border-bottom: 1px solid #1C2333; }
+            QTableWidget::item:selected { background-color: #161C28; color: #C8D0DC; border-left: 2px solid #00C4C6; }
+            QTableWidget::item:hover { background-color: #111520; }
             QHeaderView::section {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #30363d, stop:1 #21262d);
-                color: #e6edf3; padding: 10px 8px; border: none;
-                border-right: 1px solid #21262d; border-bottom: 2px solid #1f6feb;
-                font-weight: bold; font-size: 12px;
+                background: #07090E;
+                color: #C8D0DC; padding: 10px 8px; border: none;
+                border-right: 1px solid #1C2333; border-bottom: 2px solid #00C4C6;
+                font-weight: 700; font-size: 11px;
             }
-            QHeaderView::section:hover { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #444c56, stop:1 #30363d); }
+            QHeaderView::section:hover { background: #111520; }
 
             /* --- Polished Exit Button Style --- */
             #exitButton {
                 background-color: transparent;
-                color: #F85149;
+                color: #E0424A;
                 border: 1px solid #c93c37;
-                border-radius: 5px;
+                border-radius: 2px;
                 padding: 5px 10px;
                 font-weight: 600;
                 font-size: 11px;
             }
             #exitButton:hover {
-                background-color: #F85149;
+                background-color: #E0424A;
                 color: #FFFFFF;
-                border-color: #F85149;
+                border-color: #E0424A;
             }
             #exitButton:pressed {
                 background-color: #DA3633;
                 border-color: #DA3633;
             }
 
-            QScrollBar:vertical { background: #21262d; width: 12px; border-radius: 6px; }
-            QScrollBar::handle:vertical { background: #444c56; border-radius: 6px; min-height: 20px; }
-            QScrollBar::handle:vertical:hover { background: #58a6ff; }
+            QScrollBar:vertical { background: #07090E; width: 12px; border-radius: 0px; }
+            QScrollBar::handle:vertical { background: #1C2333; border-radius: 0px; min-height: 20px; }
+            QScrollBar::handle:vertical:hover { background: #253047; }
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { border: none; background: none; }
         """)
 
@@ -193,7 +196,7 @@ class OpenPositionsTable(QWidget):
 
         divider_item = QTableWidgetItem("")
         divider_item.setFlags(Qt.ItemFlag.NoItemFlags)
-        divider_item.setBackground(QColor("#ffd33d"))
+        divider_item.setBackground(QColor("#1C2333"))
         self.table.setItem(row_index, 0, divider_item)
         self.table.setSpan(row_index, 0, 1, self.table.columnCount())
         self.table.setRowHeight(row_index, 4)
@@ -235,13 +238,13 @@ class OpenPositionsTable(QWidget):
 
         qty_item = self.table.item(row, 2)
         qty_item.setText(f"{position.quantity:,}")
-        qty_item.setForeground(QColor("#a0a0a0"))
+        qty_item.setForeground(QColor("#7A8799"))
 
         self.table.item(row, 3).setText(f"₹{position.average_price:.2f}")
 
         ltp_item = self.table.item(row, 4)
         ltp_item.setText(f"₹{position.ltp:.2f}")
-        ltp_item.setForeground(QColor("#58a6ff"))
+        ltp_item.setForeground(QColor("#C8D0DC"))
 
         pnl_item = self.table.item(row, 5)
         if isinstance(pnl_item, AnimatedTableWidgetItem):
@@ -253,11 +256,14 @@ class OpenPositionsTable(QWidget):
         pnl_percent_item.setText(f"{pnl_percent:.2f}%")
 
         if pnl_percent > 0:
-            pnl_percent_item.setBackground(QColor(46, 160, 67, 30))
+            pnl_percent_item.setBackground(QColor("#111520"))
+            pnl_percent_item.setForeground(QColor("#1DB87E"))
         elif pnl_percent < 0:
-            pnl_percent_item.setBackground(QColor(248, 81, 73, 30))
+            pnl_percent_item.setBackground(QColor("#1A0709"))
+            pnl_percent_item.setForeground(QColor("#E0424A"))
         else:
-            pnl_percent_item.setBackground(QColor("transparent"))
+            pnl_percent_item.setBackground(QColor("#0C0F17"))
+            pnl_percent_item.setForeground(QColor("#C8D0DC"))
 
     def get_all_positions(self) -> List[Position]:
         """Get all current positions"""

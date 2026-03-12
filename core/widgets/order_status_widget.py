@@ -93,14 +93,14 @@ class OrderStatusWidget(QWidget):
         txn = self.order_data.get("transaction_type", "").upper()
 
         # Default (BUY / pending / open)
-        line_color = "#29C7C9"  # teal
+        line_color = "#00C4C6"  # teal
 
         if status in ("rejected", "cancelled", "canceled"):
-            line_color = "#F85149"  # red
+            line_color = "#E0424A"  # red
         elif status in ("complete", "filled"):
-            line_color = "#00D1B2"  # success green
+            line_color = "#1DB87E"  # success green
         elif txn == "SELL":
-            line_color = "#F85149"  # sell = red intent
+            line_color = "#E0424A"  # sell = danger
 
         status_line.setStyleSheet(f"background-color: {line_color};")
 
@@ -255,135 +255,70 @@ class OrderStatusWidget(QWidget):
 
     def _apply_styles(self):
         self.setStyleSheet("""
-        /* =========================
-           MAIN CONTAINER
-           ========================= */
-
         #mainContainer {
-            background-color: qlineargradient(
-                x1: 0, y1: 0, x2: 1, y2: 1,
-                stop: 0 #1A2030,
-                stop: 1 #141A28
-            );
-            border: 1px solid #3F4A62;
-            border-radius: 12px;
+            background-color: #0C0F17;
+            border: 1px solid #1C2333;
+            border-radius: 2px;
         }
-
-        /* =========================
-           STATUS INDICATOR LINE
-           (color is overridden in code based on status)
-           ========================= */
-
         #statusLine {
-            background-color: #29C7C9;
-            border-top-left-radius: 12px;
-            border-top-right-radius: 12px;
+            background-color: #00C4C6;
+            border-radius: 0px;
         }
-
-        /* =========================
-           HEADER
-           ========================= */
-
         #symbolLabel {
-            color: #FFFFFF;
+            color: #C8D0DC;
             font-size: 14px;
             font-weight: 600;
             letter-spacing: 0.2px;
         }
-
         #statusBadge {
-            background-color: rgba(47, 58, 80, 0.9);
-            color: #C4CCE0;
-            border: 1px solid #495573;
+            background-color: #111520;
+            color: #7A8799;
+            border: 1px solid #1C2333;
             font-size: 10px;
             font-weight: 700;
             padding: 4px 10px;
-            border-radius: 10px;
+            border-radius: 0px;
             letter-spacing: 0.4px;
         }
-
-        /* =========================
-           ORDER DETAILS
-           ========================= */
-
         #buyLabel {
-            color: #29C7C9;
+            color: #00C4C6;
             font-size: 12px;
             font-weight: 600;
         }
-
         #sellLabel {
-            color: #F85149;
+            color: #E0424A;
             font-size: 12px;
             font-weight: 600;
         }
-
-        #infoLabel {
-            color: #A9B1C3;
-            font-size: 12px;
-            font-weight: 500;
-        }
-
-        #toneDot {
-            font-size: 13px;
-            font-weight: 700;
-        }
-
-        #headlineLabel {
-            color: #EAF1FF;
-            font-size: 13px;
-            font-weight: 700;
-            letter-spacing: 0.1px;
-        }
-
-        /* =========================
-           BUTTONS (TERMINAL STYLE)
-           ========================= */
-
+        #infoLabel { color: #7A8799; font-size: 12px; font-weight: 500; }
+        #toneDot { font-size: 13px; font-weight: 700; }
+        #headlineLabel { color: #C8D0DC; font-size: 13px; font-weight: 700; letter-spacing: 0.1px; }
         QPushButton {
             font-family: "Segoe UI", system-ui;
             font-weight: 600;
-            border-radius: 8px;
+            border-radius: 2px;
             padding: 6px 12px;
             font-size: 10px;
             border: 1px solid transparent;
             letter-spacing: 0.3px;
             min-height: 24px;
         }
-
-
-        /* Secondary action */
         #modifyButton {
-            background-color: #222A3D;
-            color: #B5BED2;
-            border-color: #3E4A66;
+            background-color: #111520;
+            color: #C8D0DC;
+            border-color: #1C2333;
         }
-
-        #modifyButton:hover {
-            background-color: #2A3140;
-            color: #E0E0E0;
-        }
-
-        #modifyButton:pressed {
-            background-color: #1E2433;
-        }
-
-        /* Danger action */
+        #modifyButton:hover { background-color: #161C28; color: #C8D0DC; border-color: #253047; }
+        #modifyButton:pressed { background-color: #0A0D14; }
         #cancelButton {
-            background-color: rgba(248, 81, 73, 0.92);
-            color: #0F131E;
+            background-color: #1A0709;
+            color: #E0424A;
             font-weight: 700;
             padding: 6px 14px;
+            border: 1px solid #E0424A;
         }
-
-        #cancelButton:hover {
-            background-color: #FA6B64;
-        }
-
-        #cancelButton:pressed {
-            background-color: #E6453E;
-        }
-
+        #cancelButton:hover { background-color: #2A1215; }
+        #cancelButton:pressed { background-color: #0F0305; }
         """)
 
 

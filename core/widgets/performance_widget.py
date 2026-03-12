@@ -84,7 +84,7 @@ class PerformanceWidget(QGroupBox):
             title_label = QLabel(label_text)
             title_label.setAlignment(Qt.AlignCenter)
             title_label.setFont(QFont("Inter", 8))
-            title_label.setStyleSheet("color: #7A8799;")
+            title_label.setObjectName("metricTitle")
             title_label.setMinimumHeight(15)
 
             container_layout.addWidget(value_label)
@@ -95,6 +95,9 @@ class PerformanceWidget(QGroupBox):
                     background-color: #111520;
                     border: 1px solid #1C2333;
                     border-radius: 2px;
+                }
+                QLabel#metricTitle {
+                    color: #7A8799;
                 }
                 QLabel#value {
                     color: #C8D0DC;
