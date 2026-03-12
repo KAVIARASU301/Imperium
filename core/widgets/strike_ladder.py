@@ -136,10 +136,10 @@ class StrikeLadderWidget(QWidget):
         h.setSectionResizeMode(self.PE_BTN, QHeaderView.Fixed)
         h.setSectionResizeMode(self.STRIKE, QHeaderView.Fixed)
 
-        self.table.setColumnWidth(self.CE_BTN, 32)
-        self.table.setColumnWidth(self.CE_CHART, 32)
-        self.table.setColumnWidth(self.PE_CHART, 32)
-        self.table.setColumnWidth(self.PE_BTN, 32)
+        self.table.setColumnWidth(self.CE_BTN, 20)
+        self.table.setColumnWidth(self.CE_CHART, 18)
+        self.table.setColumnWidth(self.PE_CHART, 18)
+        self.table.setColumnWidth(self.PE_BTN, 20)
         self.table.setColumnWidth(self.STRIKE, 75)
 
         # Stretchable columns
@@ -222,7 +222,9 @@ class StrikeLadderWidget(QWidget):
 
         fixed_width = (
                 self.table.columnWidth(self.CE_BTN)
+                + self.table.columnWidth(self.CE_CHART)
                 + self.table.columnWidth(self.PE_BTN)
+                + self.table.columnWidth(self.PE_CHART)
                 + self.table.columnWidth(self.STRIKE)
         )
 
@@ -364,44 +366,50 @@ class StrikeLadderWidget(QWidget):
 
     def _make_btn(self, c: Optional[Contract]) -> QPushButton:
         b = QPushButton()
-        b.setFixedSize(28, 20)
+        b.setFixedSize(18, 16)
         if not c:
             b.setEnabled(False)
             b.setStyleSheet("background: transparent;")
             return b
+        b.setObjectName("strikeActionButton")
         b.setText(c.option_type)
         b.setCursor(Qt.PointingHandCursor)
         b.clicked.connect(lambda: self.strike_selected.emit(c))
         col = "#00C4C6" if c.option_type == "CE" else "#E0424A"
         b.setStyleSheet(f"""
-            QPushButton {{ background: transparent; color: {col}; 
-                           border: 1px solid {col}40; border-radius: 2px;
-                           font-size: 9px; font-weight: 700; }}
-            QPushButton:hover {{ background: {col}; color: #161A25; }}
+            QPushButton#strikeActionButton {{ background: transparent; color: {col}; 
+                                              border: 1px solid {col}40; border-radius: 2px;
+                                              font-size: 7px; font-weight: 700; 
+                                              padding: 0px; min-width: 0px; max-width: 18px;
+                                              min-height: 0px; max-height: 16px; }}
+            QPushButton#strikeActionButton:hover {{ background: {col}; color: #161A25; }}
         """)
         return b
 
     def _make_chart_btn(self, c: Optional[Contract]) -> QPushButton:
         """Create chart button for opening CVD Single Chart Dialog"""
         b = QPushButton()
-        b.setFixedSize(28, 20)
+        b.setFixedSize(16, 16)
         if not c:
             b.setEnabled(False)
             b.setStyleSheet("background: transparent;")
             return b
+        b.setObjectName("strikeChartButton")
         b.setText("🗠")  # Minimal line chart icon
         b.setCursor(Qt.PointingHandCursor)
         b.clicked.connect(lambda: self.chart_requested.emit(c))
         b.setStyleSheet("""
-            QPushButton { 
+            QPushButton#strikeChartButton { 
                 background: transparent; 
                 color: #7A8799; 
                 border: 1px solid #3A445840; 
                 border-radius: 2px;
-                font-size: 13px;
+                font-size: 8px;
                 font-weight: 600;
+                padding: 0px; min-width: 0px; max-width: 16px;
+                min-height: 0px; max-height: 16px;
             }
-            QPushButton:hover { 
+            QPushButton#strikeChartButton:hover { 
                 background: #5B9BD5; 
                 color: #161A25; 
                 border: 1px solid #5B9BD5;
