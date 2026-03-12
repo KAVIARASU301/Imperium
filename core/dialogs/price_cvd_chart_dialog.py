@@ -3,16 +3,45 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta
 from pathlib import Path
+import json
 
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import Qt, QObject, QUrl, Slot
 from PySide6.QtWidgets import QDialog, QLabel, QVBoxLayout
 
 logger = logging.getLogger(__name__)
 
 
+class _WindowBridge(QObject):
+    """Slots exposed to the chart's JS window-control buttons via QWebChannel."""
+
+    def __init__(self, dialog: QDialog) -> None:
+        super().__init__(dialog)
+        self._dialog = dialog
+
+    @Slot()
+    def minimize(self) -> None:
+        self._dialog.showMinimized()
+
+    @Slot()
+    def toggleMaximize(self) -> None:
+        if self._dialog.isMaximized():
+            self._dialog.showNormal()
+        else:
+            self._dialog.showMaximized()
+
+    @Slot()
+    def close(self) -> None:
+        self._dialog.close()
+
+
 class PriceCVDChartDialog(QDialog):
     """Dialog that hosts the Price/CVD chart HTML in a web view."""
+
+    # Compact default — user can maximise via in-chart controls or OS chrome
+    _DEFAULT_W = 860
+    _DEFAULT_H = 500
 
     def __init__(
         self,
@@ -30,9 +59,9 @@ class PriceCVDChartDialog(QDialog):
         self.cvd_engine = cvd_engine
         self.price_instrument_token = price_instrument_token or instrument_token
 
-        self.setWindowTitle(f"Price & CVD Chart — {symbol}")
-        self.resize(1320, 780)
-        self.setMinimumSize(900, 560)
+        self.setWindowTitle(f"Price & CVD — {symbol}")
+        self.resize(self._DEFAULT_W, self._DEFAULT_H)
+        self.setMinimumSize(620, 380)
         self.setStyleSheet("background:#0B0F1A;")
 
         root = QVBoxLayout(self)
@@ -49,10 +78,19 @@ class PriceCVDChartDialog(QDialog):
 
         try:
             from PySide6.QtWebEngineWidgets import QWebEngineView
+            from PySide6.QtWebChannel import QWebChannel
 
             web_view = QWebEngineView(self)
             web_view.setContextMenuPolicy(Qt.NoContextMenu)
+
+            # ── QWebChannel: expose _WindowBridge as "bridge" to JS ──
+            self._bridge  = _WindowBridge(self)
+            self._channel = QWebChannel(self)
+            self._channel.registerObject("bridge", self._bridge)
+            web_view.page().setWebChannel(self._channel)
+
             web_view.setUrl(QUrl.fromLocalFile(str(html_path.resolve())))
+            web_view.loadFinished.connect(self._on_web_view_loaded)
             root.addWidget(web_view)
             self._web_view = web_view
             logger.info("[PriceCVDChart] Loaded HTML chart from %s", html_path)
@@ -61,3 +99,68 @@ class PriceCVDChartDialog(QDialog):
             err = QLabel("Unable to initialize embedded chart view.")
             err.setStyleSheet("color:#EF5350; padding: 12px;")
             root.addWidget(err)
+
+    def _fetch_historical(self, token: int, from_dt: datetime, to_dt: datetime) -> list[dict]:
+        if not self.kite or not token:
+            return []
+        try:
+            data = self.kite.historical_data(token, from_dt, to_dt, interval="minute")
+            if isinstance(data, list):
+                return data
+        except Exception:
+            logger.exception("[PriceCVDChart] Historical fetch failed for token=%s", token)
+        return []
+
+    @staticmethod
+    def _normalize_rows(rows: list[dict]) -> list[dict]:
+        normalized = []
+        for r in rows:
+            dt = r.get("date")
+            if not dt:
+                continue
+            try:
+                if hasattr(dt, "isoformat"):
+                    ts = dt.isoformat()
+                else:
+                    ts = str(dt)
+            except Exception:
+                continue
+            normalized.append({
+                "date": ts,
+                "o": float(r.get("open", 0.0)),
+                "h": float(r.get("high", 0.0)),
+                "l": float(r.get("low", 0.0)),
+                "c": float(r.get("close", 0.0)),
+                "v": float(r.get("volume", 0.0)),
+            })
+        return normalized
+
+    def _on_web_view_loaded(self, ok: bool):
+        if not ok:
+            logger.warning("[PriceCVDChart] Web view failed to load for %s", self.symbol)
+            return
+
+        try:
+            to_dt = datetime.now()
+            from_dt = to_dt - timedelta(days=8)
+
+            price_rows = self._fetch_historical(self.price_instrument_token, from_dt, to_dt)
+            cvd_rows = self._fetch_historical(self.instrument_token, from_dt, to_dt)
+
+            payload = {
+                "price": self._normalize_rows(price_rows),
+                "cvd": self._normalize_rows(cvd_rows),
+            }
+            js = (
+                f"window.__PRICE_CVD_REAL_DATA__ = {json.dumps(payload)};"
+                "if (typeof window.__reloadPriceCvdData === 'function') window.__reloadPriceCvdData();"
+            )
+            self._web_view.page().runJavaScript(js)
+            logger.info(
+                "[PriceCVDChart] Injected real data for %s (price=%d, cvd=%d)",
+                self.symbol,
+                len(payload["price"]),
+                len(payload["cvd"]),
+            )
+        except Exception:
+            logger.exception("[PriceCVDChart] Failed to inject real chart data for %s", self.symbol)
