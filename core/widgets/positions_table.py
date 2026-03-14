@@ -119,7 +119,7 @@ class PositionsTable(QWidget):
         # --- LEFT: Refresh button ---
         self.refresh_button = QPushButton("⟳")
         self.refresh_button.setObjectName("footerIconButton")
-        self.refresh_button.setFixedSize(20, 20)
+        self.refresh_button.setFixedSize(18, 18)
         self.refresh_button.setToolTip("Refresh Positions")
 
         # --- CENTER: Portfolio SL/TP ---
@@ -1790,19 +1790,25 @@ class PositionsTable(QWidget):
             }
 
             #footerIconButton {
-                background-color: transparent;
-                color: #8B949E;
+                background-color: #111821;
+                color: #7F8A98;
                 border: 1px solid #30363D;
-                border-radius: 2px;
+                border-radius: 9px;
                 padding: 0px;
-                font-size: 13px;
-                font-weight: 600;
+                font-size: 11px;
+                font-weight: 500;
             }
 
             #footerIconButton:hover {
-                background-color: #1F6FEB;
-                color: #FFFFFF;
-                border-color: #58A6FF;
+                background-color: #161F2A;
+                color: #AAB4C2;
+                border-color: #3A4653;
+            }
+
+            #footerIconButton:pressed {
+                background-color: #0D131B;
+                color: #C4CCD7;
+                border-color: #4A5665;
             }
             #portfolioSLTPLabel {
                 color: #7A8799;
