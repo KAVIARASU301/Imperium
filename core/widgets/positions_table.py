@@ -161,7 +161,7 @@ class PositionsTable(QWidget):
         """Visual separator line."""
         sep = QWidget()
         sep.setFixedWidth(1)
-        sep.setStyleSheet("background: #3A4458;")
+        sep.setStyleSheet("background: #30363D;")
         return sep
 
     def _update_footer(self):
@@ -1620,18 +1620,19 @@ class PositionsTable(QWidget):
 
         self.setStyleSheet("""
             QTableWidget {
-                background-color: #0C0F17;
-                color: #C8D0DC;
-                border: 1px solid #1C2333;
+                background-color: #0D1117;
+                color: #C9D1D9;
+                border: 1px solid #21262D;
                 font-size: 13px;
-                selection-background-color: #184540;
+                selection-background-color: #1F2937;
             }
 
             QHeaderView::section {
-                background: #07090E;               
-                color: #7A8799;
+                background: #161B22;
+                color: #8B949E;
                 padding: 8px;
                 border: none;
+                border-bottom: 1px solid #30363D;
                 font-weight: 600;
                 font-size: 12px;
             }
@@ -1645,17 +1646,17 @@ class PositionsTable(QWidget):
             }
 
             QScrollBar::handle:vertical {
-                background: #1C2333;
+                background: #30363D;
                 border-radius: 2px;
                 min-height: 30px;
             }
 
             QScrollBar::handle:vertical:hover {
-                background: #253047;
+                background: #484F58;
             }
 
             QScrollBar::handle:vertical:pressed {
-                background: #00C4C6;
+                background: #58A6FF;
             }
 
             QScrollBar::add-line:vertical,
@@ -1677,17 +1678,17 @@ class PositionsTable(QWidget):
             }
 
             QScrollBar::handle:horizontal {
-                background: #1C2333;
+                background: #30363D;
                 border-radius: 2px;
                 min-width: 30px;
             }
 
             QScrollBar::handle:horizontal:hover {
-                background: #253047;
+                background: #484F58;
             }
 
             QScrollBar::handle:horizontal:pressed {
-                background: #00C4C6;
+                background: #58A6FF;
             }
 
             QScrollBar::add-line:horizontal,
@@ -1716,7 +1717,7 @@ class PositionsTable(QWidget):
             /* MAIN ROW SEPARATOR */
             QTableWidget::item {
                 padding: 5px 8px;
-                border-bottom: 1px solid #1E2430;
+                border-bottom: 1px solid #21262D;
             }
 
             /* ROW HOVER (via selection) */
@@ -1724,20 +1725,20 @@ class PositionsTable(QWidget):
             QTableWidget::item:selected,
             QTableWidget::item:selected:active,
             QTableWidget::item:selected:!active {
-                background-color: #184540; 
-                color: #E6E9F2;
+                background-color: #1F2937;
+                color: #F0F6FC;
                 border: none;
             }
 
             /* Subtle depth: top/bottom light */
             QTableWidget::item:selected {
-                border-top: 1px solid #1C2333;
-                border-bottom: 1px solid #1C2333;
+                border-top: 1px solid #30363D;
+                border-bottom: 1px solid #30363D;
             }
 
             /* Hovered row (current cell, not selected) */
             QTableWidget::item:!selected:current {
-                background-color: #111520;
+                background-color: #161B22;
             }
 
             /* REMOVE current-cell focus rectangle */
@@ -1758,7 +1759,7 @@ class PositionsTable(QWidget):
 
             #footer {
                 background: transparent;
-                border-top: 1px solid #3A4458;
+                border-top: 1px solid #30363D;
             }
 
             #footerLabel {
@@ -1769,17 +1770,17 @@ class PositionsTable(QWidget):
 
             #footerButton {
                 background-color: transparent;
-                color: #7A8799;
-                border: 1px solid #3A4458;
+                color: #8B949E;
+                border: 1px solid #30363D;
                 border-radius: 2px;
                 padding: 6px 12px;
                 font-size: 12px;
             }
 
             #footerButton:hover {
-                background-color: #00C4C6;
-                color: #161A25;
-                border-color: #00C4C6;
+                background-color: #1F6FEB;
+                color: #FFFFFF;
+                border-color: #58A6FF;
             }
 
             #portfolioSLTPLabel {
@@ -1790,8 +1791,8 @@ class PositionsTable(QWidget):
 
             #footerIconButton {
                 background-color: transparent;
-                color: #7A8799;
-                border: 1px solid #3A4458;
+                color: #8B949E;
+                border: 1px solid #30363D;
                 border-radius: 2px;
                 padding: 0px;
                 font-size: 13px;
@@ -1799,9 +1800,9 @@ class PositionsTable(QWidget):
             }
 
             #footerIconButton:hover {
-                background-color: #00C4C6;
-                color: #161A25;
-                border-color: #00C4C6;
+                background-color: #1F6FEB;
+                color: #FFFFFF;
+                border-color: #58A6FF;
             }
             #portfolioSLTPLabel {
                 color: #7A8799;
@@ -1823,26 +1824,26 @@ class PositionsTable(QWidget):
 
             /* ===== CONTEXT MENU ===== */
             QMenu {
-                background-color: #0C0F17;
-                border: 1px solid #1C2333;
+                background-color: #161B22;
+                border: 1px solid #30363D;
                 border-radius: 2px;
                 padding: 6px;
             }
 
             QMenu::item {
                 padding: 8px 22px 8px 18px;
-                color: #E0E0E0;
+                color: #C9D1D9;
                 font-size: 13px;
                 border-radius: 2px;
             }
 
             QMenu::item:selected {
-                background-color: #111520;
+                background-color: #1F2937;
             }
 
             QMenu::separator {
                 height: 1px;
-                background: #3A4458;
+                background: #30363D;
                 margin: 6px 4px;
             }
 
