@@ -393,19 +393,27 @@ class BuyExitPanel(QWidget):
                 letter-spacing: 0.06em;
             }
             #primaryButton {
-                background-color: #00A8AA;
-                color: #07090E;
-                border: 1px solid #00C4C6;
+                background-color: #111520;
+                color: #8FA3AC;
+                border: 1px solid #23323E;
                 font-weight: 700;
             }
-            #primaryButton:hover { background-color: #00C4C6; border-color: #00C4C6; }
+            #primaryButton:hover {
+                background-color: #00C4C6;
+                color: #07090E;
+                border-color: #00C4C6;
+            }
             #primaryButton:pressed { background-color: #008F91; }
             #dangerButton {
-                background-color: #1A0709;
-                color: #E0424A;
-                border: 1px solid #3D1517;
+                background-color: #111520;
+                color: #A99398;
+                border: 1px solid #3A2A2D;
             }
-            #dangerButton:hover { background-color: #2A1215; border-color: #E0424A; }
+            #dangerButton:hover {
+                background-color: #2A1215;
+                color: #E0424A;
+                border-color: #E0424A;
+            }
             #dangerButton:pressed { background-color: #0F0305; }
         """)
 

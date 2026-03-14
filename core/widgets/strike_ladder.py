@@ -217,6 +217,7 @@ class StrikeLadderWidget(QWidget):
         self.table.setSelectionMode(QAbstractItemView.NoSelection)
         self.table.setFocusPolicy(Qt.NoFocus)
         self.table.setCurrentCell(-1, -1)
+        self.table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
         h = self.table.horizontalHeader()
         h.setFixedHeight(24)
@@ -265,11 +266,11 @@ class StrikeLadderWidget(QWidget):
             QTableWidget::item:selected   {{ background: transparent; }}
             QScrollBar:vertical {{
                 background: transparent;
-                width: 4px;
+                width: 0px;
                 margin: 0px;
             }}
             QScrollBar::handle:vertical {{
-                background: #1C2333;
+                background: transparent;
                 border-radius: 2px;
                 min-height: 24px;
             }}
@@ -443,6 +444,7 @@ class StrikeLadderWidget(QWidget):
             return b
 
         col = CE_COLOR if ot == 'CE' else PE_COLOR
+        border_col = f"{col}55"
         b.setObjectName("strikeActionButton")
         b.setText(ot)
         b.setCursor(Qt.PointingHandCursor)
@@ -451,7 +453,7 @@ class StrikeLadderWidget(QWidget):
             QPushButton#strikeActionButton {{
                 background: transparent;
                 color: {col};
-                border: 1px solid {col}55;
+                border: 1px solid {border_col};
                 border-radius: 2px;
                 font-size: 7px;
                 font-weight: 800;
